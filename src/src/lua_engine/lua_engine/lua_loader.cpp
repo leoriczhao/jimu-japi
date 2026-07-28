@@ -15,12 +15,17 @@
 #include <warcraft3/jass.h>
 #include <warcraft3/jass/func_value.h>
 #include <warcraft3/jass/hook.h>
+#include <warcraft3/hashtable.h>
 #include <base/util/singleton.h>
 #include <base/hook/fp_call.h>
 #include <string_view>
 #include <base/util/string_algorithm.h>
 #include <cstdio>
 #include "debug_log.h"
+
+namespace warcraft3::lua_engine {
+	namespace message { void install(); }
+}
 
 namespace warcraft3::lua_engine::lua_loader {
 
@@ -35,6 +40,10 @@ namespace warcraft3::lua_engine::lua_loader {
 				open_lua_engine(L);
 				fix_baselib(L);
 				runtime::initialize();
+				// Install the input-message filter early (builtin-japi style:
+				// the engine installs its message filter at init, not on first use).
+				// Safe here: getMainL() first runs in-game (ExecuteFunc/LoadScript).
+				message::install();
 			}
 			mainL = L;
 		}
@@ -143,6 +152,33 @@ namespace warcraft3::lua_engine::lua_loader {
 			return;
 		}
 		DBG_LOG("getMainL() OK, L=%p", L);
+	}
+
+	// ── Lazy initialization (builtin-japi style) ─────────────────
+	// builtin-japi's init_lua_engine does NOT create the Lua state up front;
+	// it table_hooks ExecuteFunc and creates the state on the first call.
+	// We do the same: the DLL's Initialize() only installs hooks, and the VM
+	// (+ war3map.lua) comes up on the first ExecuteFunc.
+
+	static uintptr_t RealExecuteFunc = 0;
+
+	static void __cdecl FakeExecuteFunc(jass::jstring_t name)
+	{
+		getMainL();      // lazy-create the Lua VM
+		load_script();   // and make sure war3map.lua is loaded (idempotent)
+		base::c_call<uint32_t>(RealExecuteFunc, name);
+	}
+
+	void install_lazy_hook()
+	{
+		auto* node = warcraft3::get_native_function_hashtable()->find("ExecuteFunc");
+		if (!node) {
+			DBG_LOG("install_lazy_hook: ExecuteFunc not found");
+			return;
+		}
+		RealExecuteFunc = node->func_address_;
+		node->func_address_ = (uint32_t)FakeExecuteFunc;
+		DBG_LOG("install_lazy_hook: ExecuteFunc hooked");
 	}
 
 	// Bridge handler for LoadScript — called from JASS via UnitId("LoadScript")

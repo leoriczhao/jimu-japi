@@ -1,13 +1,19 @@
 // dllmain.cpp — Entry point for the YDWE-based JAPI DLL
 //
 // This DLL is loaded via callback exploit (ExportFileFromMpq + LoadLibrary).
-// It initializes the YDWE core components adapted for callback mode.
+// Initialization follows the builtin-japi model:
+//   - UnitId is INLINE-hooked (like jass.dll), not via linked-list editing
+//   - the Lua VM is created lazily on the first ExecuteFunc call
+//   - stale <pid>.dll files from dead runs are swept at startup
 
 #include <windows.h>
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <warcraft3/jass.h>
 #include <warcraft3/jass/nf_register.h>
 #include <warcraft3/jass/hook.h>
+#include <warcraft3/jass/inline_hook.h>
 #include <warcraft3/war3_searcher.h>
 #include <warcraft3/hashtable.h>
 #include "../lua_engine/lua_engine/lua_loader.h"
@@ -18,6 +24,7 @@
 namespace warcraft3::lua_engine::lua_loader {
     void initialize();
     void load_script();
+    void install_lazy_hook();
 }
 namespace warcraft3::japi {
     void initialize();
@@ -81,6 +88,50 @@ static uintptr_t find_linked_list_func_addr(const char* name)
     return 0;
 }
 
+// Sweep stale <pid>.dll files left in the game directory by dead runs.
+// (The callback exports this DLL as "<pid>.dll"; a loaded DLL cannot be
+// deleted on Windows, so each run cleans up after its predecessors —
+// this is the practical equivalent of builtin-japi's watchdog thread,
+// which deletes <pid>.dll once initialization is confirmed complete.)
+static void sweep_stale_pid_dlls()
+{
+    char self_path[MAX_PATH] = {0};
+    HMODULE hm = NULL;
+    if (!GetModuleHandleExA(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            (LPCSTR)&sweep_stale_pid_dlls, &hm)) return;
+    if (!GetModuleFileNameA(hm, self_path, MAX_PATH)) return;
+
+    std::string dir = self_path;
+    size_t slash = dir.find_last_of('\\');
+    if (slash == std::string::npos) return;
+    dir.resize(slash);
+
+    std::string mask = dir + "\\*.dll";
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(mask.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+
+    int removed = 0;
+    do {
+        const char* name = fd.cFileName;
+        char* end = nullptr;
+        long pid = strtol(name, &end, 10);
+        if (!end || _stricmp(end, ".dll") != 0 || pid <= 0) continue;
+        if ((DWORD)pid == GetCurrentProcessId()) continue;  // ourselves (still loaded)
+        HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+        if (proc) { CloseHandle(proc); continue; }          // pid alive — not ours to delete
+        if (DeleteFileA((dir + "\\" + name).c_str())) removed++;
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+
+    if (removed) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "sweep: removed %d stale pid dll(s)", removed);
+        SYNC_LOG(buf);
+    }
+}
+
 extern "C" __declspec(dllexport) void __cdecl Initialize()
 {
     if (g_initialized) return;
@@ -92,9 +143,12 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
 
     SYNC_LOG("Initialize() START");
 
-    // Step 1: Create Lua VM
-    warcraft3::lua_engine::lua_loader::initialize();
-    SYNC_LOG("Step 1: lua_loader DONE");
+    sweep_stale_pid_dlls();
+
+    // Step 1: Install ExecuteFunc hook; the Lua VM is created lazily on the
+    // first ExecuteFunc call (builtin-japi style — nothing heavy in callback context)
+    warcraft3::lua_engine::lua_loader::install_lazy_hook();
+    SYNC_LOG("Step 1: lazy ExecuteFunc hook DONE");
 
     // Step 2: Register EX* natives
     warcraft3::japi::initialize_ex_natives();
@@ -107,18 +161,31 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
     warcraft3::jass::nf_register::flush_add_only();
     SYNC_LOG("Step 3: flush_add_only DONE");
 
-    // Step 4: Hook UnitId via linked list (same as callback's CreateJassNativeHook)
+    // Step 4: Hook UnitId with an inline hook (builtin-japi's jass.dll mechanism).
+    // Fall back to linked-list editing (callback's CreateJassNativeHook) if the
+    // inline install fails.
     {
-        uintptr_t addr = find_linked_list_func_addr("UnitId");
-        if (addr) {
-            uint32_t orig = *(uint32_t*)addr;
-            warcraft3::lua_engine::bridge::set_real_unitid(orig);
-            *(uint32_t*)addr = (uint32_t)warcraft3::lua_engine::bridge::get_fake_unitid();
-            char buf[128];
-            snprintf(buf, sizeof(buf), "Step 4: UnitId hooked @ %p, orig=0x%08X", (void*)addr, orig);
-            SYNC_LOG(buf);
+        uintptr_t fake = warcraft3::lua_engine::bridge::get_fake_unitid();
+        uintptr_t unitid = 0;
+        auto* node = warcraft3::get_native_function_hashtable()->find("UnitId");
+        if (node) unitid = node->func_address_;
+
+        uintptr_t tramp = unitid ? warcraft3::jass::inline_hook_install(unitid, fake) : 0;
+        if (tramp) {
+            warcraft3::lua_engine::bridge::set_real_unitid(tramp);
+            SYNC_LOG("Step 4: UnitId inline-hooked");
         } else {
-            SYNC_LOG("Step 4: UnitId NOT FOUND in linked list");
+            uintptr_t addr = find_linked_list_func_addr("UnitId");
+            if (addr) {
+                uint32_t orig = *(uint32_t*)addr;
+                warcraft3::lua_engine::bridge::set_real_unitid(orig);
+                *(uint32_t*)addr = (uint32_t)fake;
+                char buf[128];
+                snprintf(buf, sizeof(buf), "Step 4: UnitId hooked via linked list (fallback), orig=0x%08X", orig);
+                SYNC_LOG(buf);
+            } else {
+                SYNC_LOG("Step 4: UnitId hook FAILED");
+            }
         }
     }
 

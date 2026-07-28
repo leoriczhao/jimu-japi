@@ -23,6 +23,7 @@ set(YD_CORE_SOURCES
     src/yd_core/warcraft3/event.cpp
     src/yd_core/warcraft3/jass/func_value.cpp
     src/yd_core/warcraft3/jass/hook.cpp
+    src/yd_core/warcraft3/jass/inline_hook.cpp
     src/yd_core/warcraft3/jass/nf_register.cpp
     src/yd_core/warcraft3/jass/opcode.cpp
     src/yd_core/warcraft3/jass/global_variable.cpp

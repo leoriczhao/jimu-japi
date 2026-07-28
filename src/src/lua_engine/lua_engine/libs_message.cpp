@@ -17,12 +17,6 @@
 namespace warcraft3::lua_engine::message {
 
 	// ============================================================
-	// WndProc hook state
-	// ============================================================
-	static WNDPROC g_orig_wndproc = nullptr;
-	static bool    g_wndproc_hooked = false;
-
-	// ============================================================
 	// Texture event system
 	// ============================================================
 	struct texture_entry {
@@ -466,12 +460,25 @@ namespace warcraft3::lua_engine::message {
 	static lua_State* ML = 0;
 
 	// ============================================================
-	// Texture event dispatch: check if a WndProc message matches
+	// Texture event dispatch: check if an input event matches
 	// any registered texture event's key and mouse-in-bounds
 	// ============================================================
-	static void dispatch_texture_events(lua_State* L, UINT msg_type, int wark_key, bool is_press, int mx, int my)
+	static void dispatch_texture_events(lua_State* L, int wark_key, bool is_press)
 	{
 		if (!L) return;
+
+		// Mouse position in client coords, queried on demand
+		// (same GetCursorPos/ScreenToClient approach as builtin-japi)
+		HWND hw = get_window();
+		if (!hw) return;
+		POINT pt = { 0 };
+		GetCursorPos(&pt);
+		ScreenToClient(hw, &pt);
+		RECT rt;
+		GetClientRect(hw, &rt);
+		float norm_x = (float)pt.x / (float)(rt.right - rt.left);
+		float norm_y = (float)pt.y / (float)(rt.bottom - rt.top);
+
 		for (auto& kv : g_texture_events)
 		{
 			const texture_event_entry& ev = kv.second;
@@ -484,14 +491,7 @@ namespace warcraft3::lua_engine::message {
 			const texture_entry& tex = it->second;
 			if (!tex.visible || !tex.trigger_enabled) continue;
 
-			// Check mouse bounds (tex coords are in screen-space pixels from GetCursorPos)
-			// mx, my are in client coords
-			HWND hw = get_window();
-			if (!hw) continue;
-			RECT rt;
-			GetClientRect(hw, &rt);
-			float norm_x = (float)mx / (float)(rt.right - rt.left);
-			float norm_y = (float)my / (float)(rt.bottom - rt.top);
+			// Check mouse bounds (tex coords are normalized 0..1 client coords)
 			if (norm_x < tex.x || norm_x > tex.x + tex.w) continue;
 			if (norm_y < tex.y || norm_y > tex.y + tex.h) continue;
 
@@ -503,137 +503,7 @@ namespace warcraft3::lua_engine::message {
 	}
 
 	// ============================================================
-	// WndProc hook: intercept raw Windows messages before War3
-	// ============================================================
-	static bool wndproc_handle_key(lua_State* L, UINT msg_type, WPARAM wParam, LPARAM lParam)
-	{
-		// Convert Windows VK code to WARK_* code
-		int vk = (int)wParam;
-		int wark = 0;
-
-		// Reverse mapping: VK -> WARK
-		if (vk == VK_SPACE)         wark = WARK_SPACE;
-		else if (vk >= '0' && vk <= '9')     wark = vk;
-		else if (vk >= 'A' && vk <= 'Z')     wark = vk;
-		else if (vk == VK_SHIFT)    wark = WARK_SHIFT;
-		else if (vk == VK_CONTROL)  wark = WARK_CTRL;
-		else if (vk == VK_MENU)     wark = WARK_ALT;
-		else if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) wark = WARK_NUMPAD0 + (vk - VK_NUMPAD0);
-		else if (vk == VK_ADD)      wark = WARK_ADD;
-		else if (vk == VK_SUBTRACT) wark = WARK_SUBTRACT;
-		else if (vk == VK_MULTIPLY) wark = WARK_MULTIPLY;
-		else if (vk == VK_DIVIDE)   wark = WARK_DIVIDE;
-		else if (vk == VK_DECIMAL)  wark = WARK_DECIMAL;
-		else if (vk == VK_OEM_3)    wark = WARK_TILDE;
-		else if (vk == VK_OEM_PLUS) wark = WARK_OEM_PLUS;
-		else if (vk == VK_OEM_MINUS)wark = WARK_OEM_MINUS;
-		else if (vk == VK_OEM_4)    wark = WARK_OEM_OBRACKE;
-		else if (vk == VK_OEM_6)    wark = WARK_OEM_CBRACKE;
-		else if (vk == VK_OEM_5)    wark = WARK_OEM_BACKSLASH;
-		else if (vk == VK_OEM_1)    wark = WARK_OEM_SEMICOLON;
-		else if (vk == VK_OEM_7)    wark = WARK_OEM_SQUOTMARKS;
-		else if (vk == VK_OEM_COMMA)wark = WARK_OEM_COMMA;
-		else if (vk == VK_OEM_PERIOD)wark= WARK_OEM_PERIOD;
-		else if (vk == VK_OEM_2)    wark = WARK_OEM_SLASH;
-		else if (vk == VK_ESCAPE)   wark = WARK_ESC;
-		else if (vk == VK_RETURN)   wark = WARK_ENTER;
-		else if (vk == VK_BACK)     wark = WARK_BACKSPACE;
-		else if (vk == VK_TAB)      wark = WARK_TAB;
-		else if (vk == VK_RIGHT)    wark = WARK_RIGHT;
-		else if (vk == VK_UP)       wark = WARK_UP;
-		else if (vk == VK_LEFT)     wark = WARK_LEFT;
-		else if (vk == VK_DOWN)     wark = WARK_DOWN;
-		else if (vk == VK_INSERT)   wark = WARK_INSERT;
-		else if (vk == VK_DELETE)   wark = WARK_DELETE;
-		else if (vk == VK_HOME)     wark = WARK_HOME;
-		else if (vk == VK_END)      wark = WARK_END;
-		else if (vk == VK_PRIOR)    wark = WARK_PAGEUP;
-		else if (vk == VK_NEXT)     wark = WARK_PAGEDOWN;
-		else if (vk == VK_CAPITAL)  wark = WARK_CAPSLOCK;
-		else if (vk == VK_NUMLOCK)  wark = WARK_NUMLOCK;
-		else if (vk == VK_SCROLL)   wark = WARK_SCROLLLOCK;
-		else if (vk == VK_PAUSE)    wark = WARK_PAUSE;
-		else if (vk == VK_SNAPSHOT) wark = WARK_PRINTSCREEN;
-		else if (vk >= VK_F1 && vk <= VK_F12) wark = WARK_F1 + (vk - VK_F1);
-
-		bool is_press = (msg_type == WM_KEYDOWN || msg_type == WM_SYSKEYDOWN);
-		POINT pt;
-		GetCursorPos(&pt);
-		HWND hw = get_window();
-		if (hw) ScreenToClient(hw, &pt);
-		dispatch_texture_events(L, msg_type, wark, is_press, pt.x, pt.y);
-		return false;  // never consume the message here
-	}
-
-	static bool wndproc_handle_mouse(lua_State* L, UINT msg_type, WPARAM wParam, LPARAM lParam)
-	{
-		int mx = (short)LOWORD(lParam);
-		int my = (short)HIWORD(lParam);
-		int wark_key = -1;
-		bool is_press = false;
-
-		switch (msg_type)
-		{
-		case WM_LBUTTONDOWN: wark_key = 0; is_press = true;  break;
-		case WM_LBUTTONUP:   wark_key = 0; is_press = false; break;
-		case WM_RBUTTONDOWN: wark_key = 1; is_press = true;  break;
-		case WM_RBUTTONUP:   wark_key = 1; is_press = false; break;
-		default: return false;
-		}
-
-		dispatch_texture_events(L, msg_type, wark_key, is_press, mx, my);
-		return false;  // never consume here
-	}
-
-	static LRESULT CALLBACK war3_wndproc_hook(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
-	{
-		lua_State* L = ML;
-		if (L)
-		{
-			switch (msg)
-			{
-			case WM_KEYDOWN:
-			case WM_KEYUP:
-			case WM_SYSKEYDOWN:
-			case WM_SYSKEYUP:
-				wndproc_handle_key(L, msg, wParam, lParam);
-				break;
-			case WM_LBUTTONDOWN:
-			case WM_LBUTTONUP:
-			case WM_RBUTTONDOWN:
-			case WM_RBUTTONUP:
-				wndproc_handle_mouse(L, msg, wParam, lParam);
-				break;
-			default:
-				break;
-			}
-		}
-		return CallWindowProcW(g_orig_wndproc, hWnd, msg, wParam, lParam);
-	}
-
-	static void install_wndproc_hook()
-	{
-		if (g_wndproc_hooked) return;
-		HWND hw = get_window();
-		if (!hw) return;
-		g_orig_wndproc = (WNDPROC)SetWindowLongPtrW(hw, GWLP_WNDPROC, (LONG_PTR)war3_wndproc_hook);
-		g_wndproc_hooked = (g_orig_wndproc != nullptr);
-	}
-
-	static void remove_wndproc_hook()
-	{
-		if (!g_wndproc_hooked) return;
-		HWND hw = get_window();
-		if (hw && g_orig_wndproc)
-		{
-			SetWindowLongPtrW(hw, GWLP_WNDPROC, (LONG_PTR)g_orig_wndproc);
-		}
-		g_orig_wndproc = nullptr;
-		g_wndproc_hooked = false;
-	}
-
-	// ============================================================
-	// Existing CGameUI filter (preserved exactly as before)
+	// In-game message filter (CGameUI message dispatch)
 	// ============================================================
 	static bool keyboard_event(lua_State* L, const char* type, keyboard_message_t* msg)
 	{
@@ -740,28 +610,78 @@ namespace warcraft3::lua_engine::message {
 		return !!ok;
 	}
 
+	// ============================================================
+	// Pressed mouse buttons, tracked so texture release events can
+	// be fired on mouse_up (the mouse_up message carries no button code)
+	// ============================================================
+	static bool g_mouse_button_down[3] = { false, false, false };
+
 	static bool __fastcall filter(uintptr_t /*cgameui*/, uintptr_t /*edx*/, message_t* msg)
 	{
+		if (!ML)
+		{
+			// No Lua hook registered yet: pass everything through
+			return true;
+		}
 		switch (msg->msgid)
 		{
 		case 0x30064:
 			return ability_mouse_event(ML, (ability_mouse_message_t*)msg);
 			break;
 		case 0x40060064:
+			dispatch_texture_events(ML, (int)((keyboard_message_t*)msg)->keycode, true);
 			return keyboard_event(ML, "key_down", (keyboard_message_t*)msg);
 		case 0x40060066:
+			dispatch_texture_events(ML, (int)((keyboard_message_t*)msg)->keycode, false);
 			return keyboard_event(ML, "key_up", (keyboard_message_t*)msg);
 			break;
 		case 0x40060067:
 			break;
 		case 0x1A0068:
-			return mouse_event(ML, "mouse_down", (mouse_message_t*)msg);
+		{
+			mouse_message_t* m = (mouse_message_t*)msg;
+			if (m->code < 3)
+			{
+				g_mouse_button_down[m->code] = true;
+			}
+			dispatch_texture_events(ML, (int)m->code, true);
+			return mouse_event(ML, "mouse_down", m);
+		}
 		case 0x400500C9:
+			for (int i = 0; i < 3; ++i)
+			{
+				if (g_mouse_button_down[i])
+				{
+					g_mouse_button_down[i] = false;
+					dispatch_texture_events(ML, i, false);
+				}
+			}
 			return mouse_event(ML, "mouse_up", 0);
 		default:
 			break;
 		}
 		return true;
+	}
+
+	// ============================================================
+	// Install the in-game message filter. Self-contained and
+	// idempotent; safe to call before any Lua hook is registered
+	// (the filter passes all messages through until ML is set).
+	// ============================================================
+	static bool g_filter_installed = false;
+
+	void install()
+	{
+		if (g_filter_installed) return;
+		message_dispatch::add_filter((uintptr_t)filter);
+		g_filter_installed = true;
+	}
+
+	static void uninstall()
+	{
+		if (!g_filter_installed) return;
+		message_dispatch::remove_filter((uintptr_t)filter);
+		g_filter_installed = false;
 	}
 
 	static int lget(lua_State* L)
@@ -777,7 +697,6 @@ namespace warcraft3::lua_engine::message {
 
 	static int lset(lua_State* L)
 	{
-		static bool hook = false;
 		const char* name = lua_tostring(L, 2);
 		if (strcmp("hook", name) == 0)
 		{
@@ -786,19 +705,11 @@ namespace warcraft3::lua_engine::message {
 				lua_pushvalue(L, 3);
 				lua_setfield(L, LUA_REGISTRYINDEX, "_JASS_MESSAGE_HANDLE");
 				ML = get_mainthread(L);
-				if (!hook) {
-					message_dispatch::add_filter((uintptr_t)filter);
-					install_wndproc_hook();
-					hook = !hook;
-				}
+				install();
 			}
 			else if (lua_isnil(L, 3))
 			{
-				if (hook) {
-					message_dispatch::remove_filter((uintptr_t)filter);
-					remove_wndproc_hook();
-					hook = !hook;
-				}
+				uninstall();
 				lua_pushnil(L);
 				lua_setfield(L, LUA_REGISTRYINDEX, "_JASS_MESSAGE_HANDLE");
 			}
@@ -958,8 +869,8 @@ namespace warcraft3::lua_engine::message {
 	// keycode: WARK_* value from message.keyboard, or -1 for mouse buttons
 	// press_func / release_func: Lua functions or JASS code references
 	//
-	// When a WndProc message matches the keycode AND the mouse is within
-	// the texture's screen bounds, the corresponding callback fires.
+	// When an input event from the message filter matches the keycode AND
+	// the mouse is within the texture's screen bounds, the callback fires.
 	// ============================================================
 	static int ltexture_create(lua_State* L)
 	{
@@ -1059,7 +970,7 @@ namespace warcraft3::lua_engine::message {
 		// Arg 3: press callback (Lua function)
 		if (lua_isfunction(L, 3))
 		{
-			// Store Lua ref for direct callback from WndProc
+			// Store Lua ref for direct callback from the message filter
 			ev.press_lua_ref = runtime::callback_push(L, 3);
 		}
 		else if (lua_isnumber(L, 3))
