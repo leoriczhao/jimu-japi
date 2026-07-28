@@ -19,6 +19,7 @@
 #include <base/util/singleton.h>
 #include <base/hook/fp_call.h>
 #include <string_view>
+#include <string>
 #include <base/util/string_algorithm.h>
 #include <cstdio>
 #include "debug_log.h"
@@ -124,7 +125,31 @@ namespace warcraft3::lua_engine::lua_loader {
 		size_t      len = 0;
 		if (storm_s::instance().load_file("script\\war3map.lua", (const void**)&buf, &len))
 		{
-			if (luaL_loadbuffer(L, buf, len, "@script\\war3map.lua") != LUA_OK) {
+			// Write a disk copy and name the chunk with its absolute path, so the
+			// DAP debugger can map breakpoints to this source (worker matches by
+			// path and can read the file for content verification).
+			std::string chunkname = "@script\\war3map.lua";
+			char exe[MAX_PATH] = {0};
+			if (GetModuleFileNameA(NULL, exe, MAX_PATH)) {
+				std::string dir = exe;
+				size_t slash = dir.find_last_of('\\');
+				if (slash != std::string::npos) {
+					dir.resize(slash + 1);
+					std::string disk = dir + "japi-debugger\\script\\war3map.lua";
+					for (size_t i = 0; i < disk.size(); i++) {
+						if (disk[i] == '\\') CreateDirectoryA(disk.substr(0, i).c_str(), NULL);
+					}
+					HANDLE h = CreateFileA(disk.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+					if (h != INVALID_HANDLE_VALUE) {
+						DWORD bw;
+						WriteFile(h, buf, (DWORD)len, &bw, NULL);
+						CloseHandle(h);
+						chunkname = "@" + disk;
+					}
+				}
+			}
+
+			if (luaL_loadbuffer(L, buf, len, chunkname.c_str()) != LUA_OK) {
 				DBG_LOG("[japi-lua] load error: %s", lua_tostring(L, -1));
 				lua_pop(L, 1);
 				storm_s::instance().unload_file(buf);

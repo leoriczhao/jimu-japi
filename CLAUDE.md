@@ -46,6 +46,7 @@ builtin-japi 提供以下 `jass.*` Lua 模块：
 | `jass.slk` | 游戏数据表查询（ability/unit/item 等 SLK 数据） | ✓ 已实现（SlkLib + 游戏内 Storm 读 MPQ） |
 | `jass.sleep` | 协程 sleep（TriggerSleepAction 集成） | ✓ 已实现 |
 | `jass.storm` | MPQ 文件读取 | ✓ 已实现 |
+| `jass.debugger` | DAP 调试器（127.0.0.1:4278，断点/单步/栈/变量，actboy168/lua-debug 核心） | ✓ 已实现（需 `-WithDebugger` 打包，设计文档：`docs/planning/LUA-DEBUGGER-DESIGN.md`） |
 
 ### 实现原则
 

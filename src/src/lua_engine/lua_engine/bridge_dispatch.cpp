@@ -23,20 +23,8 @@
 #include <cstdlib>
 #include "debug_log.h"
 
-// Synchronous debug log macro (works even if async log hasn't flushed)
-// Accepts both string literals and char arrays
-inline void sync_log_impl(const char* msg) {
-    HANDLE h = CreateFileA("C:\\ProgramData\\japi_sync.log",
-        FILE_APPEND_DATA, FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
-        NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h != INVALID_HANDLE_VALUE) {
-        DWORD bw;
-        WriteFile(h, msg, (DWORD)strlen(msg), &bw, NULL);
-        WriteFile(h, "\r\n", 2, &bw, NULL);
-        CloseHandle(h);
-    }
-}
-#define SYNC_LOG(msg) sync_log_impl(msg)
+// Synchronous debug log — unified into japi_log::sync_write (debug_log.h)
+#define SYNC_LOG(msg) japi_log::sync_write(msg)
 
 namespace warcraft3::lua_engine::bridge {
 

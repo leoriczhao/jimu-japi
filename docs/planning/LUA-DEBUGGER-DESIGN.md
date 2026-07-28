@@ -1,6 +1,6 @@
 # Lua 调试器（jass.debugger / 127.0.0.1:4278）详细设计
 
-> 状态：**P0/P1/P2 已完成**（结论与方案调整见附录 A/B，验证记录见附录 C），P3–P5 实施中  
+> 状态：**全部完成（P0–P5，2026-07-28）**。DAP 断点/单步/栈/变量/求值已在游戏内实测通过（附录 C）；`runtime.debugger = 4278` 一行即可启用。  
 > 依据：`docs/re-builtin-japi/03-yd-lua-engine.md`（全新逆向）、`reference/YDWE/.../libs_debugger.cpp`（YDWE 实现）、actboy168/lua-debug 仓库与官方 VSIX（附录 A）、本仓库当前代码
 
 ---
@@ -266,3 +266,26 @@ master（网络 IO + DAP 状态机）运行在 luadebug.dll 内部的**独立 OS
 - 遗留实例无法被非提权 shell 杀死（`taskkill`/`Stop-Process` 拒绝访问，`CloseMainWindow` 不退）——**必须由用户手动关闭**。提权实例的父进程可以杀自己的孩子（deploy 的 kill 一直有效），孤儿进程只有用户/提权能处理。
 
 **流程教训**：并发多实例调试期，端口回退（4278/4279/4280）+ `-MapName` 换名 + 共享删除，三者齐备后旧实例仅余"占着 4278"的无害影响。
+
+---
+
+## 附录 E：P5 收尾与最终使用方式（2026-07-28）
+
+**已实现**：
+
+- `runtime.debugger = 4278`（端口号）即启动 DAP 监听——`libs_runtime.cpp` 的既有 debugger 属性槽接入 `libs_debugger.open_on_port`（原 stub 废除）；`jass.debugger.listen(host, port)` 显式调用等价可用（内置 JAPI 形状）。
+- `jass.debugger` 模块面：`listen / close / connected`。
+- 打包：`pack.ps1 -WithDebugger`（deploy.ps1 同名透传）；不打包调试资源时 `runtime.debugger = p` 静默失败（测试地图以 `connected()` 探测并回退端口）。
+- 清理：bootstrap.lua 插桩已还原为官方原版；`SYNC_LOG` 三处重复实现统一为 `japi_log::sync_write`（带时间戳+pid）。
+
+**用户使用方式**：
+
+```lua
+-- war3map.lua
+local runtime = require "jass.runtime"
+runtime.debugger = 4278     -- 启动调试监听（需 -WithDebugger 打包）
+```
+
+VS Code 侧：安装 `actboy168.lua-debug`，`launch.json` 用 `attach`、地址 `127.0.0.1:4278`。断点源路径 = `<war3目录>\japi-debugger\script\war3map.lua`（引擎会把 MPQ 内的脚本写一份到该路径并把 chunk 命名为该绝对路径）。断点命中时游戏画面冻结属正常断点语义；**联机会掉线，仅单机调试用**。
+
+**P5 终验（实测）**：`-WithDebugger` 部署 → `runtime.debugger` 路径监听 4278 ✓ → 60/60 ✓。

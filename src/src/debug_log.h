@@ -14,6 +14,34 @@
 
 #pragma once
 
+#include <windows.h>
+#include <cstdio>
+#include <cstdarg>
+#include <cstring>
+#include <string>
+
+namespace japi_log {
+// Diagnostics helper: direct synchronous append to japi_sync.log.
+// Always compiled (SYNC_LOG in dllmain.cpp / bridge_dispatch.cpp uses it,
+// independent of JAPI_DEBUG).
+inline void sync_write(const char* msg) {
+    HANDLE h = CreateFileA("C:\\ProgramData\\japi_sync.log",
+        FILE_APPEND_DATA, FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        char line[600];
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        int n = snprintf(line, sizeof(line), "[%02d:%02d:%02d pid=%lu] %s",
+            st.wHour, st.wMinute, st.wSecond, (unsigned long)GetCurrentProcessId(), msg);
+        DWORD bw;
+        WriteFile(h, line, (DWORD)(n > 0 ? n : 0), &bw, NULL);
+        WriteFile(h, "\r\n", 2, &bw, NULL);
+        CloseHandle(h);
+    }
+}
+}
+
 #ifdef JAPI_DEBUG
 
 #include <windows.h>
@@ -84,19 +112,6 @@ inline LogRing& ring() {
     return r;
 }
 
-// Diagnostics helper: direct synchronous append to japi_sync.log.
-inline void sync_write(const char* msg) {
-    HANDLE h = CreateFileA("C:\\ProgramData\\japi_sync.log",
-        FILE_APPEND_DATA, FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
-        NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h != INVALID_HANDLE_VALUE) {
-        DWORD bw;
-        WriteFile(h, msg, (DWORD)strlen(msg), &bw, NULL);
-        WriteFile(h, "\r\n", 2, &bw, NULL);
-        CloseHandle(h);
-    }
-}
-
 static DWORD WINAPI flush_thread(LPVOID) {
     sync_write("flush_thread: alive");
     while (WaitForSingleObject(ring().stop_event, 50) == WAIT_TIMEOUT) {
@@ -129,6 +144,18 @@ inline void init_file() {
         "C:\\ProgramData\\japi_debug.txt",
         GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+    if (ring().file == INVALID_HANDLE_VALUE) {
+        // Primary is locked by a stale instance running an OLD binary (opened
+        // without DELETE share). Fall back to a per-pid log so this run still
+        // has output; deploy.ps1 polls both paths.
+        char alt[128];
+        snprintf(alt, sizeof(alt), "C:\\ProgramData\\japi_debug_%lu.txt",
+            (unsigned long)GetCurrentProcessId());
+        ring().file = CreateFileA(alt,
+            GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    }
 
     ring().stop_event = CreateEventA(NULL, TRUE, FALSE, NULL);
     ring().thread = CreateThread(NULL, 0, flush_thread, NULL, 0, NULL);

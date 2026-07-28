@@ -6,9 +6,10 @@
 #include <string>
 #include "libs_runtime.h"
 
-// Debugger stub (not available in callback mode)
+// Real implementation lives in libs_debugger.cpp (actboy168/lua-debug core)
 namespace warcraft3::lua_engine::debugger {
-	inline int open(lua_State* L, int port) { (void)L; (void)port; return 0; }
+	int open_on_port(lua_State* L, int port);
+	inline int open(lua_State* L, int port) { return open_on_port(L, port); }
 }
 namespace warcraft3::lua_engine::runtime {
 	int  version = 3;

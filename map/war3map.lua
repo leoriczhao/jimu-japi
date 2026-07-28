@@ -11,15 +11,13 @@ local japi    = require "jass.japi"
 local hook    = require "jass.hook"
 local util    = require "lib.util"
 
--- Start the DAP debugger listener (actboy168/lua-debug core).
--- Resources must be packed with -WithDebugger; failure is non-fatal.
--- Try several ports (a leftover game instance may already hold 4278).
+-- Start the DAP debugger via runtime config (VS Code: attach to 127.0.0.1:4278).
+-- Requires the map packed with -WithDebugger; failure is non-fatal.
+local debugger = require "jass.debugger"
 local dbg_port = nil
 for _, p in ipairs({4278, 4279, 4280}) do
-    local ok = pcall(function()
-        (require "jass.debugger").listen("127.0.0.1", p)
-    end)
-    if ok then
+    runtime.debugger = p
+    if debugger.connected() then
         dbg_port = p
         break
     end
@@ -27,7 +25,7 @@ end
 
 -- Run test suite via timer (deferred execution).
 -- When the debugger is listening, delay the suite so there is time to
--- attach and set breakpoints (P3 verification; P5 will make it configurable).
+-- attach and set breakpoints (dev mode). Without debugger: run at once.
 local test_mod = require "tests.test_suite"
 local timer = jass.CreateTimer()
 jass.TimerStart(timer, dbg_port and 40.0 or 0.01, false, test_mod.run)

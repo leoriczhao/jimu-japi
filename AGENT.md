@@ -98,6 +98,18 @@ end)
 -- JASS 侧通过 UnitId("TestAdd") 调用
 ```
 
+**Lua 调试器（可选）**：
+
+```lua
+local runtime = require "jass.runtime"
+runtime.debugger = 4278   -- 启动 DAP 监听（需 -WithDebugger 打包）
+```
+
+- 打包时加 `-WithDebugger`（deploy.ps1 同样支持），调试资源注入 MPQ。
+- VS Code 安装 `actboy168.lua-debug`，`launch.json` 用 `attach` + `127.0.0.1:4278`。
+- 断点源文件路径：`<war3目录>\japi-debugger\script\war3map.lua`。
+- 断点命中会冻结游戏画面（断点语义）；仅单机调试用。详细设计：`docs/planning/LUA-DEBUGGER-DESIGN.md`。
+
 ---
 
 ## 工作流 3：部署测试

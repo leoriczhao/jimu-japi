@@ -108,17 +108,16 @@ namespace warcraft3::lua_engine::debugger {
 		return s;
 	}
 
-	// listen(host, port) — start DAP listen mode (builtin-japi call shape)
-	static int l_listen(lua_State* L)
+	// Start DAP listen on 127.0.0.1:port. Returns 1 (pushes true) on success,
+	// 0 on failure. Shared by the jass.debugger module and runtime.debugger.
+	int open_on_port(lua_State* L, int port)
 	{
-		const char* host = luaL_optstring(L, 1, "127.0.0.1");
-		int port = (int)luaL_optinteger(L, 2, 4278);
-
-		if (strcmp(host, "127.0.0.1") != 0 && strcmp(host, "localhost") != 0) {
-			return luaL_error(L, "jass.debugger: only 127.0.0.1 is allowed");
+		if (g_dbg_ref != LUA_NOREF) {
+			lua_pushboolean(L, 1);  // already listening
+			return 1;
 		}
 		if (!ensure_extracted()) {
-			return luaL_error(L, "jass.debugger: resource extraction failed");
+			return 0;
 		}
 
 		std::string root  = to_lua_path(g_root);
@@ -130,29 +129,45 @@ namespace warcraft3::lua_engine::debugger {
 
 		// local dbg = (loadfile(entry))(entry)   -- entry passed as selfsource
 		if (luaL_loadfile(L, entry.c_str()) != LUA_OK) {
-			return luaL_error(L, "jass.debugger: cannot load debugger.lua: %s", lua_tostring(L, -1));
+			DBG_LOG("[debugger] cannot load debugger.lua: %s", lua_tostring(L, -1));
+			lua_pop(L, 1);
+			return 0;
 		}
 		lua_pushstring(L, entry.c_str());
 		if (safe_call(L, 1, 1, true) != LUA_OK) {
-			return luaL_error(L, "jass.debugger: debugger.lua failed to run");
+			DBG_LOG("[debugger] debugger.lua failed to run");
+			return 0;
 		}
 
-		// dbg:start("host:port")  (string cfg => listen mode)
+		// dbg:start("127.0.0.1:port")  (string cfg => listen mode)
 		lua_getfield(L, -1, "start");
 		lua_pushvalue(L, -2);
-		lua_pushfstring(L, "%s:%d", host, port);
+		lua_pushfstring(L, "127.0.0.1:%d", port);
 		if (safe_call(L, 2, 1, true) != LUA_OK) {
-			return luaL_error(L, "jass.debugger: dbg:start failed");
+			DBG_LOG("[debugger] dbg:start failed");
+			return 0;
 		}
 		lua_pop(L, 1);  // start() result
 
-		if (g_dbg_ref != LUA_NOREF) {
-			luaL_unref(L, LUA_REGISTRYINDEX, g_dbg_ref);
-		}
 		g_dbg_ref = luaL_ref(L, LUA_REGISTRYINDEX);  // keeps dbg (and the master) alive
 
-		DBG_LOG("[debugger] DAP listening on %s:%d", host, port);
+		DBG_LOG("[debugger] DAP listening on 127.0.0.1:%d", port);
 		lua_pushboolean(L, 1);
+		return 1;
+	}
+
+	// listen(host, port) — start DAP listen mode (builtin-japi call shape)
+	static int l_listen(lua_State* L)
+	{
+		const char* host = luaL_optstring(L, 1, "127.0.0.1");
+		int port = (int)luaL_optinteger(L, 2, 4278);
+
+		if (strcmp(host, "127.0.0.1") != 0 && strcmp(host, "localhost") != 0) {
+			return luaL_error(L, "jass.debugger: only 127.0.0.1 is allowed");
+		}
+		if (open_on_port(L, port) != 1) {
+			return luaL_error(L, "jass.debugger: failed to start (resources missing or port busy)");
+		}
 		return 1;
 	}
 

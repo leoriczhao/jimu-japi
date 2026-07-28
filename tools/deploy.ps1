@@ -59,12 +59,16 @@ Write-Host "  Deployed to $destMap"
 # ── Step 3: Launch War3 ────────────────────────────────────────
 Write-Host "[3/4] Launching War3..."
 Remove-Item $LogFile -Force -ErrorAction SilentlyContinue
-if (Test-Path $LogFile) {
-    # A stale log that cannot be deleted means an OLD game instance is holding
-    # it — results matching would hit the stale "Results:" line instantly.
-    throw "Cannot delete $LogFile — an old War3 instance is holding it. Close old War3 windows first."
+$stalePrimary = Test-Path $LogFile
+if ($stalePrimary) {
+    Write-Host "  NOTE: $LogFile is locked by a stale instance; per-pid log will be used by the DLL."
 }
 $war3 = Start-Process -FilePath $War3Exe -ArgumentList "-window", "-loadfile", "$TestMap" -PassThru
+$launchTime = Get-Date
+$altLogFile = "C:\ProgramData\japi_debug_$($war3.Id).txt"
+# Watch both, but ONLY match a "Results:" line in a file whose mtime is after
+# launch — a stale log can contain an old Results line and must never match.
+$logCandidates = @($altLogFile, $LogFile)
 
 # ── Step 4: Wait for results ───────────────────────────────────
 Write-Host "[4/4] Waiting for test results (${Timeout}s timeout)..."
@@ -73,16 +77,22 @@ $ready = $false
 $tmpLog = "$env:TEMP\japi-debug-tmp.log"
 
 while ($elapsed -lt $Timeout) {
-    if (Test-Path $LogFile) {
-        try {
-            Copy-Item $LogFile $tmpLog -Force -ErrorAction Stop
-            $log = Get-Content $tmpLog -Raw -ErrorAction SilentlyContinue
-            if ($log -and $log -match "Results:.*total") {
-                $ready = $true
-                break
-            }
-        } catch {}
+    foreach ($cand in $logCandidates) {
+        if (Test-Path $cand) {
+            try {
+                $mtime = (Get-Item $cand).LastWriteTime
+                if ($mtime -lt $launchTime.AddSeconds(-2)) { continue }  # stale
+                Copy-Item $cand $tmpLog -Force -ErrorAction Stop
+                $log = Get-Content $tmpLog -Raw -ErrorAction SilentlyContinue
+                if ($log -and $log -match "Results:.*total") {
+                    $ready = $true
+                    $LogFile = $cand
+                    break
+                }
+            } catch {}
+        }
     }
+    if ($ready) { break }
     Start-Sleep -Seconds 3
     $elapsed += 3
 }

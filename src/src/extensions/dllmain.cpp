@@ -45,19 +45,9 @@ extern "C" __declspec(dllexport) uint32_t __cdecl HookUnitId()
     return 0;
 }
 
-// Synchronous debug log macro
-inline void sync_log_impl(const char* msg) {
-    HANDLE h = CreateFileA("C:\\ProgramData\\japi_sync.log",
-        FILE_APPEND_DATA, FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
-        NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h != INVALID_HANDLE_VALUE) {
-        DWORD bw;
-        WriteFile(h, msg, (DWORD)strlen(msg), &bw, NULL);
-        WriteFile(h, "\r\n", 2, &bw, NULL);
-        CloseHandle(h);
-    }
-}
-#define SYNC_LOG(msg) sync_log_impl(msg)
+// Synchronous debug log — unified into japi_log::sync_write (debug_log.h),
+// which adds [time pid] prefixes and works regardless of JAPI_DEBUG.
+#define SYNC_LOG(msg) japi_log::sync_write(msg)
 
 // Helper: find a native in the linked list by matching its hash table func_address.
 // Returns the address of the func_address field in the linked list node, or 0.
