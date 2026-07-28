@@ -15,16 +15,20 @@
 ```
 war3map.j（干净，只调标准 JASS native）
   └→ initializePlugin()
-       └→ StartCampaignAI(Player(12), "callback")  ← 加载 exploit
-            └→ callback（内存 exploit + DLL 加载）
-                 └→ japi.tga (yd_japi.dll)
-                      ├→ hook UnitId → 分发到 Lua handler
-                      └→ 创建 Lua VM → 加载 war3map.lua
+       ├→ StartCampaignAI(Player(12), "callback")  ← 加载 exploit
+       │    └→ callback（内存 exploit + DLL 加载）
+       │         └→ japi.tga (yd_japi.dll) 的 Initialize()
+       │              ├→ inline hook UnitId → 哈希表 RPC 分发
+       │              ├→ table_hook ExecuteFunc（惰性初始化钩子）
+       │              └→ 清扫残留 <pid>.dll（看门狗）
+       ├→ UnitId(I2S(GetHandleId(japi_ht)))   ← 桥接表句柄交给 DLL
+       └→ ExecuteFunc("japiDoNothing")        ← 首次调用触发：
+            创建 Lua VM + 加载 war3map.lua + 安装 message_dispatch 输入过滤
 ```
 
 - **war3map.j**：干净的 JASS 代码，只调 `UnitId`/`SaveStr`/`LoadReal` 等标准 native
 - **callback**：exploit 代码，通过 `StartCampaignAI` 加载（AI 脚本不走 JASS 检测）
-- **DLL**：hook `UnitId` 做 JASS→Lua 分发，哈希表传参
+- **DLL**：inline hook `UnitId` 做 JASS→Lua 分发（哈希表传参）；Lua VM 在首次 ExecuteFunc 时惰性创建（对齐内置 JAPI）
 
 ---
 
@@ -60,7 +64,7 @@ cd src
 编写 Lua 脚本 → 打包进地图。
 
 ```powershell
-.\tools\pack.ps1
+.\tools\pack.ps1 -BaseMap reference\base.w3m
 # 输出：build/output.w3x
 ```
 
@@ -73,12 +77,12 @@ cd src
 | `map/tests/*.lua` | 测试模块，`require "tests.xxx"` |
 | `build/output.w3x` | 打包输出（不要提交） |
 
-**pack.ps1 流程**（不动 war3map.j）：
+**pack.ps1 流程**：
 
 1. 解包基座地图 → `build/work/`
-2. 合并 `map/` 下 Lua → `build/work/war3map.lua`
-3. 复制 DLL → `build/work/japi.tga`
-4. 复制 callback → `build/work/callback`
+2. 合并 `map/` 下 Lua → `build/work/war3map.lua`（UTF-8 无 BOM；`__modcache` 模块缓存）
+3. **patch `build/work/war3map.j`**：在 `call initializePlugin(  )` 后插入 `SaveStr(...,"()V") + UnitId("LoadScript")`（找不到锚点会静默跳过，换基座图时注意）
+4. 复制 DLL → `build/work/japi.tga`，复制 callback，复制 `war3map.lua` → `script\war3map.lua`，更新 `(listfile)`
 5. 重新打包为 `build/output.w3x`
 
 **Lua 侧注册 JAPI 函数**：
@@ -99,8 +103,8 @@ end)
 ## 工作流 3：部署测试
 
 ```powershell
-.\tools\deploy.ps1
-# 打包 + 部署到 War3 + 启动 + 等待测试结果
+.\tools\deploy.ps1 -BaseMap reference\base.w3m
+# 打包 + 部署到 War3 + 启动 + 等待测试结果（判定依据：japi_debug.txt 出现 "Results:" 行）
 ```
 
 ---
@@ -112,7 +116,7 @@ end)
 ```powershell
 # 1. 编辑 map/war3map.lua
 # 2. 打包 + 测试
-.\tools\deploy.ps1
+.\tools\deploy.ps1 -BaseMap reference\base.w3m
 ```
 
 ### 场景 B：改 C++ DLL
@@ -122,26 +126,14 @@ end)
 # 2. 编译 DLL
 cd src; .\build.bat; cd ..
 # 3. 打包 + 测试
-.\tools\deploy.ps1
+.\tools\deploy.ps1 -BaseMap reference\base.w3m
 ```
 
 ---
 
 ## 配置管理
 
-War3 路径通过以下方式设置（优先级从高到低）：
-
-1. **命令行参数**：`-War3Dir "C:\War3"`
-2. **环境变量**：`$env:WAR3_DIR = "C:\War3"`
-3. **本地配置文件**：`tools/config.local.ps1`（gitignored）
-4. **默认值**：`D:\Warcraft III Frozen Throne 1.27a publish`
-
-**首次设置**：
-
-```powershell
-Copy-Item tools\config.example.ps1 tools\config.local.ps1
-# 编辑 config.local.ps1
-```
+**当前实现**：War3 安装路径在 `tools/deploy.ps1` 第 18 行硬编码（`$War3Dir = "D:\Warcraft III Frozen Throne 1.27a publish"`），不同的机器请直接改这一行。`tools/config.local.ps1`（gitignored）已预留但**尚未接入**任何脚本；`config.example.ps1` 描述的 `-War3Dir` 参数 / `WAR3_DIR` 环境变量是规划中的方案，当前不可用。
 
 ---
 
@@ -151,7 +143,7 @@ Copy-Item tools\config.example.ps1 tools\config.local.ps1
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `-BaseMap` | `reference\base.w3m` | 基座地图 |
+| `-BaseMap` | **必填** | 基座地图（如 `reference\base.w3m`），不传则报错 |
 | `-DllPath` | `src\build\bin\Release\yd_japi.dll` | DLL 路径 |
 | `-OutFile` | `build\output.w3x` | 输出路径 |
 | `-MapDir` | `map` | Lua 源码目录 |
@@ -160,8 +152,10 @@ Copy-Item tools\config.example.ps1 tools\config.local.ps1
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `-BaseMap` | `reference\base.w3m` | 基座地图 |
+| `-BaseMap` | **必填**（透传给 pack.ps1） | 基座地图 |
 | `-DllPath` | 同 pack.ps1 | DLL 路径 |
-| `-War3Dir` | 配置/默认 | War3 安装目录 |
-| `-Timeout` | 120 | 超时秒数 |
+| `-LogFile` | `C:\ProgramData\japi_debug.txt` | 结果判定日志 |
+| `-Timeout` | 120 | 超时秒数（超时只 WARNING，不以非零退出） |
 | `-NoKill` | 开关 | 不杀 War3 |
+
+注意：deploy.ps1 **没有** `-War3Dir` 参数，War3 路径见上方"配置管理"。

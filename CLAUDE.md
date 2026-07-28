@@ -143,25 +143,30 @@ map-inject/
 ```
 war3map.j（干净，只调标准 JASS native）
   └→ initializePlugin()
-       └→ StartCampaignAI(Player(12), "callback")  ← 加载 exploit
-            └→ callback（内存 exploit + DLL 加载）
-                 └→ japi.tga (yd_japi.dll)
-                      ├→ hook UnitId → 哈希表 RPC 分发到 Lua
-                      └→ 创建 Lua VM → 加载 war3map.lua
+       ├→ StartCampaignAI(Player(12), "callback")  ← 加载 exploit
+       │    └→ callback（内存 exploit + DLL 加载）
+       │         └→ japi.tga (yd_japi.dll) 的 Initialize()
+       │              ├→ inline hook UnitId → 哈希表 RPC 分发
+       │              ├→ table_hook ExecuteFunc（惰性初始化钩子）
+       │              └→ 清扫残留 <pid>.dll（看门狗）
+       ├→ UnitId(I2S(GetHandleId(japi_ht)))   ← 桥接表句柄交给 DLL
+       └→ ExecuteFunc("japiDoNothing")        ← 首次调用触发：
+            创建 Lua VM + 加载 war3map.lua + 安装 message_dispatch 输入过滤
 ```
 
 - **war3map.j**：干净的 JASS，只调 `UnitId`/`SaveStr`/`LoadReal` 等标准 native
 - **callback**：exploit 代码，通过 `StartCampaignAI` 加载（AI 脚本不走 JASS 检测）
-- **DLL**：hook `UnitId` 做 JASS→Lua 分发，哈希表传参
+- **DLL**：inline hook `UnitId` 做 JASS→Lua 分发，哈希表传参；Lua VM 惰性创建（对齐内置 JAPI）
 
 ## Callback 模式适配要点
 
 | YDWE 原始机制 | 问题 | 改编方案 |
 |---|---|---|
-| nf_register.cpp hook StormAlloc | VM 已初始化，hook 不触发 | Initialize() 里直接调 nfunction_add |
-| lua_loader.cpp hook war3map.j | war3map.j 已执行 | Initialize() 里主动创建 lua_State |
-| yd_jass_api 依赖 event_add 信号 | 信号不会触发 | 直接调 japi_add/japi_table_add |
-| JASS→Lua 通过 nfunction_add 注册 | 通不过 JASS 检测 | hook UnitId + 哈希表 RPC（内置 JAPI 方案） |
+| nf_register.cpp hook StormAlloc | VM 已初始化，hook 不触发 | `nf_register::flush_add_only()` 直接触发 nfunction_add |
+| lua_loader.cpp hook war3map.j | war3map.j 已执行 | table_hook `ExecuteFunc`，首次调用时惰性创建 lua_State 并加载 war3map.lua（对齐内置 JAPI） |
+| yd_jass_api 依赖 event_add 信号 | 信号不会触发 | EX* native 改为 bridge handler（register_cpp_handler）经 UnitId RPC 分发 |
+| JASS→Lua 通过 nfunction_add 注册 | 通不过 JASS 检测 | inline hook UnitId + 哈希表 RPC（内置 JAPI 方案） |
+| SetWindowLongPtr WndProc hook 截输入 | Windows 层钩子，脆弱且看不到游戏内分发 | `message_dispatch::add_filter`（CGameUI 虚表 +0x10，内置 JAPI 方案） |
 
 ## 构建（DLL 编译）
 
@@ -174,12 +179,12 @@ cd src
 ## 打包 & 测试（地图开发）
 
 ```powershell
-# 打包地图（合并 Lua + 注入 DLL，不动 war3map.j）
-.\tools\pack.ps1
+# 打包地图（合并 Lua + 注入 DLL + patch war3map.j 插入 LoadScript 调用）
+.\tools\pack.ps1 -BaseMap reference\base.w3m
 # 输出：build/output.w3x
 
 # 打包 + 部署到 War3 + 启动 + 等待测试结果
-.\tools\deploy.ps1
+.\tools\deploy.ps1 -BaseMap reference\base.w3m
 
 # 详细工作流参见 AGENT.md
 ```
