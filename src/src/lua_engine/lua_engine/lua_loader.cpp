@@ -33,6 +33,7 @@ namespace warcraft3::lua_engine::lua_loader {
 			if (L) {
 				luaL_openlibs(L);
 				open_lua_engine(L);
+				fix_baselib(L);
 				runtime::initialize();
 			}
 			mainL = L;
@@ -115,7 +116,7 @@ namespace warcraft3::lua_engine::lua_loader {
 		if (storm_s::instance().load_file("script\\war3map.lua", (const void**)&buf, &len))
 		{
 			if (luaL_loadbuffer(L, buf, len, "@script\\war3map.lua") != LUA_OK) {
-				printf("[japi-lua] load error: %s\n", lua_tostring(L, -1));
+				DBG_LOG("[japi-lua] load error: %s", lua_tostring(L, -1));
 				lua_pop(L, 1);
 				storm_s::instance().unload_file(buf);
 			}
@@ -123,12 +124,12 @@ namespace warcraft3::lua_engine::lua_loader {
 			{
 				safe_call(L, 0, 0, true);
 				storm_s::instance().unload_file(buf);
-				printf("[japi-lua] war3map.lua loaded\n");
+				DBG_LOG("[japi-lua] war3map.lua loaded");
 			}
 		}
 		else
 		{
-			printf("[japi-lua] war3map.lua not found in MPQ\n");
+			DBG_LOG("[japi-lua] war3map.lua not found in MPQ");
 		}
 	}
 

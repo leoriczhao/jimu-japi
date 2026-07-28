@@ -6,22 +6,35 @@
 #include <lua.hpp>
 #include <warcraft3/jass.h>
 #include <warcraft3/jass/func_value.h>
+#include <warcraft3/hashtable.h>
+#include <warcraft3/jass/trampoline_function.h>
+#include "common.h"
 #include <cstdio>
 
 namespace warcraft3::lua_engine::sleep {
 
 	// sleep(seconds) — yields the current Lua coroutine for the given duration.
-	// Calls TriggerSleepAction which is marked as sleep-capable in libs_common.cpp.
-	// When runtime.sleep == true, jass_call_closure detects has_sleep on the
-	// JASS VM thread and yields the Lua coroutine automatically.
-	// When runtime.sleep == false, calling this prints a warning and returns nil.
+	// Goes through jass_call_native_function + jass_maybe_yield so the standard
+	// has_sleep/opcode-rewind machinery handles the coroutine hand-off.
+	// Outside a coroutine this is a hard error (calling TriggerSleepAction
+	// directly on a non-yieldable thread would hang the game).
 	static int sleep_func(lua_State* L)
 	{
 		float seconds = (float)luaL_checknumber(L, 1);
 		if (seconds <= 0) seconds = 0.001f;
 
-		jass::call("TriggerSleepAction", seconds);
-		return 0;
+		if (!lua_isyieldable(L)) {
+			return luaL_error(L, "sleep() must be called from a coroutine");
+		}
+
+		jass::func_value const* nf = jass::jass_func("TriggerSleepAction");
+		if (!nf || !nf->is_valid()) {
+			return luaL_error(L, "TriggerSleepAction is not available");
+		}
+
+		lua_pushnumber(L, seconds);
+		int result = jass_call_native_function(L, nf, 0);
+		return jass_maybe_yield(L, result);
 	}
 
 	int open(lua_State* L)

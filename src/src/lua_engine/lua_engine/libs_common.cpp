@@ -2,6 +2,7 @@
 #include "class_array.h"
 #include "libs_runtime.h"
 #include "common.h"
+#include "callback.h"
 #include <warcraft3/hashtable.h>
 #include <warcraft3/war3_searcher.h>
 #include <warcraft3/jass/func_value.h>
@@ -141,6 +142,31 @@ namespace warcraft3::lua_engine {
 		it->second.set_sleep(true);
 	}
 
+	// jass.call("NativeName", args...) — explicit dispatch by name.
+	// Looks up game natives first, then japi-registered natives.
+	static int jass_call_by_name(lua_State* L)
+	{
+		const char* name = luaL_checkstring(L, 1);
+		jass::func_value const* nf = jass::jass_func(name);
+		if (!nf) nf = jass::japi_func(name);
+		if (!nf || !nf->is_valid())
+		{
+			return luaL_error(L, "unknown native: %s", name);
+		}
+		lua_remove(L, 1);
+		int result = jass_call_native_function(L, nf, 0);
+		return jass_maybe_yield(L, result);
+	}
+
+	// jass.code(fn) — wrap a Lua function as a JASS code value (for TimerStart,
+	// TriggerAddAction and friends). Uses the trampoline mechanism.
+	static int jass_code_fn(lua_State* L)
+	{
+		luaL_checktype(L, 1, LUA_TFUNCTION);
+		lua_pushinteger(L, cfunction_to_code(L, 1));
+		return 1;
+	}
+
 	int open(lua_State* L)
 	{
 		init_sleep_function("TriggerSleepAction");
@@ -150,6 +176,14 @@ namespace warcraft3::lua_engine {
 
 		lua_newtable(L);
 		{
+			lua_pushstring(L, "call");
+			lua_pushcclosure(L, jass_call_by_name, 0);
+			lua_rawset(L, -3);
+
+			lua_pushstring(L, "code");
+			lua_pushcclosure(L, jass_code_fn, 0);
+			lua_rawset(L, -3);
+
 			lua_newtable(L);
 			{
 				lua_pushstring(L, "__index");

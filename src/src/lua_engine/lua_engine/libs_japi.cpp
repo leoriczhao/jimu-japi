@@ -67,7 +67,7 @@ namespace warcraft3::lua_engine::japi {
 		const char* def = luaL_checkstring(L, 3);
 		luaL_checktype(L, 4, LUA_TFUNCTION);
 		if (jass::japi_func(name)) {
-			return 0;
+			return luaL_error(L, "japi: '%s' is already registered", name);
 		}
 
 		runtime::get_global_table(L, "_JASS_JAPI_TABLE", false);
@@ -75,7 +75,7 @@ namespace warcraft3::lua_engine::japi {
 		lua_rawget(L, -2);
 		japi* self = (japi*)luaL_testudata(L, -1, japi::name());
 		if (self) {
-			return 0;
+			return luaL_error(L, "japi: '%s' is already registered", name);
 		}
 		lua_pop(L, 1);
 		lua_pushstring(L, name);

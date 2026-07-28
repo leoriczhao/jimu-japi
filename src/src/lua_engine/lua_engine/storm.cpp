@@ -38,7 +38,10 @@ namespace warcraft3 {
 
 	bool storm_dll::load_file(const char* file_name, const void** buffer_ptr, size_t* size_ptr)
 	{
-		return load_file(NULL, file_name, buffer_ptr, size_ptr, 0, 1, NULL);
+		// search_scope 1 finds map-embedded files (script\war3map.lua), but game
+		// data files (Units\*.slk etc. in war3.mpq/war3x.mpq) need scope 0.
+		if (load_file(NULL, file_name, buffer_ptr, size_ptr, 0, 1, NULL)) return true;
+		return load_file(NULL, file_name, buffer_ptr, size_ptr, 0, 0, NULL);
 	}
 
 	bool storm_dll::load_file(HANDLE archive_handle, const char* file_name, const void** buffer_ptr, size_t* size_ptr, size_t reserve_size, uint32_t search_scope, OVERLAPPED* overlapped_ptr)

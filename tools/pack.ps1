@@ -109,14 +109,16 @@ function Bundle-Lua {
             if (-not $modules.ContainsKey($modName)) { continue }
             $requirePart = "require `"$modName`""
             if ($visited.Contains($modName)) {
-                # Already inlined — replace require with a no-op (module already loaded)
-                $result = $result.Replace($requirePart, "nil --[[already loaded: $modName]]")
+                # Already inlined — reference the module cache (NOT nil: the module
+                # may be required again inside another module's scope)
+                $result = $result.Replace($requirePart, "__modcache[`"$modName`"]")
                 continue
             }
             $visited.Add($modName) | Out-Null
             $modCode = Inline-Requires $modules[$modName] $modules $visited
-            # Only replace the require "..." part, keep the "local xxx = " prefix
-            $replacement = "(function()`r`n$modCode`r`nend)()"
+            # Only replace the require "..." part, keep the "local xxx = " prefix.
+            # Wrap as IIFE that also records the module in __modcache for repeat requires.
+            $replacement = "(function() local m = (function()`r`n$modCode`r`nend)() __modcache[`"$modName`"] = m return m end)()"
             $result = $result.Replace($requirePart, $replacement)
         }
         return $result
@@ -125,8 +127,12 @@ function Bundle-Lua {
     $visited = [System.Collections.Generic.HashSet[string]]::new()
     $visited.Add("war3map") | Out-Null
     $bundled = Inline-Requires $entry $moduleMap $visited
+    $bundled = "local __modcache = {}`r`n" + $bundled
 
-    Set-Content $OutPath $bundled -Encoding Ascii
+    # Write UTF-8 without BOM (luaL_loadbuffer cannot skip a BOM, and ASCII
+    # encoding would silently corrupt non-ASCII chars like Chinese text)
+    $absOut = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutPath)
+    [System.IO.File]::WriteAllText($absOut, $bundled, (New-Object System.Text.UTF8Encoding($false)))
     $count = $moduleMap.Count
     Write-Host "  Bundled $count Lua files into war3map.lua"
 }

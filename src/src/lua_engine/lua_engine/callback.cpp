@@ -6,6 +6,7 @@
 #include <warcraft3/hashtable.h>
 #include <Windows.h>
 #include <cassert>
+#include "debug_log.h"
 
 namespace warcraft3::lua_engine {
 
@@ -27,7 +28,7 @@ namespace warcraft3::lua_engine {
 			}
 		}
 
-		printf("Error: %s\n", lua_tostring(L, -1));
+		DBG_LOG("Error: %s", lua_tostring(L, -1));
 		lua_pop(L, 1);
 	}
 

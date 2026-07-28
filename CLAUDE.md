@@ -37,14 +37,15 @@ builtin-japi 提供以下 `jass.*` Lua 模块：
 | 模块 | 用途 | 状态 |
 |------|------|------|
 | `jass.common` | JASS native 调用（metatable 自动分发） | ✓ 已实现 |
+| `jass.globals` | JASS 全局变量读写 | ✓ 已实现 |
 | `jass.japi` | 自定义 native 注册（Lua 侧注册 handler） | ✓ 已实现 |
 | `jass.hook` | native hook（拦截/替换 JASS 函数） | ✓ 已实现 |
 | `jass.runtime` | 运行时配置（sleep、console、handle_level 等） | ✓ 已实现 |
 | `jass.message` | 输入消息系统（键盘、鼠标、命令、选择） | ✓ 已实现 |
 | `jass.debug` | 调试工具 | ✓ 已实现 |
-| `jass.slk` | 游戏数据表查询（ability/unit/item 等 SLK 数据） | ✗ 待实现 |
-| `jass.sleep` | 协程 sleep（TriggerSleepAction 集成） | ✗ 待实现 |
-| `jass.storm` | MPQ 文件读取 | ✗ 待实现 |
+| `jass.slk` | 游戏数据表查询（ability/unit/item 等 SLK 数据） | ✓ 已实现（SlkLib + 游戏内 Storm 读 MPQ） |
+| `jass.sleep` | 协程 sleep（TriggerSleepAction 集成） | ✓ 已实现 |
+| `jass.storm` | MPQ 文件读取 | ✓ 已实现 |
 
 ### 实现原则
 
@@ -69,7 +70,6 @@ map-inject/
 │   ├── CMakeLists.txt
 │   ├── build.bat
 │   ├── src/
-│   │   ├── dllmain.cpp
 │   │   ├── yd_core/            ← 从 YDWE 提取的核心（改编）
 │   │   │   ├── hashtable.h     # VM 内存布局定义
 │   │   │   ├── jass.h/cpp      # JASS 类型、字符串、调用
@@ -84,7 +84,7 @@ map-inject/
 │   │   │   ├── jassbind.h/cpp
 │   │   │   ├── callback.h/cpp
 │   │   │   └── libs_*.cpp      # jass.common, jass.hook, jass.japi 等
-│   │   └── extensions/         ← 自定义扩展 native
+│   │   └── extensions/         ← dllmain.cpp（DLL 入口/Initialize）+ 自定义扩展 native
 │   └── vendor/
 │       └── lua-5.4/
 │

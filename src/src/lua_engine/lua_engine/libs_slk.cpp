@@ -15,6 +15,7 @@
 #include <string>
 #include <memory>
 #include <cstdio>
+#include "debug_log.h"
 
 namespace warcraft3::lua_engine::slk {
 
@@ -114,25 +115,29 @@ static ::slk::SlkTable* get_or_load_table(lua_State* L, int type_idx)
 
 // ── Lua metamethods ────────────────────────────────────────────
 
-// row.__index(self, field_name) -> value
-// self is a light userdata pointing to SlkSingle
+// row.__index(row_table, field_name) -> value
+// SlkSingle pointer is carried as the closure's upvalue so the row proxy
+// itself can be a plain Lua table (tests and builtin-japi both expect tables).
+// Field lookup is case-insensitive (builtin-japi main.lua uses data.Hotkey).
 static int row_index(lua_State* L)
 {
-	::slk::SlkSingle* single = (::slk::SlkSingle*)lua_touserdata(L, 1);
+	::slk::SlkSingle* single = (::slk::SlkSingle*)lua_touserdata(L, lua_upvalueindex(1));
 	if (!single) { lua_pushnil(L); return 1; }
 
 	const char* field = luaL_checkstring(L, 2);
-	auto it = single->find(field);
-	if (it == single->end()) {
-		lua_pushnil(L);
-		return 1;
+	for (auto i = single->begin(); i != single->end(); ++i) {
+		if (_stricmp(i->first.c_str(), field) == 0) {
+			lua_pushstring(L, i->second.to_string().c_str());
+			return 1;
+		}
 	}
-
-	lua_pushstring(L, it->second.to_string().c_str());
+	lua_pushnil(L);
 	return 1;
 }
 
-// type.__index(self, object_id) -> row proxy (light userdata + metatable)
+// type.__index(self, object_id) -> row proxy (table with __index closure)
+static void push_row_proxy(lua_State* L, ::slk::SlkSingle* single_ptr);
+
 static int type_index(lua_State* L)
 {
 	int type_idx = -1;
@@ -165,25 +170,81 @@ static int type_index(lua_State* L)
 		}
 	}
 	if (it == table->end()) {
+		// Diagnostics: dump size + first keys when a lookup misses
+		static int dump_count = 0;
+		if (dump_count < 6) {
+			dump_count++;
+			std::string keys;
+			int n = 0;
+			for (auto i = table->begin(); i != table->end() && n < 4; ++i, ++n) {
+				keys += "[";
+				keys += i->first.to_string();
+				keys += "] ";
+			}
+			DBG_LOG("[slk] MISS '%s' type=%d size=%d first: %s",
+				obj_id, type_idx, (int)table->size(), keys.c_str());
+		}
 		lua_pushnil(L);
 		return 1;
 	}
 
-	// Create a userdata proxy that holds a pointer to the SlkSingle
-	// and has a metatable with __index = row_index
 	::slk::SlkSingle* single_ptr = &it->second;
+	push_row_proxy(L, single_ptr);
+	return 1;
+}
 
-	// Use a full userdata with metatable so we can attach __index
-	lua_newuserdata(L, sizeof(void*));  // placeholder
-	*(void**)lua_touserdata(L, -1) = single_ptr;
+// ── pairs() iteration over a type table ────────────────────────
 
-	// Create or reuse the row metatable
-	lua_newtable(L);
-	lua_pushcfunction(L, row_index);
+struct pairs_state {
+	::slk::SlkTable* table;
+	::slk::SlkTable::iterator it;
+};
+
+static void push_row_proxy(lua_State* L, ::slk::SlkSingle* single_ptr)
+{
+	lua_newtable(L);              // row proxy: a real Lua table
+	lua_newtable(L);              // its metatable
+	lua_pushlightuserdata(L, single_ptr);
+	lua_pushcclosure(L, row_index, 1);
 	lua_setfield(L, -2, "__index");
 	lua_setmetatable(L, -2);
+}
 
-	return 1;
+static int slk_pairs_iter(lua_State* L)
+{
+	pairs_state* st = (pairs_state*)lua_touserdata(L, 1);
+	if (!st || !st->table) return 0;
+	if (st->it == st->table->end()) return 0;
+
+	std::string key = st->it->first.to_string();
+	::slk::SlkSingle* single_ptr = &st->it->second;
+	++st->it;
+
+	lua_pushlstring(L, key.data(), key.size());
+	push_row_proxy(L, single_ptr);
+	return 2;
+}
+
+static int type_pairs(lua_State* L)
+{
+	lua_getmetatable(L, 1);
+	lua_getfield(L, -1, "_type_idx");
+	int type_idx = (int)lua_tointeger(L, -1);
+	lua_pop(L, 2);
+
+	if (type_idx < 0 || type_idx >= SLK_TYPE_COUNT) return 0;
+
+	::slk::SlkTable* table = get_or_load_table(L, type_idx);
+	if (!table) return 0;
+
+	pairs_state* st = (pairs_state*)lua_newuserdata(L, sizeof(pairs_state));
+	st->table = table;
+	new (&st->it) ::slk::SlkTable::iterator(table->begin());
+
+	lua_pushcfunction(L, slk_pairs_iter);
+	lua_pushvalue(L, -2);  // state userdata
+	lua_pushnil(L);
+	return 3;
 }
 
 // ── Module entry ───────────────────────────────────────────────
@@ -200,6 +261,8 @@ int open(lua_State* L)
 		lua_setfield(L, -2, "_type_idx");
 		lua_pushcfunction(L, type_index);
 		lua_setfield(L, -2, "__index");
+		lua_pushcfunction(L, type_pairs);
+		lua_setfield(L, -2, "__pairs");
 		lua_setmetatable(L, -2);
 
 		lua_setfield(L, -2, slk_type_names[i]);

@@ -74,55 +74,82 @@ struct LogRing {
     }
 };
 
-static LogRing g_ring;
+inline LogRing& ring() {
+    // Function-local static in an INLINE function (external linkage): the
+    // linker folds all instantiations into one, so there is exactly ONE ring
+    // across all translation units. NOTE: declaring this function `static`
+    // would give every TU its own copy — which is why japi_debug.txt stayed
+    // empty (each TU pushed into its own ring, the flush thread popped another).
+    static LogRing r;
+    return r;
+}
+
+// Diagnostics helper: direct synchronous append to japi_sync.log.
+inline void sync_write(const char* msg) {
+    HANDLE h = CreateFileA("C:\\ProgramData\\japi_sync.log",
+        FILE_APPEND_DATA, FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        DWORD bw;
+        WriteFile(h, msg, (DWORD)strlen(msg), &bw, NULL);
+        WriteFile(h, "\r\n", 2, &bw, NULL);
+        CloseHandle(h);
+    }
+}
 
 static DWORD WINAPI flush_thread(LPVOID) {
-    while (WaitForSingleObject(g_ring.stop_event, 50) == WAIT_TIMEOUT) {
+    sync_write("flush_thread: alive");
+    while (WaitForSingleObject(ring().stop_event, 50) == WAIT_TIMEOUT) {
         LogEntry e;
-        while (g_ring.pop(e)) {
-            if (g_ring.file != INVALID_HANDLE_VALUE) {
+        while (ring().pop(e)) {
+            if (ring().file != INVALID_HANDLE_VALUE) {
                 DWORD written;
-                WriteFile(g_ring.file, e.buf, e.len, &written, NULL);
-                WriteFile(g_ring.file, "\r\n", 2, &written, NULL);
+                WriteFile(ring().file, e.buf, e.len, &written, NULL);
+                WriteFile(ring().file, "\r\n", 2, &written, NULL);
             }
         }
     }
     // Final flush
     LogEntry e;
-    while (g_ring.pop(e)) {
-        if (g_ring.file != INVALID_HANDLE_VALUE) {
+    while (ring().pop(e)) {
+        if (ring().file != INVALID_HANDLE_VALUE) {
             DWORD written;
-            WriteFile(g_ring.file, e.buf, e.len, &written, NULL);
-            WriteFile(g_ring.file, "\r\n", 2, &written, NULL);
+            WriteFile(ring().file, e.buf, e.len, &written, NULL);
+            WriteFile(ring().file, "\r\n", 2, &written, NULL);
         }
     }
     return 0;
 }
 
 inline void init_file() {
-    g_ring.file = CreateFileA(
+    ring().file = CreateFileA(
         "C:\\ProgramData\\japi_debug.txt",
         GENERIC_WRITE, FILE_SHARE_READ, NULL,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 
-    g_ring.stop_event = CreateEventA(NULL, TRUE, FALSE, NULL);
-    g_ring.thread = CreateThread(NULL, 0, flush_thread, NULL, 0, NULL);
+    ring().stop_event = CreateEventA(NULL, TRUE, FALSE, NULL);
+    ring().thread = CreateThread(NULL, 0, flush_thread, NULL, 0, NULL);
+
+    char dbg[128];
+    snprintf(dbg, sizeof(dbg), "init_file: file=%p event=%p thread=%p",
+        ring().file, ring().stop_event, ring().thread);
+    sync_write(dbg);
 }
 
 inline void shutdown() {
-    if (g_ring.thread) {
-        SetEvent(g_ring.stop_event);
-        WaitForSingleObject(g_ring.thread, 2000);
-        CloseHandle(g_ring.thread);
-        g_ring.thread = NULL;
+    if (ring().thread) {
+        SetEvent(ring().stop_event);
+        WaitForSingleObject(ring().thread, 2000);
+        CloseHandle(ring().thread);
+        ring().thread = NULL;
     }
-    if (g_ring.stop_event) {
-        CloseHandle(g_ring.stop_event);
-        g_ring.stop_event = NULL;
+    if (ring().stop_event) {
+        CloseHandle(ring().stop_event);
+        ring().stop_event = NULL;
     }
-    if (g_ring.file != INVALID_HANDLE_VALUE) {
-        CloseHandle(g_ring.file);
-        g_ring.file = INVALID_HANDLE_VALUE;
+    if (ring().file != INVALID_HANDLE_VALUE) {
+        CloseHandle(ring().file);
+        ring().file = INVALID_HANDLE_VALUE;
     }
     FreeConsole();
 }
@@ -140,7 +167,7 @@ inline void log(const char* fmt, ...) {
     printf("%s\n", buf);
 
     // Ring buffer (async file)
-    g_ring.push(buf, len);
+    ring().push(buf, len);
 }
 
 }  // namespace japi_log

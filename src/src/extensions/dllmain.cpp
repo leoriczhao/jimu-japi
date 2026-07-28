@@ -86,6 +86,10 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
     if (g_initialized) return;
     g_initialized = true;
 
+    // Debug logging is initialized here, NOT in DllMain — AllocConsole/CreateThread/
+    // CreateFile under the loader lock risk deadlocking the game during LoadLibrary.
+    DBG_INIT();
+
     SYNC_LOG("Initialize() START");
 
     // Step 1: Create Lua VM
@@ -138,8 +142,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
     switch (reason)
     {
     case DLL_PROCESS_ATTACH:
+        // Keep DllMain minimal: wenhao_plugin does nothing here either.
+        // Heavy work (console, threads, files) belongs in Initialize().
         DisableThreadLibraryCalls(hModule);
-        DBG_INIT();
         break;
     case DLL_PROCESS_DETACH:
         DBG_SHUTDOWN();

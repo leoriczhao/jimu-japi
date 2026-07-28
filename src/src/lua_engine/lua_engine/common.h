@@ -10,6 +10,9 @@ namespace warcraft3::lua_engine {
 	uintptr_t jass_read(lua_State* L, jass::variable_type opt, int idx);
 	int       jass_call_native_function(lua_State* L, const jass::func_value* nf, uintptr_t func_address = 0);
 	int       jass_call_closure(lua_State* L);
+	// If the current JASS thread went to sleep during the native call, rewind its
+	// opcode and yield the Lua coroutine; otherwise pass `result` through.
+	int       jass_maybe_yield(lua_State* L, int result);
 	lua_State* get_mainthread(lua_State* thread);
 
 }

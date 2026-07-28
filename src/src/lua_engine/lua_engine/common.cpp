@@ -169,14 +169,8 @@ namespace warcraft3::lua_engine {
 		return jass_push(L, nf->get_return(), retval) ? 1 : 0;
 	}
 
-	int jass_call_closure(lua_State* L)
-	{								   
-		if (!is_gaming())
-		{
-			lua_pushnil(L);
-			return 1;
-		}
-		int result = jass_call_native_function(L, (const jass::func_value*)lua_tointeger(L, lua_upvalueindex(1)));
+	int jass_maybe_yield(lua_State* L, int result)
+	{
 		if (lua_isyieldable(L))
 		{
 			jass_vm_t* thread = get_jass_thread();
@@ -187,6 +181,17 @@ namespace warcraft3::lua_engine {
 			}
 		}
 		return result;
+	}
+
+	int jass_call_closure(lua_State* L)
+	{								   
+		if (!is_gaming())
+		{
+			lua_pushnil(L);
+			return 1;
+		}
+		int result = jass_call_native_function(L, (const jass::func_value*)lua_tointeger(L, lua_upvalueindex(1)));
+		return jass_maybe_yield(L, result);
 	}
 
 	lua_State* get_mainthread(lua_State* thread)

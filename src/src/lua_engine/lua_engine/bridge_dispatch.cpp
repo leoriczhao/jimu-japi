@@ -150,14 +150,17 @@ namespace warcraft3::lua_engine::bridge {
                     case 'B':
                         args[i] = ht_load_bool(g_ht_handle, g_ht_key, slot);
                         break;
+                    case 'S':
+                        // JASS stored the value with SaveStr (string bucket) — LoadInteger
+                        // would silently return 0. Handlers expect the raw jstring_t
+                        // handle and call jass::from_string() on it themselves.
+                        args[i] = (uint32_t)jass::call("LoadStr", g_ht_handle, g_ht_key, slot);
+                        break;
                     default:
                         args[i] = (uint32_t)ht_load_int(g_ht_handle, g_ht_key, slot);
                         break;
                 }
             }
-            // Strings need special handling — pass the JASS string handle
-            // For now, handle 'S' by loading as integer (jstring_t is uint32_t)
-            // The C++ handler must call jass::from_string() to get the actual string
             uint32_t result = h.cpp_fn(args, spec.params.size());
 
             if (spec.ret != 'V') {
@@ -342,6 +345,20 @@ namespace warcraft3::lua_engine::bridge {
         }
     }
 
+    // StringHash via the game native. Safe at the bridge-init call site (main-thread
+    // JASS after StartCampaignAI returned), but keep SEH + constant fallback anyway.
+    static uint32_t call_string_hash(const char* s) {
+        return (uint32_t)jass::call("StringHash", jass::string_fake(s));
+    }
+
+    static uint32_t safe_string_hash(const char* s) {
+        __try {
+            return call_string_hash(s);
+        } __except(EXCEPTION_EXECUTE_HANDLER) {
+            return 0;
+        }
+    }
+
     static jass::jstring_t __cdecl FakeUnitId(jass::jstring_t name_str) {
         const char* name = safe_from_string(name_str);
         if (!name) {
@@ -351,7 +368,10 @@ namespace warcraft3::lua_engine::bridge {
         // Initialization: UnitId(I2S(GetHandleId(japi_ht)))
         if (name[0] >= '0' && name[0] <= '9') {
             g_ht_handle = (uint32_t)std::atoll(name);
-            g_ht_key = 697315052;  // StringHash("jass") — hardcoded to avoid JASS call during callback
+            // StringHash("jass") — must match japi__key computed at runtime by war3map.j.
+            // Verified constant of the game's hash algorithm: 229083199.
+            g_ht_key = safe_string_hash("jass");
+            if (!g_ht_key) g_ht_key = 229083199u;  // fallback: StringHash("jass")
             char buf[128];
             snprintf(buf, sizeof(buf), "[bridge] ht initialized: handle=%u key=%u", g_ht_handle, g_ht_key);
             SYNC_LOG(buf);
