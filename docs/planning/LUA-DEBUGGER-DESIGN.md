@@ -1,6 +1,6 @@
 # Lua 调试器（jass.debugger / 127.0.0.1:4278）详细设计
 
-> 状态：P0 调研已完成（结论见附录 A，**P1 方案已据实调整**），P1–P5 待实施  
+> 状态：**P0/P1/P2 已完成**（结论与方案调整见附录 A/B，验证记录见附录 C），P3–P5 实施中  
 > 依据：`docs/re-builtin-japi/03-yd-lua-engine.md`（全新逆向）、`reference/YDWE/.../libs_debugger.cpp`（YDWE 实现）、actboy168/lua-debug 仓库与官方 VSIX（附录 A）、本仓库当前代码
 
 ---
@@ -227,3 +227,22 @@ master（网络 IO + DAP 状态机）运行在 luadebug.dll 内部的**独立 OS
 - worker 的 `filesystem.lua` 按**磁盘路径**读源文件做断点校验；我们的源在 MPQ 里——P3 需设计 source 映射（断点挂到 `script\war3map.lua` 的 chunk 名，或让 worker 读 MPQ）。
 - `bootstrap.lua` 从 `package.cpath` 反推 root，要求 cpath 里是磁盘路径——luadebug.dll 提取到磁盘后自然满足，但 MPQ 内 script 树需要 package.path 注入（P2）。
 - MSVCP140/VCRUNTIME140 依赖：开发机有；用户机器依赖 VS 2015-2022 redist（普遍已装），发布说明中标注。
+
+---
+
+## 附录 B：第二次方案调整（P2 期间，2026-07-28）
+
+**原计划 P2 的"MPQ 路径解析"工作项作废。** 理由：P1 采用的"先从 MPQ 整体提取到 `<war3>/japi-debugger/` 磁盘目录、再从磁盘加载"的设计，使 debugger.lua 的 root 推导（`selfsource` → `root/script/?.lua`）与 master 线程的全部文件读取**原生工作在磁盘上**——不再需要 MPQ package searcher 注入，也不需要 LUA_DEBUG_PATH 映射。MPQ 在此方案中只承担"运输容器"角色（与 wenhao_plugin 的 .rsrc 资源模式同构）。
+
+实施中发现的另一个修正点：`os.getenv` 读取的是 **CRT 环境**而非 Win32 环境，`SetEnvironmentVariableA` 对其无效，`LUA_DEBUG_CORE` 必须用 `_putenv_s` 注入（`libs_debugger.cpp`）。
+
+## 附录 C：验证记录
+
+| 阶段 | 验证项 | 结果 |
+|---|---|---|
+| P1 | `objdump yd_japi.dll` 导出含 `lua_newstate`/`luaL_newstate` | ✓ |
+| P1 | MPQ 提取 52/52 文件到 `japi-debugger\`；`dbg:start` 无错 | ✓（首次失败=_putenv 问题，已修） |
+| P1 | 游戏存活期间 `netstat`：`TCP 127.0.0.1:4278 LISTENING` | ✓ |
+| P1 | 60/60 测试不回归 | ✓ |
+| P2 | `tools/dap_probe.py 4278 handshake`：`initialize` 响应含完整 capabilities | ✓ |
+| P2 | `... attach`：`initialized` 事件 + `attach` success + `configurationDone` success | ✓ |
