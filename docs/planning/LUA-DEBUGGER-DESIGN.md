@@ -1,7 +1,7 @@
 # Lua 调试器（jass.debugger / 127.0.0.1:4278）详细设计
 
-> 状态：设计定稿，待实施  
-> 依据：`docs/re-builtin-japi/03-yd-lua-engine.md`（全新逆向）、`reference/YDWE/.../libs_debugger.cpp`（YDWE 实现）、本仓库当前代码
+> 状态：P0 调研已完成（结论见附录 A，**P1 方案已据实调整**），P1–P5 待实施  
+> 依据：`docs/re-builtin-japi/03-yd-lua-engine.md`（全新逆向）、`reference/YDWE/.../libs_debugger.cpp`（YDWE 实现）、actboy168/lua-debug 仓库与官方 VSIX（附录 A）、本仓库当前代码
 
 ---
 
@@ -188,3 +188,42 @@ core:start("127.0.0.1:" .. port)
 - P1：`deploy.ps1` 后 `Test-NetConnection 127.0.0.1 -Port 4278` + 手工收发。
 - P2+：VS Code 安装 `actboy168.lua-debug`，`launch.json` 用 `attach` + `127.0.0.1:4278`；测试地图的 war3map.lua 里下断点。
 - 回归：每阶段 60/60。
+
+---
+
+## 附录 A：P0 调研结论（2026-07-28，已定稿）
+
+### A.1 依赖闭包（实证）
+
+actboy168/lua-debug（MIT，仓库 master @ 2026-06-16，官方 VSIX 实证）的调试端依赖 = **1 个 native 核心 + 1 棵纯 Lua 脚本树**：
+
+1. **`luadebug.dll`（native，必须）**：官方 VSIX 提供 `extension/runtime/win32-ia32/lua54/luadebug.dll`（561KB，2026-06-16 构建）。
+   - 导出 15 个符号：`init`、`luaopen_luadebug`、`luaopen_luadebug_{hookmgr,stdio,utility,visitor}`、`luaopen_bee_{channel,epoll,filesystem,platform,select,socket,sys,thread,windows}`。
+   - 导入：WS2_32/USER32/dbghelp/ntdll/MSVCP140/VCRUNTIME140/api-ms-win-crt-*——**不依赖 lua54.dll**（master VM 由 onelua 内嵌）。
+   - 与 Lua 版本的解耦方式：`init` 通过 `GetProcAddress(调用方模块, "lua_newstate")` 自动定位宿主 Lua API（`src/luadebug/rdebug_init.cpp` / `rdebug_win32.cpp` 实证）。
+2. **`extension/script/`（纯 Lua，必须）**：`debugger.lua`（入口）、`backend/{bootstrap,worker,master/**}`、`common/{socket,net,protocol,json,ipc,log}`、`frontend/`、`bootstrap.lua`。无任何额外 native 依赖（socket 由 luadebug.dll 的 bee 模块提供）。
+3. **Lua 5.4 支持**：`debugger.lua` 有 lua54 运行时分支；worker 含 `disassemble/lua54.lua`。✓
+
+### A.2 线程模型（与设计假设的核对）
+
+master（网络 IO + DAP 状态机）运行在 luadebug.dll 内部的**独立 OS 线程 + 独立 Lua VM**；worker（hook 回调、栈/变量检查）运行在游戏线程的宿主 VM 内。网络阻塞 IO 从不发生在游戏线程；断点暂停 = worker hook 回调内等待 master 消息，冻结即断点语义。**与我们单线程引擎兼容，不需要自建 winsock 层。**
+
+### A.3 关键路线决策：B1（预编译二进制）+ 导出宿主 Lua API
+
+1. yd_japi.dll **导出 Lua C API**（.def 列出 `lua_*`/`luaL_*`）——luadebug.dll 的 `init` 即可自动找到我们静态内嵌的 Lua 5.4（这正是 YDWE 当年走通的路径）。
+2. `luadebug.dll` 已入库 `tools/debugger/`（MIT，附 `LICENSE.lua-debug`）；运行时经 MPQ 提取到游戏目录后 `package.loadlib`（wenhao_plugin 资源提取模式）。
+3. `extension/script/` 已入库 `tools/debugger/script/`，打包时注入 MPQ `script\debugger\`。
+4. B2（把 `src/luadebug` 源码编进 yd_japi）留作后续硬化选项：去除二进制依赖，但需移植 luamake 构建（bee + onelua + thunk），工作量大，暂不投入。
+
+### A.4 对原计划的调整（第一次调整）
+
+- **原 P1（自建 winsock 传输 + jass.debugger 模块 + echo 验证）作废**——luadebug.dll 的 bee 已提供全部传输能力，自建是重复劳动。
+- **新 P1**：yd_japi 导出 Lua API（.def）→ MPQ 携带并运行时提取 luadebug.dll → `libs_debugger.cpp` 完成 loadlib + `init` + `dbg:start("listen:127.0.0.1:4278")` 接线 → deploy 后端口监听可连（Test-NetConnection）+ 60/60 不回归。
+- P2 随之简化为：script 资源的 MPQ 路径解析（`package.cpath` 推导 root 的 bootstrap.lua 需要磁盘路径前缀，设计 MPQ searcher 与 LUA_DEBUG_PATH 的映射）+ DAP handshake。
+- P3–P5 不变。
+
+### A.5 A 方案遗留风险（P2/P3 处理）
+
+- worker 的 `filesystem.lua` 按**磁盘路径**读源文件做断点校验；我们的源在 MPQ 里——P3 需设计 source 映射（断点挂到 `script\war3map.lua` 的 chunk 名，或让 worker 读 MPQ）。
+- `bootstrap.lua` 从 `package.cpath` 反推 root，要求 cpath 里是磁盘路径——luadebug.dll 提取到磁盘后自然满足，但 MPQ 内 script 树需要 package.path 注入（P2）。
+- MSVCP140/VCRUNTIME140 依赖：开发机有；用户机器依赖 VS 2015-2022 redist（普遍已装），发布说明中标注。
