@@ -34,7 +34,17 @@ namespace warcraft3::lua_engine::debugger {
 			}
 		}
 		HANDLE h = CreateFileA(path.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-		if (h == INVALID_HANDLE_VALUE) return false;
+		if (h == INVALID_HANDLE_VALUE) {
+			// A previous game instance may hold the file locked (e.g. luadebug.dll
+			// stays loaded). If the on-disk file already has identical size, the
+			// content is from an earlier identical extraction — accept it.
+			WIN32_FILE_ATTRIBUTE_DATA fad;
+			if (GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &fad)) {
+				uint64_t sz = ((uint64_t)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
+				if (sz == len) return true;
+			}
+			return false;
+		}
 		DWORD bw = 0;
 		WriteFile(h, data, (DWORD)len, &bw, NULL);
 		CloseHandle(h);

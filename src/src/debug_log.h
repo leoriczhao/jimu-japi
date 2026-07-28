@@ -122,9 +122,12 @@ static DWORD WINAPI flush_thread(LPVOID) {
 }
 
 inline void init_file() {
+    // Share flags include DELETE/WRITE: a stale game instance holding this file
+    // must not make it undeletable for deploy.ps1 (a leftover with a Results
+    // line in an undeletable log makes every future deploy false-match instantly).
     ring().file = CreateFileA(
         "C:\\ProgramData\\japi_debug.txt",
-        GENERIC_WRITE, FILE_SHARE_READ, NULL,
+        GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 
     ring().stop_event = CreateEventA(NULL, TRUE, FALSE, NULL);

@@ -10,6 +10,7 @@ param(
     [string]$DllPath = "",
     [string]$BaseMap = "",
     [string]$LogFile = "",
+    [string]$MapName = "",
     [int]$Timeout    = 120,
     [switch]$NoKill,
     [switch]$WithDebugger
@@ -18,7 +19,7 @@ param(
 $Root     = Split-Path -Parent $PSScriptRoot
 $War3Dir  = "D:\Warcraft III Frozen Throne 1.27a publish"
 $War3Exe  = "$War3Dir\war3.exe"
-$TestMap  = "Maps\Test\output.w3x"
+$TestMap  = if ($MapName) { "Maps\Test\$MapName" } else { "Maps\Test\output.w3x" }
 $PackScript = "$PSScriptRoot\pack.ps1"
 $OutFile  = "$Root\build\output.w3x"
 
@@ -58,6 +59,11 @@ Write-Host "  Deployed to $destMap"
 # ── Step 3: Launch War3 ────────────────────────────────────────
 Write-Host "[3/4] Launching War3..."
 Remove-Item $LogFile -Force -ErrorAction SilentlyContinue
+if (Test-Path $LogFile) {
+    # A stale log that cannot be deleted means an OLD game instance is holding
+    # it — results matching would hit the stale "Results:" line instantly.
+    throw "Cannot delete $LogFile — an old War3 instance is holding it. Close old War3 windows first."
+}
 $war3 = Start-Process -FilePath $War3Exe -ArgumentList "-window", "-loadfile", "$TestMap" -PassThru
 
 # ── Step 4: Wait for results ───────────────────────────────────

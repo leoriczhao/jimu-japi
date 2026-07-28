@@ -246,3 +246,23 @@ master（网络 IO + DAP 状态机）运行在 luadebug.dll 内部的**独立 OS
 | P1 | 60/60 测试不回归 | ✓ |
 | P2 | `tools/dap_probe.py 4278 handshake`：`initialize` 响应含完整 capabilities | ✓ |
 | P2 | `... attach`：`initialized` 事件 + `attach` success + `configurationDone` success | ✓ |
+
+---
+
+## 附录 D：第三次方案调整——陈旧实例事故与鲁棒性加固（P3 期间，2026-07-28）
+
+**事故**：一台 `-NoKill` 遗留的提权 war3.exe（PID 33064）几乎让 P3 的每轮验证都得到假数据，链条如下：
+
+1. 它持有 `C:\ProgramData\japi_debug.txt`（旧二进制以 READ-only 共享打开）→ deploy 删不掉 → 新一局秒匹配遗留的 `Results:` 行 → 新进程启动几秒就被杀 → 断点窗口从未存在；
+2. 它的句柄以 READ-only 共享 → 新实例 `DBG_INIT` 打不开日志（共享冲突）→ 新实例无日志，我们读到的全是遗留实例的旧行；
+3. 它锁定 `Maps\Test\output.w3x`（部署拷贝失败）与 `japi-debugger\luadebug.dll`（提取覆写失败）；
+4. 它持有 4278，但 Windows `SO_REUSEADDR` 语义允许后绑定者劫持端口——这一条反而无害。
+
+**加固（已实施）**：
+
+- `debug_log.h`：日志文件以 `FILE_SHARE_READ|WRITE|DELETE` 打开——旧实例不再能让日志不可删（仅对新二进制有效）。
+- `libs_debugger.write_file`：覆写失败时若磁盘已有同尺寸文件则视为成功（容忍被加载锁定的 luadebug.dll）。
+- `deploy.ps1`：日志删不掉就**硬失败**并提示关闭旧 War3 窗口——杜绝假 Results 匹配。
+- 遗留实例无法被非提权 shell 杀死（`taskkill`/`Stop-Process` 拒绝访问，`CloseMainWindow` 不退）——**必须由用户手动关闭**。提权实例的父进程可以杀自己的孩子（deploy 的 kill 一直有效），孤儿进程只有用户/提权能处理。
+
+**流程教训**：并发多实例调试期，端口回退（4278/4279/4280）+ `-MapName` 换名 + 共享删除，三者齐备后旧实例仅余"占着 4278"的无害影响。
