@@ -11,7 +11,8 @@ param(
     [string]$BaseMap = "",
     [string]$LogFile = "",
     [int]$Timeout    = 120,
-    [switch]$NoKill
+    [switch]$NoKill,
+    [switch]$WithDebugger
 )
 
 $Root     = Split-Path -Parent $PSScriptRoot
@@ -38,6 +39,7 @@ Write-Host "[1/4] Packing map..."
 $packArgs = @{}
 if ($DllPath) { $packArgs["DllPath"] = $DllPath }
 if ($BaseMap) { $packArgs["BaseMap"] = $BaseMap }
+if ($WithDebugger) { $packArgs["WithDebugger"] = $true }
 $packResult = & $PackScript @packArgs 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host $packResult

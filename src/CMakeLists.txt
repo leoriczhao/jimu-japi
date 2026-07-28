@@ -12,7 +12,10 @@ list(REMOVE_ITEM LUA_SOURCES
 )
 add_library(lua54 STATIC ${LUA_SOURCES})
 target_include_directories(lua54 PUBLIC "${CMAKE_SOURCE_DIR}/vendor/lua-5.4/src")
-target_compile_definitions(lua54 PRIVATE LUA_USE_WINDOWS)
+# LUA_BUILD_AS_DLL: export the whole Lua C API from yd_japi.dll so that
+# luadebug.dll's init() can auto-resolve the host API via
+# GetProcAddress(yd_japi.dll, "lua_newstate") (see docs/planning/LUA-DEBUGGER-DESIGN.md)
+target_compile_definitions(lua54 PRIVATE LUA_USE_WINDOWS LUA_BUILD_AS_DLL)
 
 # yd_core (from ydwar3)
 set(YD_CORE_SOURCES
@@ -59,6 +62,7 @@ set(LUA_ENGINE_SOURCES
     src/lua_engine/lua_engine/libs_storm.cpp
     src/lua_engine/lua_engine/libs_sleep.cpp
     src/lua_engine/lua_engine/libs_slk.cpp
+    src/lua_engine/lua_engine/libs_debugger.cpp
     src/lua_engine/lua_engine/fix_baselib.cpp
     src/lua_engine/lua_engine/bridge_dispatch.cpp
 )

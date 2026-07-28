@@ -19,6 +19,7 @@ namespace warcraft3::lua_engine {
 	namespace sleep { int open(lua_State* L); }
 	namespace storm { int open(lua_State* L); }
 	namespace slk { int open(lua_State* L); }
+	namespace debugger { int open(lua_State* L); }
 
 	void register_preload_lib(lua_State* L, const char *name, lua_CFunction f)
 	{
@@ -41,6 +42,7 @@ namespace warcraft3::lua_engine {
 		register_preload_lib(L, "jass.sleep",   sleep::open);
 		register_preload_lib(L, "jass.storm",   storm::open);
 		register_preload_lib(L, "jass.slk",     slk::open);
+		register_preload_lib(L, "jass.debugger", debugger::open);
 
 		// Initialize type metatables
 		jreal::init(L);

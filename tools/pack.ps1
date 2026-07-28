@@ -10,7 +10,8 @@ param(
     [string]$DllPath  = "",
     [string]$BaseMap  = "",
     [string]$OutFile  = "",
-    [string]$MapDir   = ""
+    [string]$MapDir   = "",
+    [switch]$WithDebugger
 )
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -190,6 +191,30 @@ if (-not (Test-Path $scriptDir)) { New-Item -ItemType Directory $scriptDir -Forc
 Copy-Item "$WorkDir\war3map.lua" "$scriptDir\war3map.lua" -Force
 if ($existing -notmatch "script\\\\war3map\.lua") {
     Add-Content $listfile "`nscript\war3map.lua" -Encoding ASCII
+}
+
+# 4b. Debugger resources (optional, -WithDebugger)
+if ($WithDebugger) {
+    Write-Host '  [4b] Inject debugger resources'
+    $dbgSrc = "$Root\tools\debugger"
+    $dbgDst = "$WorkDir\debugger"
+    if (-not (Test-Path "$dbgSrc\luadebug.dll")) { throw "debugger payload not found: $dbgSrc" }
+    Copy-Item "$dbgSrc\script" "$dbgDst\script" -Recurse -Force
+    Copy-Item "$dbgSrc\luadebug.dll" "$dbgDst\luadebug.dll" -Force
+    Copy-Item "$dbgSrc\LICENSE.lua-debug" "$dbgDst\" -Force
+
+    # manifest.txt: one MPQ-relative path per line (used by libs_debugger to extract)
+    $entries = @("luadebug.dll", "LICENSE.lua-debug")
+    Get-ChildItem "$dbgDst\script" -Recurse -File | ForEach-Object {
+        $entries += "script\" + $_.FullName.Substring("$dbgDst\script\".Length)
+    }
+    Set-Content "$dbgDst\manifest.txt" ($entries -join "`r`n") -Encoding Ascii
+
+    # listfile
+    Add-Content $listfile "`ndebugger\manifest.txt" -Encoding ASCII
+    foreach ($e in $entries) {
+        Add-Content $listfile "`ndebugger\$e" -Encoding ASCII
+    }
 }
 
 # 5. Repack
