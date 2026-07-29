@@ -453,6 +453,47 @@ local function test_mouse_orders()
     end)
 end
 
+-- ── game UI section (E2b, builtin-japi CGameUI series) ───────
+local function test_gameui()
+    print("\n-- EX game UI (CGameUI) --")
+
+    test("GetChatState is false at start", function()
+        local st = excall("GetChatState", "()B")
+        assert(st == false, "chat state: " .. tostring(st))
+    end)
+
+    test("GetFps > 0", function()
+        local fps = excall("GetFps", "()R")
+        assert(type(fps) == "number" and fps > 0, "fps: " .. tostring(fps))
+    end)
+
+    test("LittleMapX/Y get-set-get round-trip", function()
+        local x0 = excall("GetLittleMapX", "()R")
+        local y0 = excall("GetLittleMapY", "()R")
+        assert(type(x0) == "number" and type(y0) == "number",
+            string.format("littlemap (%.3f, %.3f)", x0, y0))
+        excall("SetLittleMapX", "(R)V", x0 + 0.01)
+        excall("SetLittleMapY", "(R)V", y0 + 0.01)
+        local x1 = excall("GetLittleMapX", "()R")
+        local y1 = excall("GetLittleMapY", "()R")
+        assert(math.abs(x1 - (x0 + 0.01)) < 1e-4, string.format("X %.4f != %.4f", x1, x0 + 0.01))
+        assert(math.abs(y1 - (y0 + 0.01)) < 1e-4, string.format("Y %.4f != %.4f", y1, y0 + 0.01))
+        excall("SetLittleMapX", "(R)V", x0)
+        excall("SetLittleMapY", "(R)V", y0)
+    end)
+
+    test("ShowFpsText on/off/on does not crash", function()
+        excall("ShowFpsText", "(B)V", true)
+        excall("ShowFpsText", "(B)V", false)
+        excall("ShowFpsText", "(B)V", true)
+    end)
+
+    test("ShowConsole hide/restore does not crash", function()
+        excall("ShowConsole", "(B)V", false)
+        excall("ShowConsole", "(B)V", true)
+    end)
+end
+
 -- ── run ──────────────────────────────────────────────────────
 local function run()
     fx_setup()
@@ -463,6 +504,7 @@ local function run()
     test_effect()
     test_info()
     test_mouse_orders()
+    test_gameui()
     fx_teardown()
     return pass, fail
 end

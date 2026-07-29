@@ -96,6 +96,7 @@ set(EXT_SOURCES
     src/extensions/ex_natives/Effect.cpp
     src/extensions/ex_natives/EventDamageData.cpp
     src/extensions/ex_natives/DisplayChat.cpp
+    src/extensions/ex_natives/GameUI.cpp
     src/stubs.cpp
 )
 

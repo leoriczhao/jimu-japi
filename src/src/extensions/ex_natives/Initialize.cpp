@@ -75,6 +75,15 @@ namespace warcraft3::japi {
 	uint32_t GetPluginVersion_handler(const uint32_t* args, size_t nargs);
 	uint32_t Hex_handler(const uint32_t* args, size_t nargs);
 
+	uint32_t GetChatState_handler(const uint32_t* args, size_t nargs);
+	uint32_t ShowConsole_handler(const uint32_t* args, size_t nargs);
+	uint32_t GetFps_handler(const uint32_t* args, size_t nargs);
+	uint32_t ShowFpsText_handler(const uint32_t* args, size_t nargs);
+	uint32_t GetLittleMapX_handler(const uint32_t* args, size_t nargs);
+	uint32_t SetLittleMapX_handler(const uint32_t* args, size_t nargs);
+	uint32_t GetLittleMapY_handler(const uint32_t* args, size_t nargs);
+	uint32_t SetLittleMapY_handler(const uint32_t* args, size_t nargs);
+
 	// EXExecuteScript adapter
 	static uint32_t EXExecuteScript_bridge(const uint32_t* a, size_t) {
 		return warcraft3::lua_engine::lua_loader::EXExecuteScript((jass::jstring_t)a[0]);
@@ -146,5 +155,15 @@ namespace warcraft3::japi {
 		register_cpp_handler("GetPluginVersion",       "()S",    GetPluginVersion_handler);
 		register_cpp_handler("Hex",                    "(I)S",   Hex_handler);
 		register_cpp_handler("EXExecuteScript",        "(S)S",   EXExecuteScript_bridge);
+
+		// Game UI (builtin-japi CGameUI series)
+		register_cpp_handler("GetChatState",           "()B",    GetChatState_handler);
+		register_cpp_handler("ShowConsole",            "(B)V",   ShowConsole_handler);
+		register_cpp_handler("GetFps",                 "()R",    GetFps_handler);
+		register_cpp_handler("ShowFpsText",            "(B)V",   ShowFpsText_handler);
+		register_cpp_handler("GetLittleMapX",          "()R",    GetLittleMapX_handler);
+		register_cpp_handler("SetLittleMapX",          "(R)V",   SetLittleMapX_handler);
+		register_cpp_handler("GetLittleMapY",          "()R",    GetLittleMapY_handler);
+		register_cpp_handler("SetLittleMapY",          "(R)V",   SetLittleMapY_handler);
 	}
 }
