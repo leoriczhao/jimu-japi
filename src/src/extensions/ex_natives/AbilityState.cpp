@@ -892,7 +892,6 @@ namespace warcraft3::japi {
 	}
 
 	// Bridge dispatch handlers
-	static uint32_t make_jstr(const char* s) { return jass::create_string(s ? s : ""); }
 
 	uint32_t EXGetUnitAbility_handler(const uint32_t* a, size_t) {
 		return EXGetUnitAbilityById(a[0], a[1]);
@@ -922,7 +921,7 @@ namespace warcraft3::japi {
 		return EXSetAbilityDataInteger(a[0], a[1], a[2], a[3]);
 	}
 	uint32_t EXGetAbilityDataString_handler(const uint32_t* a, size_t) {
-		return make_jstr(jass::from_string(EXGetAbilityDataString(a[0], a[1], a[2])));
+		return EXGetAbilityDataString(a[0], a[1], a[2]);  // already a fresh jstring_t
 	}
 	uint32_t EXSetAbilityDataString_handler(const uint32_t* a, size_t) {
 		return EXSetAbilityDataString(a[0], a[1], a[2], a[3]);
@@ -931,7 +930,7 @@ namespace warcraft3::japi {
 		return EXSetAbilityAEmeDataA(a[0], a[1]);
 	}
 	uint32_t EXGetBuffDataString_handler(const uint32_t* a, size_t) {
-		return make_jstr(jass::from_string((jass::jstring_t)EXGetBuffDataString(a[0], a[1])));
+		return (uint32_t)EXGetBuffDataString(a[0], a[1]);  // already a fresh jstring_t
 	}
 	uint32_t EXSetBuffDataString_handler(const uint32_t* a, size_t) {
 		return EXSetBuffDataString(a[0], a[1], a[2]);

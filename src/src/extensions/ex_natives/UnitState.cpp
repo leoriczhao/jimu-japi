@@ -14,6 +14,7 @@
 #include <cassert>
 #include <warcraft3/hashtable.h>
 #include "StringPool.h"
+#include "debug_log.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -697,8 +698,9 @@ namespace warcraft3::japi {
 	{
 		uintptr_t ptr = GetUnitData(unitcode);
 		const char* result = *(const char**)(ptr + type * 4);
-		if (!result || IsBadStringPtrA(result, 256))
+		if (!result || IsBadStringPtrA(result, 256) || strnlen(result, 256) >= 256)
 		{
+			// Not a valid string field (garbage pointer or unterminated garbage)
 			return jass::create_string("Default string");
 		}
 		return jass::create_string(result);
@@ -760,12 +762,17 @@ namespace warcraft3::japi {
 	{
 		uintptr_t ptr = GetUnitData(unitcode);
 		jass::jinteger_t size = *(jass::jinteger_t*)(ptr + type * 4);
-		if (size <= 0)
+		if (size <= 0 || size > 1024)
 		{
 			return jass::create_string("Default string");
 		}
-		const char* result = *(const char**)(*(uintptr_t*)(ptr + (type + 1) * 4) + index % size * 4);
-		if (!result || IsBadStringPtrA(result, 256))
+		uintptr_t base = *(uintptr_t*)(ptr + (type + 1) * 4);
+		if (!base || IsBadStringPtrA((const char*)base, 4))
+		{
+			return jass::create_string("Default string");
+		}
+		const char* result = *(const char**)(base + index % size * 4);
+		if (!result || IsBadStringPtrA(result, 256) || strnlen(result, 256) >= 256)
 		{
 			return jass::create_string("Default string");
 		}
@@ -816,7 +823,11 @@ namespace warcraft3::japi {
 		}
 
 		float angle = jass::from_real(*pangle) * float(M_PI / 180.);
-		*(float*)(*(uint32_t*)(obj + 0x28) + 0xA4) = angle;
+		uint32_t vis = *(uint32_t*)(obj + 0x28);
+		if (!vis) {
+			return;
+		}
+		*(float*)(vis + 0xA4) = angle;
 	}
 
 	jass::jnothing_t __cdecl EXSetUnitCollisionType(jass::jboolean_t enable, jass::jhandle_t unit, jass::jinteger_t type)
@@ -828,6 +839,9 @@ namespace warcraft3::japi {
 		}
 
 		uintptr_t obj = find_objectid_64(*(objectid_64*)(uobj + 0x16C));
+		if (!obj) {
+			return;
+		}
 		obj = *(uint32_t*)(obj + 0x98);
 		if (obj)
 		{
@@ -850,6 +864,9 @@ namespace warcraft3::japi {
 		}
 
 		uintptr_t obj = find_objectid_64(*(objectid_64*)(uobj + 0x16C));
+		if (!obj) {
+			return;
+		}
 		obj = *(uint32_t*)(obj + 0xA8);
 		if (obj)
 		{
@@ -877,10 +894,12 @@ namespace warcraft3::japi {
 	}
 
 	// Bridge dispatch handlers
-	static uint32_t make_jstr(const char* s) { return jass::create_string(s ? s : ""); }
 
 	uint32_t EXGetUnitString_handler(const uint32_t* a, size_t) {
-		return make_jstr(jass::from_string(EXGetUnitString(a[0], a[1])));
+		// EXGetUnitString already returns a fresh jstring_t — return it
+		// directly (re-creating via make_jstr(from_string(...)) would leak
+		// the intermediate string into the game's string table every call).
+		return EXGetUnitString(a[0], a[1]);
 	}
 	uint32_t EXSetUnitString_handler(const uint32_t* a, size_t) {
 		return EXSetUnitString(a[0], a[1], a[2]);
@@ -898,7 +917,7 @@ namespace warcraft3::japi {
 		return EXSetUnitInteger(a[0], a[1], a[2]);
 	}
 	uint32_t EXGetUnitArrayString_handler(const uint32_t* a, size_t) {
-		return make_jstr(jass::from_string(EXGetUnitArrayString(a[0], a[1], a[2])));
+		return EXGetUnitArrayString(a[0], a[1], a[2]);  // already a fresh jstring_t
 	}
 	uint32_t EXSetUnitArrayString_handler(const uint32_t* a, size_t) {
 		return EXSetUnitArrayString(a[0], a[1], a[2], a[3]);

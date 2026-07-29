@@ -7,6 +7,7 @@ local runtime = require "jass.runtime"
 local japi    = require "jass.japi"
 local hook    = require "jass.hook"
 local util    = require "lib.util"
+local test_ex = require "tests.test_ex"
 
 -- Handle-level agnostic helpers (works with integer or userdata)
 local function handle_val(h)
@@ -496,6 +497,15 @@ test("jass.code + TriggerAddAction round-trip", function()
     jass.DestroyTrigger(trig)
     assert(fired, "callback was not called!")
 end)
+
+-- ============================================================
+-- 9. EX* natives fixture tests (tests.test_ex)
+-- ============================================================
+if type(test_ex) == "table" and type(test_ex.run) == "function" then
+    local ep, ef = test_ex.run()
+    pass = pass + ep
+    fail = fail + ef
+end
 
 -- ============================================================
 -- Summary

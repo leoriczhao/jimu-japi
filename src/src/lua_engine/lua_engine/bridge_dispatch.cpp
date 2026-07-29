@@ -94,7 +94,10 @@ namespace warcraft3::lua_engine::bridge {
     }
 
     static void ht_save_real(uint32_t ht, uint32_t key, int slot, uint32_t value) {
-        jass::call("SaveReal", ht, key, slot, value);
+        // Natives take real params BY POINTER (call_param::push_real stores a
+        // pointer to the 4-byte float) — passing the raw bits here would make
+        // SaveReal dereference them as an address and crash.
+        jass::call("SaveReal", ht, key, slot, (uintptr_t)&value);
     }
 
     static void ht_save_bool(uint32_t ht, uint32_t key, int slot, uint32_t value) {
@@ -102,8 +105,12 @@ namespace warcraft3::lua_engine::bridge {
     }
 
     static const char* ht_load_str(uint32_t ht, uint32_t key, int slot) {
-        jass::jstring_t result = (jass::jstring_t)jass::call("LoadStr", ht, key, slot);
-        return jass::from_string(result);
+        // LoadStr returns a string ID — resolve ID -> string-table element
+        // before from_string(), or the ID gets dereferenced as a pointer.
+        jass::jstring_t id = (jass::jstring_t)jass::call("LoadStr", ht, key, slot);
+        if (!id) return nullptr;
+        uint32_t handle = get_jass_vm()->string_table->get((uint32_t)id);
+        return jass::from_string((jass::jstring_t)handle);
     }
 
     static int32_t ht_load_int(uint32_t ht, uint32_t key, int slot) {
@@ -140,9 +147,11 @@ namespace warcraft3::lua_engine::bridge {
                         break;
                     case 'S':
                         // JASS stored the value with SaveStr (string bucket) — LoadInteger
-                        // would silently return 0. Handlers expect the raw jstring_t
-                        // handle and call jass::from_string() on it themselves.
-                        args[i] = (uint32_t)jass::call("LoadStr", g_ht_handle, g_ht_key, slot);
+                        // would silently return 0. LoadStr returns a string ID; resolve
+                        // it to a string-table element so handlers get a jstring_t
+                        // handle they can pass to jass::from_string().
+                        args[i] = get_jass_vm()->string_table->get(
+                            (uint32_t)jass::call("LoadStr", g_ht_handle, g_ht_key, slot));
                         break;
                     default:
                         args[i] = (uint32_t)ht_load_int(g_ht_handle, g_ht_key, slot);
@@ -159,11 +168,17 @@ namespace warcraft3::lua_engine::bridge {
                     case 'R':
                         ht_save_real(g_ht_handle, g_ht_key, 0, result);
                         break;
-                    case 'S':
-                        // result is a jstring_t handle
+                    case 'S': {
+                        // Native-ABI string returns are string IDs (small ints),
+                        // NOT jstring_t handles. Resolve ID -> string-table
+                        // element -> char* (same as jass_call_native_function's
+                        // TYPE_STRING handling) or from_string() will deref the
+                        // ID as a pointer and crash.
+                        uint32_t handle = get_jass_vm()->string_table->get(result);
                         ht_save_str(g_ht_handle, g_ht_key, 0,
-                            jass::from_string((jass::jstring_t)result));
+                            jass::from_string((jass::jstring_t)handle));
                         break;
+                    }
                     case 'B':
                         ht_save_bool(g_ht_handle, g_ht_key, 0, result ? 1 : 0);
                         break;

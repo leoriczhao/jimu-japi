@@ -4,6 +4,7 @@
 #include <warcraft3/jass.h>
 #include <warcraft3/jass/hook.h>
 #include <warcraft3/war3_searcher.h>
+#include <warcraft3/hashtable.h>
 #include <cstdio>
 
 namespace warcraft3::japi {
@@ -14,9 +15,13 @@ namespace warcraft3::japi {
 	// Returns the current map name. Reads from war3map.w3i or uses GetObjectName.
 	static jass::jstring_t __cdecl GetMapName()
 	{
-		// Try reading from the JASS global "mapName" if it exists
-		// For now, use a simple approach: call GetObjectName on the map
-		const char* name = jass::from_string((jass::jstring_t)jass::call("GetObjectName"));
+		// Native string returns are string IDs — resolve to a handle before
+		// from_string(), or the ID gets dereferenced as a pointer and crashes.
+		uint32_t id = jass::call("GetObjectName");
+		const char* name = nullptr;
+		if (id) {
+			name = jass::from_string((jass::jstring_t)get_jass_vm()->string_table->get(id));
+		}
 		if (name && name[0]) {
 			return jass::create_string(name);
 		}
