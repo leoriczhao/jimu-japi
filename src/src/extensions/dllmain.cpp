@@ -26,6 +26,9 @@ namespace warcraft3::lua_engine::lua_loader {
     void load_script();
     void install_lazy_hook();
 }
+namespace warcraft3::lua_engine::message {
+    void register_bridge_natives();
+}
 namespace warcraft3::japi {
     void initialize();
     void initialize_ex_natives();
@@ -142,7 +145,8 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
 
     // Step 2: Register EX* natives
     warcraft3::japi::initialize_ex_natives();
-    SYNC_LOG("Step 2: initialize_ex_natives DONE");
+    warcraft3::lua_engine::message::register_bridge_natives();
+    SYNC_LOG("Step 2: initialize_ex_natives + message bridge natives DONE");
 
     // Step 3: Register bridge handlers + flush natives
     warcraft3::lua_engine::bridge::register_cpp_handler(

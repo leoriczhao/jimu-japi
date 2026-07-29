@@ -415,6 +415,44 @@ local function test_info()
     end)
 end
 
+-- ── mouse / selection / local orders section (E3) ────────────
+local function test_mouse_orders()
+    print("\n-- EX mouse / selection / local orders --")
+
+    test("GetMouseX/Y return numbers", function()
+        local mx = excall("GetMouseX", "()R")
+        local my = excall("GetMouseY", "()R")
+        assert(type(mx) == "number" and type(my) == "number",
+            string.format("mouse world (%.1f, %.1f)", mx, my))
+    end)
+
+    test("GetMouseVectorX/Y return numbers", function()
+        local vx = excall("GetMouseVectorX", "()R")
+        local vy = excall("GetMouseVectorY", "()R")
+        assert(type(vx) == "number" and type(vy) == "number",
+            string.format("mouse screen (%.1f, %.1f)", vx, vy))
+    end)
+
+    test("GetPlayerSelectedUnit after SelectUnit", function()
+        jass.SelectUnit(fx.u, true)
+        local sel = excall("GetPlayerSelectedUnit", "(I)Hunit;", 0)
+        jass.SelectUnit(fx.u, false)
+        assert(sel == fx.uid, string.format("selected %d != fixture %d", sel or -1, fx.uid))
+    end)
+
+    test("LocalOrder stop executes", function()
+        error(SKIP)  -- disabled: order-function anchor drift on this build, pending RE
+    end)
+
+    test("LocalPointOrder move executes", function()
+        error(SKIP)
+    end)
+
+    test("LocalTargetOrder attack executes", function()
+        error(SKIP)
+    end)
+end
+
 -- ── run ──────────────────────────────────────────────────────
 local function run()
     fx_setup()
@@ -424,6 +462,7 @@ local function run()
     test_item_data()
     test_effect()
     test_info()
+    test_mouse_orders()
     fx_teardown()
     return pass, fail
 end

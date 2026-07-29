@@ -11,6 +11,8 @@
 #include "callback.h"
 #include "libs_runtime.h"
 #include "jassbind.h"
+#include "bridge_dispatch.h"
+#include "debug_log.h"
 #include <vector>
 #include <map>
 
@@ -1002,6 +1004,109 @@ namespace warcraft3::lua_engine::message {
 		int ev_id = (int)lua_tointeger(L, 2);
 		g_texture_events.erase(ev_id);
 		return 0;
+	}
+
+	// ============================================================
+	// Bridge natives (builtin-japi parity): mouse / selection / local orders
+	// These reuse the same internal helpers as the Lua API above and are
+	// registered into the UnitId bridge dispatch via register_bridge_natives().
+	// ============================================================
+	static void mouse_world(float& wx, float& wy)
+	{
+		HWND war3_window = get_window();
+		POINT pt = { 0 };
+		::GetCursorPos(&pt);
+		ScreenToClient(war3_window, &pt);
+		RECT rt;
+		::GetClientRect(war3_window, &rt);
+		float fx = 0.8f * ((float)(pt.x - rt.left) / (rt.right - rt.left));
+		float fy = 0.6f * (1.0f - (float)(pt.y - rt.top) / (rt.bottom - rt.top));
+		convert_xy(fx, fy, wx, wy);
+	}
+
+	uint32_t GetMouseX_handler(const uint32_t*, size_t) {
+		float wx, wy;
+		mouse_world(wx, wy);
+		return jass::to_real(wx);
+	}
+	uint32_t GetMouseY_handler(const uint32_t*, size_t) {
+		float wx, wy;
+		mouse_world(wx, wy);
+		return jass::to_real(wy);
+	}
+	uint32_t GetMouseVectorX_handler(const uint32_t*, size_t) {
+		// pixels relative to the War3 window client area
+		HWND hw = get_window();
+		POINT pt = { 0 };
+		::GetCursorPos(&pt);
+		if (hw) ScreenToClient(hw, &pt);
+		return jass::to_real((float)pt.x);
+	}
+	uint32_t GetMouseVectorY_handler(const uint32_t*, size_t) {
+		HWND hw = get_window();
+		POINT pt = { 0 };
+		::GetCursorPos(&pt);
+		if (hw) ScreenToClient(hw, &pt);
+		return jass::to_real((float)pt.y);
+	}
+
+	uint32_t GetPlayerSelectedUnit_handler(const uint32_t* a, size_t) {
+		player::selection_t* slt = player::selection(player::from_id(a[0]));
+		if (!slt || !slt->unit) return 0;
+		return (uint32_t)object_to_handle(slt->unit);
+	}
+
+	uint32_t LocalOrder_handler(const uint32_t* a, size_t) {
+		if (!get_select_unit()) return 0;
+		order::search();
+		static bool logged = false;
+		if (!logged) {
+			logged = true;
+			char b[128];
+			snprintf(b, sizeof(b), "[diag] order::search imm=%08X point=%08X target=%08X",
+				(uint32_t)order::real::immediate_order, (uint32_t)order::real::point_order, (uint32_t)order::real::target_order);
+			japi_log::sync_write(b);
+		}
+		base::fast_call<int>(order::real::immediate_order, a[0], 0, a[1]);
+		return 0;
+	}
+	uint32_t LocalPointOrder_handler(const uint32_t* a, size_t) {
+		if (!get_select_unit()) return 0;
+		order::search();
+		float x = jass::from_real(a[1]);
+		float y = jass::from_real(a[2]);
+		base::fast_call<int>(order::real::point_order, a[0], 0, &x, &y, a[3]);
+		return 0;
+	}
+	uint32_t LocalTargetOrder_handler(const uint32_t* a, size_t) {
+		if (!get_select_unit()) return 0;
+		order::search();
+		uint32_t target = a[1] ? handle_to_object(a[1]) : 0;
+		float x = 0.f, y = 0.f;
+		base::fast_call<int>(order::real::target_order, a[0], 0, &x, &y, target, a[2]);
+		return 0;
+	}
+
+	void register_bridge_natives()
+	{
+		static bool done = false;
+		if (done) return;
+		done = true;
+		using bridge_fn = uint32_t (*)(const uint32_t*, size_t);
+		auto reg = [](const char* name, const char* spec, bridge_fn fn) {
+			warcraft3::lua_engine::bridge::register_cpp_handler(name, spec, fn);
+		};
+		reg("GetMouseX",           "()R",          GetMouseX_handler);
+		reg("GetMouseY",           "()R",          GetMouseY_handler);
+		reg("GetMouseVectorX",     "()R",          GetMouseVectorX_handler);
+		reg("GetMouseVectorY",     "()R",          GetMouseVectorY_handler);
+		reg("GetPlayerSelectedUnit","(I)Hunit;",   GetPlayerSelectedUnit_handler);
+		// Local*Order disabled: the YDWE search anchor (game.dll+0x3AE4E0) lands
+		// mid-function on this 1.27a publish build — resolved functions are wrong
+		// (calling them crashes). Pending dedicated RE of the local-order path.
+		// reg("LocalOrder",       "(II)V",        LocalOrder_handler);
+		// reg("LocalPointOrder",  "(IRRI)V",      LocalPointOrder_handler);
+		// reg("LocalTargetOrder", "(IHwidget;I)V",LocalTargetOrder_handler);
 	}
 
 	int open(lua_State* L)
