@@ -4,8 +4,8 @@
 #include <warcraft3/keyboard_code.h>
 #include <warcraft3/player.h>
 #include <warcraft3/message_dispatch.h>
+#include <warcraft3/jass/inline_hook.h>
 #include <warcraft3/jass/trampoline_function.h>
-#include <base/hook/inline.h>
 #include <base/hook/fp_call.h>
 #include "common.h"
 #include "callback.h"
@@ -15,6 +15,7 @@
 #include "debug_log.h"
 #include <vector>
 #include <map>
+#include <cstring>
 
 namespace warcraft3::lua_engine::message {
 
@@ -305,6 +306,7 @@ namespace warcraft3::lua_engine::message {
 	namespace order {
 		bool b_hook = false;
 		bool b_search = false;
+		bool b_debug_enabled = false;
 
 		namespace real {
 			uintptr_t immediate_order = 0;
@@ -315,39 +317,45 @@ namespace warcraft3::lua_engine::message {
 		namespace fake {
 			int __fastcall immediate_order(uint32_t order, uint32_t unk, uint32_t flags)
 			{
-				if (order >= 'A000')
-				{
-					printf("immediate_order, %c%c%c%c, %X, %X\n", ((char*)&order)[3], ((char*)&order)[2], ((char*)&order)[1], ((char*)&order)[0], unk, flags);
-				}
-				else
-				{
-					printf("immediate_order, %X, %X, %X\n", order, unk, flags);
+				if (b_debug_enabled) {
+					if (order >= 'A000')
+					{
+						printf("immediate_order, %c%c%c%c, %X, %X\n", ((char*)&order)[3], ((char*)&order)[2], ((char*)&order)[1], ((char*)&order)[0], unk, flags);
+					}
+					else
+					{
+						printf("immediate_order, %X, %X, %X\n", order, unk, flags);
+					}
 				}
 				return base::fast_call<int>(real::immediate_order, order, unk, flags);
 			}
 
 			int __fastcall point_order(uint32_t order, uint32_t unk, float* x, float* y, uint32_t flags)
 			{
-				if (order >= 'A000')
-				{
-					printf("point_order, %c%c%c%c, %X, %f, %f, %X\n", ((char*)&order)[3], ((char*)&order)[2], ((char*)&order)[1], ((char*)&order)[0], unk, *x, *y, flags);
-				}
-				else
-				{
-					printf("point_order, %X, %X, %f, %f, %X\n", order, unk, *x, *y, flags);
+				if (b_debug_enabled) {
+					if (order >= 'A000')
+					{
+						printf("point_order, %c%c%c%c, %X, %f, %f, %X\n", ((char*)&order)[3], ((char*)&order)[2], ((char*)&order)[1], ((char*)&order)[0], unk, *x, *y, flags);
+					}
+					else
+					{
+						printf("point_order, %X, %X, %f, %f, %X\n", order, unk, *x, *y, flags);
+					}
 				}
 				return base::fast_call<int>(real::point_order, order, unk, x, y, flags);
 			}
 
 			int __fastcall target_order(uint32_t order, uint32_t unk, float* x, float* y, uint32_t target, uint32_t flags)
 			{
-				if (order >= 'A000')
-				{
-					printf("target_order, %c%c%c%c, %X, %f, %f, %X, %X\n", ((char*)&order)[3], ((char*)&order)[2], ((char*)&order)[1], ((char*)&order)[0], unk, *x, *y, target, flags);
-				}
-				else
-				{
-					printf("target_order, %X, %X, %f, %f, %X, %X\n", order, unk, *x, *y, target, flags);
+				if (b_debug_enabled) {
+					if (order >= 'A000')
+					{
+						printf("target_order, %c%c%c%c, %X, %f, %f, %X, %X\n", ((char*)&order)[3], ((char*)&order)[2], ((char*)&order)[1], ((char*)&order)[0], unk, *x, *y, target, flags);
+					}
+					else
+					{
+						printf("target_order, %X, %X, %f, %f, %X, %X\n", order, unk, *x, *y, target, flags);
+					}
 				}
 				return base::fast_call<int>(real::target_order, order, unk, x, y, target, flags);
 			}
@@ -364,7 +372,20 @@ namespace warcraft3::lua_engine::message {
 			uintptr_t ptr = 0;
 			if (s.get_version() >= version_127a)
 			{
-				ptr = s.base() + 0x3AE4E0;
+				// builtin-japi resolver 0x10036DBA (docs/re-builtin-japi/07-local-order.md):
+				// anchor "and edx,1; shl esi,5; or esi,eax" (83 E2 01 C1 E6 05 0B F0), -0x19.
+				// game.dll+0x3AE4E0 is the outer stdcall flag-packing wrapper, not the
+				// fastcall submit target required by the JAPI handlers.
+				static const uint8_t pat[] = { 0x83, 0xE2, 0x01, 0xC1, 0xE6, 0x05, 0x0B, 0xF0 };
+				uint32_t head;
+				memcpy(&head, pat, sizeof head);
+				ptr = s.search_int_in_text(head);
+				while (ptr && 0 != memcmp((const void*)ptr, pat, sizeof pat))
+				{
+					ptr = s.search_int_in_text(head, ptr + 1);
+				}
+				if (!ptr) return;
+				ptr -= 0x19;
 			}
 			else
 			{
@@ -414,7 +435,7 @@ namespace warcraft3::lua_engine::message {
 			float x = (float)lua_tonumber(L, 2);
 			float y = (float)lua_tonumber(L, 3);
 			uint32_t flags = lua_tointeger(L, 4);
-            base::fast_call<int>(real::point_order, order, 0, &x, &y, flags);
+			base::fast_call<int>(real::point_order, order, 0, &x, &y, flags);
 			lua_pushboolean(L, 1);
 			return 1;
 		}
@@ -440,17 +461,31 @@ namespace warcraft3::lua_engine::message {
 			return 1;
 		}
 
-		static int lenable_debug(lua_State* /*L*/)
+		static int lenable_debug(lua_State* L)
 		{
-			if (b_hook) {
-				return 0;
-			}
-			b_hook = true;
-			search();
+			bool enabled = lua_toboolean(L, 1) != 0;
+			if (enabled && !b_hook) {
+				b_hook = true;
+				search();
 
-            base::hook::install(&real::immediate_order, (uintptr_t)fake::immediate_order);
-            base::hook::install(&real::point_order, (uintptr_t)fake::point_order);
-            base::hook::install(&real::target_order, (uintptr_t)fake::target_order);
+				// The minimal base::hook::install stub only overwrites the pointer and
+				// provides no trampoline. Using it here made fake::* call itself forever.
+				// Install real code detours once and retain their trampolines; subsequent
+				// calls only toggle logging.
+				uintptr_t immediate = warcraft3::jass::inline_hook_install(
+					real::immediate_order, (uintptr_t)fake::immediate_order);
+				uintptr_t point = warcraft3::jass::inline_hook_install(
+					real::point_order, (uintptr_t)fake::point_order);
+				uintptr_t target = warcraft3::jass::inline_hook_install(
+					real::target_order, (uintptr_t)fake::target_order);
+				if (immediate) real::immediate_order = immediate;
+				if (point) real::point_order = point;
+				if (target) real::target_order = target;
+				if (!immediate || !point || !target) {
+					japi_log::sync_write("[order] one or more debug inline hooks failed");
+				}
+			}
+			b_debug_enabled = enabled;
 			return 0;
 		}
 	}
@@ -1056,34 +1091,113 @@ namespace warcraft3::lua_engine::message {
 		return (uint32_t)object_to_handle(slt->unit);
 	}
 
+	// The order-submit chain readiness (docs/re-builtin-japi/08-gameui-verify.md §6):
+	// [base+0xBE4238]+0x28 is a WORD slot index ("current orderer"), bound to the
+	// local player id during session slot-sync at match start; fn#1 indexes a
+	// 12-entry pointer array at g+0x58 with it and derefs elem+0x34 without NULL
+	// checks. Guard all four layers — calling before the bind AVs (and an AV
+	// aborts the whole jass call context).
+	static bool order_submit_ready()
+	{
+		uintptr_t base = get_war3_searcher().base();
+		uintptr_t g = *(uintptr_t*)(base + 0xBE4238);
+		if (!g || IsBadReadPtr((void*)g, 0x88)) return false;
+		uint32_t idx = *(uint16_t*)(g + 0x28);
+		if (idx >= 12) return false;
+		uintptr_t elem = *(uintptr_t*)(g + 0x58 + 4 * idx);
+		if (!elem || IsBadReadPtr((void*)elem, 0x38)) return false;
+		return *(uintptr_t*)(elem + 0x34) != 0;
+	}
+
 	uint32_t LocalOrder_handler(const uint32_t* a, size_t) {
-		if (!get_select_unit()) return 0;
 		order::search();
-		static bool logged = false;
-		if (!logged) {
-			logged = true;
-			char b[128];
-			snprintf(b, sizeof(b), "[diag] order::search imm=%08X point=%08X target=%08X",
-				(uint32_t)order::real::immediate_order, (uint32_t)order::real::point_order, (uint32_t)order::real::target_order);
-			japi_log::sync_write(b);
-		}
+		if (!order_submit_ready()) return 0;
 		base::fast_call<int>(order::real::immediate_order, a[0], 0, a[1]);
 		return 0;
 	}
 	uint32_t LocalPointOrder_handler(const uint32_t* a, size_t) {
-		if (!get_select_unit()) return 0;
 		order::search();
+		if (!order_submit_ready()) return 0;
 		float x = jass::from_real(a[1]);
 		float y = jass::from_real(a[2]);
 		base::fast_call<int>(order::real::point_order, a[0], 0, &x, &y, a[3]);
 		return 0;
 	}
 	uint32_t LocalTargetOrder_handler(const uint32_t* a, size_t) {
-		if (!get_select_unit()) return 0;
 		order::search();
+		if (!order_submit_ready()) return 0;
+		// builtin-japi: coordinates come from GetWidgetX/Y on the target widget
+		float x = jass::from_real((jass::jreal_t)jass::call("GetWidgetX", a[1]));
+		float y = jass::from_real((jass::jreal_t)jass::call("GetWidgetY", a[1]));
 		uint32_t target = a[1] ? handle_to_object(a[1]) : 0;
-		float x = 0.f, y = 0.f;
 		base::fast_call<int>(order::real::target_order, a[0], 0, &x, &y, target, a[2]);
+		return 0;
+	}
+
+	// GetTargetObject ()Hunit — current mouse-hover target (unit/item/destructable).
+	// builtin-japi resolver 0x10032CFB (docs/re-builtin-japi/07-local-order.md §2).
+	static uintptr_t search_target_object_global()
+	{
+		war3_searcher& s = get_war3_searcher();
+		uintptr_t str = s.search_string_ptr("CPreselectUI.cpp", sizeof("CPreselectUI.cpp"));
+		if (!str) return 0;
+		uintptr_t path = str;
+		for (; *(unsigned char*)path != ':'; --path) { }
+		path--;
+		uintptr_t ref;
+		{   // builtin's pattern is "00 00 00 68 <pathVA>" — the 3-zero prefix
+			// disambiguates the correct push site among several path references.
+			uint8_t pat[8] = { 0x00, 0x00, 0x00, 0x68, 0, 0, 0, 0 };
+			memcpy(pat + 4, &path, 4);
+			uint32_t head;
+			memcpy(&head, pat, 4);
+			uintptr_t m = s.search_int_in_text(head);
+			while (m && 0 != memcmp((const void*)m, pat, sizeof pat))
+			{
+				m = s.search_int_in_text(head, m + 1);
+			}
+			ref = m;
+		}
+		if (!ref) return 0;
+		return *(uint32_t*)(ref + (s.get_version() >= version_127a ? 0xAA : 0xA6));
+	}
+
+	uint32_t GetTargetObject_handler(const uint32_t*, size_t) {
+		static uintptr_t g = search_target_object_global();
+		if (!g || IsBadReadPtr((void*)g, 4)) return 0;
+		uint32_t obj = *(uint32_t*)g;
+		if (!obj || IsBadReadPtr((void*)obj, 4)) return 0;
+		return (uint32_t)object_to_handle(obj);
+	}
+
+	// SetUnitAbilityButtonShow (IIB)V — hide/show a unit ability button
+	// (hidden == disabled). builtin-japi 0x10032C2A (07 doc §3).
+	static uintptr_t search_get_ability_button_fn()
+	{
+		// anchor "push 1;push 1;push eax;push 1;call" (6A 01 6A 01 50 6A 01 E8);
+		// target = call at p+0xF  ->  p + 0x14 + rel32. No version branch.
+		war3_searcher& s = get_war3_searcher();
+		static const uint8_t pat[] = { 0x6A, 0x01, 0x6A, 0x01, 0x50, 0x6A, 0x01, 0xE8 };
+		uint32_t head;
+		memcpy(&head, pat, sizeof head);
+		uintptr_t p = s.search_int_in_text(head);
+		while (p && 0 != memcmp((const void*)p, pat, sizeof pat))
+		{
+			p = s.search_int_in_text(head, p + 1);
+		}
+		if (!p) return 0;
+		return p + 0x14 + *(int32_t*)(p + 0x10);
+	}
+
+	uint32_t SetUnitAbilityButtonShow_handler(const uint32_t* a, size_t) {
+		static uintptr_t fn = search_get_ability_button_fn();
+		if (!fn || !a[0] || !a[1]) return 0;
+		uint32_t uobj = (uint32_t)handle_to_object(a[0]);
+		if (!uobj) return 0;
+		uintptr_t btn = base::fast_call<uintptr_t>(fn, uobj, 0, a[1], 0, 1, 1, 1);
+		if (!btn || IsBadReadPtr((void*)btn, 4) || !*(uint32_t*)btn) return 0;
+		// +0x40 stores the inverted flag: 1 = hidden/disabled, 0 = shown
+		*(uint32_t*)(btn + 0x40) = a[2] ? 0 : 1;
 		return 0;
 	}
 
@@ -1101,12 +1215,11 @@ namespace warcraft3::lua_engine::message {
 		reg("GetMouseVectorX",     "()R",          GetMouseVectorX_handler);
 		reg("GetMouseVectorY",     "()R",          GetMouseVectorY_handler);
 		reg("GetPlayerSelectedUnit","(I)Hunit;",   GetPlayerSelectedUnit_handler);
-		// Local*Order disabled: the YDWE search anchor (game.dll+0x3AE4E0) lands
-		// mid-function on this 1.27a publish build — resolved functions are wrong
-		// (calling them crashes). Pending dedicated RE of the local-order path.
-		// reg("LocalOrder",       "(II)V",        LocalOrder_handler);
-		// reg("LocalPointOrder",  "(IRRI)V",      LocalPointOrder_handler);
-		// reg("LocalTargetOrder", "(IHwidget;I)V",LocalTargetOrder_handler);
+		reg("LocalOrder",          "(II)V",        LocalOrder_handler);
+		reg("LocalPointOrder",     "(IRRI)V",      LocalPointOrder_handler);
+		reg("LocalTargetOrder",    "(IHwidget;I)V",LocalTargetOrder_handler);
+		reg("GetTargetObject",     "()Hunit;",     GetTargetObject_handler);
+		reg("SetUnitAbilityButtonShow", "(IIB)V",  SetUnitAbilityButtonShow_handler);
 	}
 
 	int open(lua_State* L)

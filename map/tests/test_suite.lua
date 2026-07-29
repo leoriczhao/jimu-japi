@@ -499,28 +499,36 @@ test("jass.code + TriggerAddAction round-trip", function()
 end)
 
 -- ============================================================
--- 9. EX* natives fixture tests (tests.test_ex)
--- ============================================================
-if type(test_ex) == "table" and type(test_ex.run) == "function" then
-    local ep, ef = test_ex.run()
-    pass = pass + ep
-    fail = fail + ef
+-- Summary
+local function finish()
+    print("")
+    print("========================================")
+    local total = pass + fail
+    print(string.format(" Results: %d passed, %d failed, %d total", pass, fail, total))
+    print("========================================")
+
+    if fail > 0 then
+        print("SOME TESTS FAILED (" .. fail .. "/" .. total .. ")")
+    else
+        print("ALL TESTS PASSED (" .. total .. "/" .. total .. ")")
+        jass.DisplayTimedTextToPlayer(jass.GetLocalPlayer(), 0, 0, 10,
+            "[japi.dll] ALL TESTS PASSED " .. total .. "/" .. total)
+    end
 end
 
 -- ============================================================
--- Summary
-print("")
-print("========================================")
-local total = pass + fail
-print(string.format(" Results: %d passed, %d failed, %d total", pass, fail, total))
-print("========================================")
-
-if fail > 0 then
-    print("SOME TESTS FAILED (" .. fail .. "/" .. total .. ")")
+-- 9. EX* natives fixture tests (tests.test_ex)
+-- Local-order assertions are asynchronous, so the final Results line is
+-- emitted only after their timer-driven verification completes.
+-- ============================================================
+if type(test_ex) == "table" and type(test_ex.run) == "function" then
+    test_ex.run(function(ep, ef)
+        pass = pass + ep
+        fail = fail + ef
+        finish()
+    end)
 else
-    print("ALL TESTS PASSED (" .. total .. "/" .. total .. ")")
-    jass.DisplayTimedTextToPlayer(jass.GetLocalPlayer(), 0, 0, 10,
-        "[japi.dll] ALL TESTS PASSED " .. total .. "/" .. total)
+    finish()
 end
 end  -- run()
 

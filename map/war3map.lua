@@ -26,9 +26,11 @@ end
 -- Run test suite via timer (deferred execution).
 -- When the debugger is listening, delay the suite so there is time to
 -- attach and set breakpoints (dev mode). Without debugger: run at once.
+-- NOTE: 1.0s (not 0.01s) — the Local*Order natives need the command-submit
+-- chain (game.dll [base+0xBE4238]+0x28) which is only up a few frames in.
 local test_mod = require "tests.test_suite"
 local timer = jass.CreateTimer()
-jass.TimerStart(timer, dbg_port and 40.0 or 0.01, false, test_mod.run)
+jass.TimerStart(timer, dbg_port and 40.0 or 1.0, false, test_mod.run)
 
 if dbg_port then
     print("[japi-lua] debugger listening on 127.0.0.1:" .. dbg_port)

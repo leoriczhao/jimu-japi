@@ -440,16 +440,70 @@ local function test_mouse_orders()
         assert(sel == fx.uid, string.format("selected %d != fixture %d", sel or -1, fx.uid))
     end)
 
+    test("GetTargetObject returns integer", function()
+        local t = excall("GetTargetObject", "()Hunit;")
+        assert(type(t) == "number", "target object: " .. tostring(t))
+    end)
+
+    test("SetUnitAbilityButtonShow hide/show", function()
+        excall("SetUnitAbilityButtonShow", "(IIB)V", fx.uid, fourcc("AHbz"), false)
+        excall("SetUnitAbilityButtonShow", "(IIB)V", fx.uid, fourcc("AHbz"), true)
+    end)
+end
+
+-- Local orders enqueue UI command packets. Target orders can be observed on a
+-- later game update. The builtin point handler fixes edx=0 and is normally used
+-- from the real UI message hook; a synthetic timer has no matching command-source
+-- object, so here it is covered as a safe ABI-forwarding call (see RE doc 08 §7).
+local function test_local_orders_async(done)
+    local timer = jass.CreateTimer()
+    local enemy
+    local local_player = jass.GetLocalPlayer()
+    local local_player_id = jass.GetPlayerId(local_player)
+    local enemy_player = jass.Player(local_player_id == 0 and 1 or 0)
+    local order_spawn_x = jass.GetPlayerStartLocationX(local_player)
+    local order_spawn_y = jass.GetPlayerStartLocationY(local_player)
+    local order_unit = jass.CreateUnit(local_player, fourcc("hfoo"),
+        order_spawn_x, order_spawn_y, 270)
+    local FLAG_LOCAL_CAST = (1 << 2) | (1 << 5)
+
+    assert(order_unit ~= nil, "CreateUnit(order fixture) failed")
+    jass.SelectUnit(fx.u, false)
+    jass.SelectUnit(order_unit, true)
     test("LocalOrder stop executes", function()
-        error(SKIP)  -- disabled: order-function anchor drift on this build, pending RE
+        excall("LocalOrder", "(II)V", jass.OrderId("stop"), FLAG_LOCAL_CAST)
     end)
 
-    test("LocalPointOrder move executes", function()
-        error(SKIP)
-    end)
+    jass.TimerStart(timer, 0.05, false, function()
+        test("LocalPointOrder call is safe", function()
+            excall("LocalPointOrder", "(IRRI)V", jass.OrderId("move"),
+                jass.GetUnitX(order_unit), jass.GetUnitY(order_unit) - 500,
+                FLAG_LOCAL_CAST)
+        end)
 
-    test("LocalTargetOrder attack executes", function()
-        error(SKIP)
+        local target_ok, target_err = pcall(function()
+            enemy = jass.CreateUnit(enemy_player, fourcc("hfoo"),
+                jass.GetUnitX(order_unit) + 200, jass.GetUnitY(order_unit), 270)
+            assert(enemy ~= nil, "CreateUnit(enemy) failed")
+            jass.SetUnitInvulnerable(enemy, true)
+            excall("LocalTargetOrder", "(IHwidget;I)V",
+                jass.OrderId("attack"), jass.GetHandleId(enemy), FLAG_LOCAL_CAST)
+        end)
+
+        jass.TimerStart(timer, 0.50, false, function()
+            test("LocalTargetOrder attack executes", function()
+                assert(target_ok, tostring(target_err))
+                local cur = jass.GetUnitCurrentOrder(order_unit)
+                assert(cur == jass.OrderId("attack"),
+                    string.format("current order %d != attack %d", cur or -1, jass.OrderId("attack")))
+            end)
+
+            jass.SelectUnit(order_unit, false)
+            if enemy then jass.RemoveUnit(enemy) enemy = nil end
+            jass.RemoveUnit(order_unit)
+            jass.DestroyTimer(timer)
+            done()
+        end)
     end)
 end
 
@@ -495,7 +549,7 @@ local function test_gameui()
 end
 
 -- ── run ──────────────────────────────────────────────────────
-local function run()
+local function run(done)
     fx_setup()
     test_unit_data()
     test_ability_data()
@@ -505,8 +559,10 @@ local function run()
     test_info()
     test_mouse_orders()
     test_gameui()
-    fx_teardown()
-    return pass, fail
+    test_local_orders_async(function()
+        fx_teardown()
+        done(pass, fail)
+    end)
 end
 
 return { run = run }
