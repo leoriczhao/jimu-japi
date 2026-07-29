@@ -401,6 +401,18 @@ local function test_info()
     test("EXDisplayChat executes", function()
         excall("EXDisplayChat", "(IIS)V", 0, 0, "[test] display chat")
     end)
+
+    test("Hex formats", function()
+        assert(excall("Hex", "(I)S", 255) == "000000FF", "Hex(255): " .. tostring(excall("Hex", "(I)S", 255)))
+        assert(excall("Hex", "(I)S", 0xDEADBEEF) == "DEADBEEF",
+            "Hex(0xDEADBEEF): " .. tostring(excall("Hex", "(I)S", 0xDEADBEEF)))
+    end)
+
+    test("EXExecuteScript evaluates", function()
+        assert(excall("EXExecuteScript", "(S)S", "1+1") == "2",
+            "EXExecuteScript('1+1'): " .. tostring(excall("EXExecuteScript", "(S)S", "1+1")))
+        assert(excall("EXExecuteScript", "(S)S", "'abc'..'def'") == "abcdef")
+    end)
 end
 
 -- ── run ──────────────────────────────────────────────────────

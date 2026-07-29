@@ -42,11 +42,21 @@ namespace warcraft3::japi {
 		return jass::create_string("1.0.0");
 	}
 
+	// Hex(value) -> string
+	// Formats an integer as an 8-digit uppercase hex string (builtin-japi parity).
+	static jass::jstring_t __cdecl Hex(int32_t v)
+	{
+		char buf[16];
+		snprintf(buf, sizeof(buf), "%08X", (uint32_t)v);
+		return jass::create_string(buf);
+	}
+
 	void InitializeGameInfo()
 	{
 		jass::japi_add((uintptr_t)GetMapName, "GetMapName", "()S");
 		jass::japi_add((uintptr_t)GetGameVersion, "GetGameVersion", "()I");
 		jass::japi_add((uintptr_t)GetPluginVersion, "GetPluginVersion", "()S");
+		jass::japi_add((uintptr_t)Hex, "Hex", "(I)S");
 	}
 
 	// Bridge dispatch handlers
@@ -58,5 +68,8 @@ namespace warcraft3::japi {
 	}
 	uint32_t GetPluginVersion_handler(const uint32_t*, size_t) {
 		return GetPluginVersion();
+	}
+	uint32_t Hex_handler(const uint32_t* a, size_t) {
+		return Hex((int32_t)a[0]);
 	}
 }

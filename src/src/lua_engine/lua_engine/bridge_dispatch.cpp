@@ -174,6 +174,10 @@ namespace warcraft3::lua_engine::bridge {
                         // element -> char* (same as jass_call_native_function's
                         // TYPE_STRING handling) or from_string() will deref the
                         // ID as a pointer and crash.
+                        if (!result) {
+                            ht_save_str(g_ht_handle, g_ht_key, 0, "");
+                            break;
+                        }
                         uint32_t handle = get_jass_vm()->string_table->get(result);
                         ht_save_str(g_ht_handle, g_ht_key, 0,
                             jass::from_string((jass::jstring_t)handle));

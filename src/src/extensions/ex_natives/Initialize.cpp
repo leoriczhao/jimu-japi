@@ -4,11 +4,17 @@
 
 #include <windows.h>
 #include <cstdint>
+#include <warcraft3/jass.h>
 
 // Forward declaration for bridge dispatch registration
 namespace warcraft3::lua_engine::bridge {
 	typedef uint32_t (*cpp_handler_fn)(const uint32_t* args, size_t nargs);
 	void register_cpp_handler(const char* name, const char* spec, cpp_handler_fn fn);
+}
+
+// EXExecuteScript implementation lives in lua_loader.cpp
+namespace warcraft3::lua_engine::lua_loader {
+	jass::jstring_t __cdecl EXExecuteScript(jass::jstring_t script);
 }
 
 namespace warcraft3::japi {
@@ -67,6 +73,12 @@ namespace warcraft3::japi {
 	uint32_t GetMapName_handler(const uint32_t* args, size_t nargs);
 	uint32_t GetGameVersion_handler(const uint32_t* args, size_t nargs);
 	uint32_t GetPluginVersion_handler(const uint32_t* args, size_t nargs);
+	uint32_t Hex_handler(const uint32_t* args, size_t nargs);
+
+	// EXExecuteScript adapter
+	static uint32_t EXExecuteScript_bridge(const uint32_t* a, size_t) {
+		return warcraft3::lua_engine::lua_loader::EXExecuteScript((jass::jstring_t)a[0]);
+	}
 
 	using namespace warcraft3::lua_engine::bridge;
 
@@ -132,5 +144,7 @@ namespace warcraft3::japi {
 		register_cpp_handler("GetMapName",             "()S",    GetMapName_handler);
 		register_cpp_handler("GetGameVersion",         "()I",    GetGameVersion_handler);
 		register_cpp_handler("GetPluginVersion",       "()S",    GetPluginVersion_handler);
+		register_cpp_handler("Hex",                    "(I)S",   Hex_handler);
+		register_cpp_handler("EXExecuteScript",        "(S)S",   EXExecuteScript_bridge);
 	}
 }
