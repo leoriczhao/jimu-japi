@@ -1,5 +1,7 @@
 # JASS → Lua 桥接设计（内置 JAPI 路线）
 
+> 设计与历史任务清单。当前完成度只以 [`../STATUS.md`](../STATUS.md) 为准。
+
 ## 一、核心思路
 
 **一张地图搞定一切。** DLL 劫持一个已有的 JASS 原生函数（`UnitId`），所有 JASS→Lua 调用走统一的哈希表传参 + 字符串名分发。war3map.j 里不需要写 `native` 声明，所有桥接函数都是普通的 JASS 函数，pjass 完全兼容。

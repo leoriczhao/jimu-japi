@@ -67,6 +67,7 @@ namespace warcraft3::japi {
 
 	uint32_t EXGetEventDamageData_handler(const uint32_t* args, size_t nargs);
 	uint32_t EXSetEventDamage_handler(const uint32_t* args, size_t nargs);
+	bool install_event_damage_hooks();
 
 	uint32_t EXDisplayChat_handler(const uint32_t* args, size_t nargs);
 
@@ -93,6 +94,8 @@ namespace warcraft3::japi {
 
 	void initialize_ex_natives()
 	{
+		install_event_damage_hooks();
+
 		// Unit state
 		register_cpp_handler("EXGetUnitString",        "(II)S",  EXGetUnitString_handler);
 		register_cpp_handler("EXSetUnitString",        "(IIS)B", EXSetUnitString_handler);

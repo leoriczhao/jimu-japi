@@ -18,7 +18,6 @@
 #include <cstring>
 
 namespace warcraft3::lua_engine::message {
-
 	// ============================================================
 	// Texture event system
 	// ============================================================
@@ -424,20 +423,30 @@ namespace warcraft3::lua_engine::message {
 			return 1;
 		}
 
+		static bool submit_point(uint32_t order_id, float x, float y, uint32_t flags);
+
 		static int lpoint(lua_State* L)
 		{
-			if (!get_select_unit()){
-				lua_pushboolean(L, 0);
-				return 1;
-			}
-			search();
 			uint32_t order = lua_tointeger(L, 1);
 			float x = (float)lua_tonumber(L, 2);
 			float y = (float)lua_tonumber(L, 3);
 			uint32_t flags = lua_tointeger(L, 4);
-			base::fast_call<int>(real::point_order, order, 0, &x, &y, flags);
-			lua_pushboolean(L, 1);
+			bool submitted = submit_point(order, x, y, flags);
+			lua_pushboolean(L, submitted ? 1 : 0);
 			return 1;
+		}
+
+		// Shared by message.order_point (the API used from message.hook) and the
+		// LocalPointOrder bridge handler. This lets the integration suite validate
+		// the exact submit function in a real CGameUI message callback while the
+		// bridge test separately covers hashtable argument decoding.
+		static bool submit_point(uint32_t order_id, float x, float y, uint32_t flags)
+		{
+			if (!get_select_unit()) return false;
+			search();
+			if (!real::point_order) return false;
+			base::fast_call<int>(real::point_order, order_id, 0, &x, &y, flags);
+			return true;
 		}
 
 		static int ltarget(lua_State* L)
@@ -1116,11 +1125,10 @@ namespace warcraft3::lua_engine::message {
 		return 0;
 	}
 	uint32_t LocalPointOrder_handler(const uint32_t* a, size_t) {
-		order::search();
 		if (!order_submit_ready()) return 0;
 		float x = jass::from_real(a[1]);
 		float y = jass::from_real(a[2]);
-		base::fast_call<int>(order::real::point_order, a[0], 0, &x, &y, a[3]);
+		order::submit_point(a[0], x, y, a[3]);
 		return 0;
 	}
 	uint32_t LocalTargetOrder_handler(const uint32_t* a, size_t) {

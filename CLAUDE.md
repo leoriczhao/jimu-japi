@@ -30,23 +30,25 @@
 
 **关键区别**：YDWE 跑在编辑器里，builtin-japi 跑在游戏里。我们的 DLL 跑在游戏里，所以行为上对标 builtin-japi，代码上从 YDWE 提取。
 
-### builtin-japi 功能清单（我们要实现的）
+### builtin-japi 功能范围
+
+> 当前完成度、验证强度和下一阶段统一维护在 `docs/STATUS.md`；本节只描述模块职责。
 
 builtin-japi 提供以下 `jass.*` Lua 模块：
 
-| 模块 | 用途 | 状态 |
-|------|------|------|
-| `jass.common` | JASS native 调用（metatable 自动分发） | ✓ 已实现 |
-| `jass.globals` | JASS 全局变量读写 | ✓ 已实现 |
-| `jass.japi` | 自定义 native 注册（Lua 侧注册 handler） | ✓ 已实现 |
-| `jass.hook` | native hook（拦截/替换 JASS 函数） | ✓ 已实现 |
-| `jass.runtime` | 运行时配置（sleep、console、handle_level 等） | ✓ 已实现 |
-| `jass.message` | 输入消息系统（键盘、鼠标、命令、选择） | ✓ 已实现 |
-| `jass.debug` | 调试工具 | ✓ 已实现 |
-| `jass.slk` | 游戏数据表查询（ability/unit/item 等 SLK 数据） | ✓ 已实现（SlkLib + 游戏内 Storm 读 MPQ） |
-| `jass.sleep` | 协程 sleep（TriggerSleepAction 集成） | ✓ 已实现 |
-| `jass.storm` | MPQ 文件读取 | ✓ 已实现 |
-| `jass.debugger` | DAP 调试器（127.0.0.1:4278，断点/单步/栈/变量，actboy168/lua-debug 核心） | ✓ 已实现（需 `-WithDebugger` 打包，设计文档：`docs/planning/LUA-DEBUGGER-DESIGN.md`） |
+| 模块 | 用途 |
+|------|------|
+| `jass.common` | JASS native 调用（metatable 自动分发） |
+| `jass.globals` | JASS 全局变量读写 |
+| `jass.japi` | 自定义 native 注册（Lua 侧注册 handler） |
+| `jass.hook` | native hook（拦截/替换 JASS 函数） |
+| `jass.runtime` | 运行时配置（sleep、console、handle_level 等） |
+| `jass.message` | 输入消息系统（键盘、鼠标、命令、选择） |
+| `jass.debug` | 调试工具 |
+| `jass.slk` | 游戏数据表查询（ability/unit/item 等 SLK 数据） |
+| `jass.sleep` | 协程 sleep（TriggerSleepAction 集成） |
+| `jass.storm` | MPQ 文件读取 |
+| `jass.debugger` | DAP 调试器（127.0.0.1:4278；设计见 `docs/planning/LUA-DEBUGGER-DESIGN.md`） |
 
 ### 实现原则
 

@@ -6,6 +6,8 @@
 #   .\tools\deploy.ps1                                  # all defaults
 #   .\tools\deploy.ps1 -DllPath "path\to\yd_japi.dll"   # custom DLL
 #   .\tools\deploy.ps1 -NoKill                          # leave War3 running after tests
+#   .\tools\deploy.ps1 -InteractivePoint                # require a real Q key for LocalPointOrder
+#   .\tools\deploy.ps1 -InteractiveUi                   # verify hover target and ability button UI
 param(
     [string]$DllPath = "",
     [string]$BaseMap = "",
@@ -13,6 +15,8 @@ param(
     [string]$MapName = "",
     [int]$Timeout    = 120,
     [switch]$NoKill,
+    [switch]$InteractivePoint,
+    [switch]$InteractiveUi,
     [switch]$WithDebugger
 )
 
@@ -24,6 +28,9 @@ $PackScript = "$PSScriptRoot\pack.ps1"
 $OutFile  = "$Root\build\output.w3x"
 
 if (-not $LogFile) { $LogFile = "C:\ProgramData\japi_debug.txt" }
+if (($InteractivePoint -or $InteractiveUi) -and -not $PSBoundParameters.ContainsKey("Timeout")) {
+    $Timeout = 3660
+}
 
 # Resolve DllPath if provided
 if ($DllPath) {
@@ -40,6 +47,8 @@ Write-Host "[1/4] Packing map..."
 $packArgs = @{}
 if ($DllPath) { $packArgs["DllPath"] = $DllPath }
 if ($BaseMap) { $packArgs["BaseMap"] = $BaseMap }
+if ($InteractivePoint) { $packArgs["InteractivePoint"] = $true }
+if ($InteractiveUi) { $packArgs["InteractiveUi"] = $true }
 if ($WithDebugger) { $packArgs["WithDebugger"] = $true }
 $packResult = & $PackScript @packArgs 2>&1
 if ($LASTEXITCODE -ne 0) {
@@ -53,7 +62,7 @@ Write-Host "[2/4] Deploying to War3..."
 $destMap = Join-Path $War3Dir $TestMap
 $destDir = Split-Path -Parent $destMap
 if (-not (Test-Path $destDir)) { New-Item -ItemType Directory $destDir -Force | Out-Null }
-Copy-Item $OutFile $destMap -Force
+Copy-Item $OutFile $destMap -Force -ErrorAction Stop
 Write-Host "  Deployed to $destMap"
 
 # ── Step 3: Launch War3 ────────────────────────────────────────

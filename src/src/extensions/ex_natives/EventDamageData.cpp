@@ -5,7 +5,10 @@
 
 #include <warcraft3/war3_searcher.h>
 #include <warcraft3/version.h>
+#include <warcraft3/hashtable.h>
 #include <warcraft3/jass/hook.h>
+#include <warcraft3/jass/inline_hook.h>
+#include <warcraft3/jass/func_value.h>
 #include <warcraft3/jass.h>
 #include <base/hook/replace_pointer.h>
 #include <base/hook/fp_call.h>
@@ -205,11 +208,67 @@ bool __cdecl EXSetEventDamage(uint32_t value)
 
 void InitializeEventDamageData()
 {
-	// NOTE: GetEventDamage hook and unit damage hook disabled —
-	// japi_hook and replace_pointer modify game memory/JASS native table
-	// which conflicts with callback exploit hooks.
 	jass::japi_add((uintptr_t)EXGetEventDamageData, "EXGetEventDamageData", "(I)I");
 	jass::japi_add((uintptr_t)EXSetEventDamage,     "EXSetEventDamage",     "(R)B");
+}
+
+// Callback mode loads after the JASS VM has already been created, so the
+// original YDWE event_add/japi_hook registration path never runs. Install the
+// two runtime hooks directly:
+//   1. replace the unit-damage vtable slot discovered by searchUnitDamageFunc;
+//   2. inline-hook GetEventDamage so a value changed by EXSetEventDamage is
+//      visible immediately inside EVENT_UNIT_DAMAGED.
+// If the native prologue cannot be relocated, fall back to replacing its
+// already-built native-table entry (the same late-load technique used by the
+// ExecuteFunc lazy hook).
+bool install_event_damage_hooks()
+{
+	static bool attempted = false;
+	static bool installed = false;
+	if (attempted) return installed;
+	attempted = true;
+
+	uintptr_t damage_slot = getUnitDamageFunc();
+	if (!damage_slot || IsBadReadPtr((void*)damage_slot, sizeof(uintptr_t))) {
+		return false;
+	}
+	uintptr_t current_damage = *(uintptr_t*)damage_slot;
+	if (current_damage == (uintptr_t)FakeUnitDamageFunc) {
+		if (!RealUnitDamageFunc) return false;
+	} else {
+		RealUnitDamageFunc = base::hook::replace_pointer(
+			damage_slot, (uintptr_t)FakeUnitDamageFunc);
+		if (!RealUnitDamageFunc) return false;
+	}
+
+	// Force the Lua-side native map to exist before patching. It caches the
+	// registration-time address independently of the game's native hash table.
+	const jass::func_value* mapped = jass::jass_func("GetEventDamage");
+	if (!mapped || !mapped->is_valid()) return false;
+
+	auto* node = get_native_function_hashtable()->find("GetEventDamage");
+	if (!node || !node->func_address_) return false;
+	uintptr_t current_get_damage = mapped->get_address();
+	if (current_get_damage == (uintptr_t)FakeGetEventDamage) {
+		if (!RealGetEventDamage) return false;
+	} else {
+		uintptr_t trampoline = jass::inline_hook_install(
+			current_get_damage, (uintptr_t)FakeGetEventDamage);
+		if (trampoline) {
+			RealGetEventDamage = trampoline;
+		} else {
+			RealGetEventDamage = current_get_damage;
+			// jass.common closures dispatch through jass_function, while compiled
+			// JASS dispatches through the game's native table. Update both.
+			auto it = jass::jass_function.find("GetEventDamage");
+			if (it == jass::jass_function.end()) return false;
+			it->second = jass::func_value(it->second, (uintptr_t)FakeGetEventDamage);
+			node->func_address_ = (uint32_t)FakeGetEventDamage;
+		}
+	}
+
+	installed = RealUnitDamageFunc != 0 && RealGetEventDamage != 0;
+	return installed;
 }
 
 // Bridge dispatch handlers
@@ -217,7 +276,11 @@ uint32_t EXGetEventDamageData_handler(const uint32_t* a, size_t) {
 	return (uint32_t)EXGetEventDamageData(a[0]);
 }
 uint32_t EXSetEventDamage_handler(const uint32_t* a, size_t) {
-	return EXSetEventDamage(a[0]) ? 1 : 0;
+	// Bridge real arguments are IEEE-754 bits. The native ABI version receives
+	// a pointer to those bits, so provide an address instead of treating the
+	// float value itself as a pointer.
+	uint32_t value = a[0];
+	return EXSetEventDamage((uint32_t)(uintptr_t)&value) ? 1 : 0;
 }
 
 }

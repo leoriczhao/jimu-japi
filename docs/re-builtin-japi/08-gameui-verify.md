@@ -374,20 +374,55 @@ fake 再调用 real，实际就是 fake 调自己，直到栈溢出；point/targ
 `order=851986`、坐标与 Lua 侧一致、flags=36。因此函数解析、fast-call 栈布局、
 real 桥传参和选中上下文均已排除。
 
-### 7.3 LocalPointOrder 的自动化测试边界
+### 7.3 LocalPointOrder 的实机交互验证结果（2026-07-30）
 
-`LocalTargetOrder(attack, target, 36)` 在下一游戏更新后真实进入 attack，已实机通过。
-但在 timer 中合成的 `LocalPointOrder(move/blizzard, x, y, flags)` 有以下结果：
+普通回归继续验证 `LocalPointOrder` 的 bridge ABI 安全转发，并验证
+`LocalTargetOrder(attack, target, 36)` 在下一游戏更新后真实进入 attack。另增加
+`tools/deploy.ps1 -InteractivePoint` 模式：测试创建并选中 10 级大法师，学习 `AHbz`
+（Blizzard）并补满法力，等待真实前台输入，在 `message.hook` 回调内调用与 bridge
+handler 共用的 point submit 函数。
 
-- C++ bridge 与 `jass.message.order_point` 直调都安全返回，但单位不进入对应命令；
-- 同单位的标准 `IssuePointOrder(move, x, y)` 正常执行，排除单位、地形和所有权；
-- flags 0、4、36 结果相同；把当前选中单位对象实验性传入 edx 也无效（已撤回）；
-- game.dll 的真实 UI 调用点 0x3C3FFC 会把 0x3C4260 解析出的命令来源对象放入 edx，
-  而内置 jass.dll handler 明确固定 edx=0；其 Lua 示例只在真实 `message.hook` 的
-  UI 输入上下文中调用 point 路径。
+使用 Windows 前台窗口交互向真实 War3 按下 Q 后，实测证据为：
 
-所以当前自动化用例不能把 timer 下 `GetUnitCurrentOrder` 的变化当作原版等价契约。
-最终测试对 LocalPointOrder 验证“原版 ABI 安全转发、不崩溃”；LocalTargetOrder 保留
-可观测的 attack 语义断言。若后续要求证明 point 的 UI 效果，应在真实消息 hook 中做
-交互式输入回放，并捕获 0x3C4260 的命令来源对象，不能用同步 IssuePointOrder 兜底，
-否则会破坏 Local* API 的本地性。
+- `message.hook` 收到 `key_down`，code 为 81，证明不是 timer 内合成的 Lua 调用；
+- `message.order_point(OrderId("blizzard"), x, y, flags=36)` 返回 `true`；
+- `EVENT_UNIT_SPELL_EFFECT` 随后触发，`GetSpellAbilityId()` 等于 `AHbz`；
+- 同轮的 `LocalTargetOrder attack` 仍通过。
+
+最终交互结果为 `109 passed, 0 failed, 109 total`。移除临时 order debug detour、重新编译
+正式 DLL 后再次得到相同的 109/109，排除了诊断 hook 改变行为的可能。
+
+此前用 `move` 和单位位移作为完成条件，是测试模型错误。builtin-japi 的参考用法是在
+键盘 hook 内即时提交点目标技能并返回 `false` 吞掉原按键；而玩家普通右键移动走的是
+另一条 smart-click packet 路径，不能拿它作为 point-order packet 的等价对照。因此正式
+交互断言改为点目标技能的 spell-effect 事件和技能 id，不使用同步 `IssuePointOrder` 兜底，
+仍然保持 Local* API 的本地提交语义。
+
+## 8. GetTargetObject 与技能按钮的实机交互收口（2026-07-30）
+
+新增 `tools/deploy.ps1 -InteractiveUi` 模式，专门补齐普通回归只能覆盖类型/ABI 安全的
+两个 UI native。夹具把镜头固定在玩家出生点附近，创建并选中学习了 `AHbz` 的 10 级
+大法师，同时在视野中央创建敌方城镇大厅。
+
+### 8.1 GetTargetObject
+
+真实 Windows 鼠标点击城镇大厅主体后，`CPreselectUI` 更新当前目标；轮询
+`GetTargetObject()` 得到 `1050778`，与夹具创建时保存的城镇大厅 handle `1050778`
+精确相等。该项因此从“返回整数类型”升级为真实对象身份验证。
+
+### 8.2 SetUnitAbilityButtonShow
+
+测试不使用固定帧延迟，而是轮询 `message.button(0..3, 0..2)` 中的实际命令卡内容，避免
+建筑点击后重新选择英雄时的异步 UI 重建竞态。真实前台 Q 只推进一次隐藏阶段，重复
+`key_down` 必须等到 `key_up` 后才可能再次接受；隐藏保持 10 秒并自动恢复。
+
+最终三态证据：
+
+- 显示：`AHbz` 位于命令卡槽 `(0,2)`，窗口截图可见紫色暴风雪图标；
+- 隐藏：扫描结果为 `nil,nil`，窗口截图中同一槽位为空；
+- 恢复：`AHbz` 回到 `(0,2)`；随后 `LocalOrder`、`LocalPointOrder`、
+  `LocalTargetOrder` 仍全部通过，排除交互夹具污染后续选择/命令状态。
+
+最终结果为 `110 passed, 0 failed, 110 total`。诊断期间曾尝试把 `message.button` 返回的
+`CCommandButton + 0x40` 解释为 §3 resolver 返回对象的隐藏位，但动态结果证明两者不是
+同一对象布局，该读法与相关代码均已撤回；正式断言只依据命令卡实际槽位和窗口画面。

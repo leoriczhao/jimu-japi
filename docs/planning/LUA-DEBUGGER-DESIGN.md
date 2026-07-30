@@ -1,6 +1,7 @@
 # Lua 调试器（jass.debugger / 127.0.0.1:4278）详细设计
 
-> 状态：**全部完成（P0–P5，2026-07-28）**。DAP 断点/单步/栈/变量/求值已在游戏内实测通过（附录 C）；`runtime.debugger = 4278` 一行即可启用。  
+> 设计与验收记录。当前项目状态只以 [`../STATUS.md`](../STATUS.md) 为准。
+> 本功能的历史结论是：**P0–P5 于 2026-07-28 全部完成**，详见附录 C。
 > 依据：`docs/re-builtin-japi/03-yd-lua-engine.md`（全新逆向）、`reference/YDWE/.../libs_debugger.cpp`（YDWE 实现）、actboy168/lua-debug 仓库与官方 VSIX（附录 A）、本仓库当前代码
 
 ---

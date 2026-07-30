@@ -1,5 +1,7 @@
 # YDWE 核心提取 & Callback 适配 — 详细设计方案
 
+> 早期架构设计。当前实现与完成度只以 [`../STATUS.md`](../STATUS.md) 为准。
+
 ## 1. 背景
 
 当前项目需要基于 YDWE 核心源码编译适配的 DLL 链，通过 callback exploit 在 MPQ 模式下加载。YDWE 的 DLL 原本通过 hook Storm.dll 的 `StormAlloc` 函数来检测 JASS VM 初始化时刻，但在 callback 模式下，VM 已经初始化完毕（callback 在 `war3map.j::main()` 中触发），导致 YDWE 的事件驱动机制无法触发。

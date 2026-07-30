@@ -1,6 +1,7 @@
 # EX* Natives 补全与实测——详细实现计划
 
-> 状态：待实施  
+> 历史实施计划。当前完成度和验证缺口只以 [`../STATUS.md`](../STATUS.md) 为准；
+> 本文中的“待实施”、批次状态和测试基线保留为计划形成时的记录。
 > 依据：`docs/re-builtin-japi/05-map-side.md` §3.6（内置 JAPI 全部 113 个 UnitId 分发名分类清单）、`src/src/extensions/ex_natives/Initialize.cpp`（我方 47 个已注册 handler）、当前 60/60 测试基线  
 > 范围说明：**D3D 渲染系（字体/文字/贴图/贴图事件，共 ~46 个）不在本计划**——那是独立任务（对应逆向 04 文档的 newD3d9.dll 渲染层）。本计划覆盖其余全部差距 + 已注册 handler 的真实对象实测。
 

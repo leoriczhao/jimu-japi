@@ -1,5 +1,8 @@
 # Development Plan — japi.dll Feature Parity
 
+> 历史路线文档。当前完成度和验证缺口只以 [`../STATUS.md`](../STATUS.md) 为准；
+> 本文中的状态、测试数和“下一步”保留为当时的实施记录。
+
 ## 双 Lua 状态分析：不需要
 
 **YDWE 用双状态的场景：**
