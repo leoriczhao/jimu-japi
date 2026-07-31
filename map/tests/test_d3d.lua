@@ -69,6 +69,9 @@ local function run(done)
 
     print("\n-- D3D9 proxy visual fixture --")
     local font, text, texture
+    local event_id, event_baseline
+    local event_press_seen, event_release_seen = false, false
+    local event_key = 0 -- WARK_SHIFT on Warcraft III 1.27a
 
     test("D3D proxy registered, device wrapped, frame rendered", function()
         local status = call("GetD3DStatus", "()I") or 0
@@ -97,7 +100,7 @@ local function run(done)
 
     test("D3D text object visible-state round-trip", function()
         text = call("CreateText", "(ISRRRI)I", font,
-            "JAPI D3D VISUAL PASS - move cursor into checkerboard",
+            "JAPI D3D VISUAL PASS - move cursor into checkerboard and press Shift",
             72.0, 72.0, -1.0, -256)
         assert(text and text ~= 0, "CreateText returned 0")
         assert(call("GetTextString", "(I)S", text):match("VISUAL PASS"))
@@ -127,12 +130,65 @@ local function run(done)
         call("SetTextureTrigger", "(IB)V", texture, true)
     end)
 
+    test("D3D GetFuncAddr channel captures JASS code", function()
+        local code = jass.code(function() end)
+        jass.call("SetHeroLevels", code)
+        assert(jass.LoadInteger(HT, KEY, 0) == code)
+    end)
+
+    test("D3D TextureAddEvent registers JASS code callbacks", function()
+        event_baseline = call("GetTextureEventCount", "()I") or 0
+
+        local press_code = jass.code(function()
+            if event_press_seen then return end
+            event_press_seen = true
+            test("D3D TextureAddEvent press callback context", function()
+                local parent = jass.GetHandleId(jass.GetExpiredTimer())
+                assert(parent and parent ~= 0, "missing expired timer")
+                assert(jass.LoadInteger(HT, parent, 0x0FF) == texture)
+                assert(jass.LoadInteger(HT, parent, 0x100) == event_key)
+                assert(jass.LoadInteger(HT, parent, 0x101) == 1)
+                assert(jass.LoadInteger(HT, parent, 0x0FE) == event_id)
+            end)
+            call("SetTextString", "(IS)V", text,
+                "JAPI D3D EVENT PRESS PASS - release Shift")
+            call("SetTextColor", "(II)V", text, -16711936)
+        end)
+
+        local release_code = jass.code(function()
+            if event_release_seen then return end
+            event_release_seen = true
+            test("D3D TextureAddEvent release callback context", function()
+                local parent = jass.GetHandleId(jass.GetExpiredTimer())
+                assert(parent and parent ~= 0, "missing expired timer")
+                assert(jass.LoadInteger(HT, parent, 0x0FF) == texture)
+                assert(jass.LoadInteger(HT, parent, 0x100) == event_key)
+                assert(jass.LoadInteger(HT, parent, 0x101) == 0)
+                assert(jass.LoadInteger(HT, parent, 0x0FE) == event_id)
+            end)
+            call("TextureRemoveEvent", "(II)V", texture, event_id)
+            test("D3D TextureRemoveEvent releases registration", function()
+                assert(call("GetTextureEventCount", "()I") == event_baseline)
+            end)
+            call("SetTextString", "(IS)V", text,
+                "JAPI D3D EVENT PASS - move cursor outside")
+            call("SetTextColor", "(II)V", text, -16711936)
+        end)
+
+        -- WARK_SHIFT is 0 on 1.27a. The key must be pressed while the real
+        -- cursor is inside the rendered texture.
+        event_id = call("TextureAddEvent", "(IIII)I",
+            texture, event_key, press_code, release_code)
+        assert(event_id and event_id ~= 0, "TextureAddEvent returned 0")
+        assert(call("GetTextureEventCount", "()I") == event_baseline + 1)
+    end)
+
     if not text or text == 0 or not texture or texture == 0 then
         done(pass, fail)
         return
     end
 
-    print("  [WAIT] move the real cursor into the checkerboard, then move it out")
+    print("  [WAIT] move the real cursor into the checkerboard, press Shift, then move it out")
     local entered = false
     local timer = jass.CreateTimer()
     jass.TimerStart(timer, 0.05, true, function()
@@ -140,14 +196,21 @@ local function run(done)
         if inside and not entered then
             entered = true
             call("SetTextString", "(IS)V", text,
-                "JAPI D3D HOVER PASS - now move cursor outside")
+                "JAPI D3D HOVER PASS - press Shift")
             call("SetTextColor", "(II)V", text, -16711936)
             print("  [D3D] cursor entered texture")
         elseif entered and not inside then
+            if not event_press_seen or not event_release_seen then
+                entered = false
+                call("SetTextString", "(IS)V", text,
+                    "JAPI D3D EVENT WAIT - move inside and press Shift")
+                call("SetTextColor", "(II)V", text, -256)
+                return
+            end
             pass = pass + 1
             print("  [PASS] D3D real cursor enter/leave hit-test")
             call("SetTextString", "(IS)V", text,
-                "JAPI D3D VISUAL + HOVER PASS")
+                "JAPI D3D VISUAL + HOVER + EVENT PASS")
             call("SetTextColor", "(II)V", text, -16711936)
             jass.PauseTimer(timer)
             jass.DestroyTimer(timer)

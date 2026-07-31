@@ -209,6 +209,33 @@
 
 本阶段完成的是 proxy 加载、注册、部署、字体/文字/贴图和真实命中链。以下项目仍按范围约定保留：
 
-- `TextureAddEvent` / `TextureRemoveEvent` 的 JASS code 回调兼容；
+- `TextureAddEvent` / `TextureRemoveEvent` 的 JASS code 回调兼容（原阶段保留，键盘路径后由 §9 完成）；
 - MPQ 内 BLP 资源解码；
 - `rect` handle 形式的贴图裁剪。
+
+## 9. 后续扩展：TextureAddEvent / TextureRemoveEvent
+
+同日继续实现并验证了键盘型贴图事件回调，原 §1 和 §8.4 中的事件回调保留项由本节更新；
+项目当前完成度仍以 `docs/STATUS.md` 为准。
+
+实现契约：
+
+- 新增真实 custom native `SetHeroLevels(C)V`，把 JASS code 值写入 bridge hashtable 槽 0，兼容原版 `GetFuncAddr(code)` wrapper。
+- `TextureAddEvent(IIII)I` 为每个事件保留独立的按下/弹起 JASS timer，避免快速按下/弹起互相覆盖回调。
+- 输入过滤器通过 bridge 内部 direct-handler 调用代理的 `GetMouseInTexture`，事件命中与真实 renderer 的 visible、trigger 和边界状态一致。
+- 回调启动前，以 `GetExpiredTimer()` 的 handle id 为父键写入 `0xFF=texture`、`0x100=key`、`0x101=action`、`0xFE=event`。
+- `TextureRemoveEvent(II)V` 销毁两个 timer、释放 handle 引用并删除注册；`GetTextureEventCount()` 仅作为测试诊断入口。
+
+实测仍使用：
+
+```powershell
+.\tools\deploy.ps1 -BaseMap .\reference\base.w3m -InteractiveD3D -NoKill
+```
+
+真实鼠标进入棋盘后按下并弹起 Shift（War3 1.27a 的 `WARK_SHIFT=0`），两个 JASS code 回调均执行，
+四个上下文槽全部匹配，回调内移除事件后注册数恢复，随后鼠标移出完成最终视觉验收。
+普通回归保持 `108/108`；D3D 套件为 `120 passed, 0 failed, 120 total`，最终窗口显示
+`JAPI D3D VISUAL + HOVER + EVENT PASS` 和 `ALL TESTS PASSED 120/120`。
+
+尚未覆盖的是鼠标按钮码以及原版注释提到的鼠标进入/离开回调语义；MPQ BLP 和 `rect` handle
+裁剪也仍为后续项。

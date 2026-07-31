@@ -418,6 +418,30 @@ namespace warcraft3::lua_engine::bridge {
         DBG_LOG("[bridge] registered C++ handler: %s %s", name, spec);
     }
 
+    static bool invoke_cpp_handler_safely(cpp_handler_fn fn,
+                                           const uint32_t* args,
+                                           size_t nargs,
+                                           uint32_t* result) {
+        __try {
+            uint32_t value = fn(args, nargs);
+            if (result) *result = value;
+            return true;
+        } __except(EXCEPTION_EXECUTE_HANDLER) {
+            SYNC_LOG("invoke_cpp_handler: handler raised an exception");
+            return false;
+        }
+    }
+
+    bool invoke_cpp_handler(const char* name, const uint32_t* args,
+                            size_t nargs, uint32_t* result) {
+        if (!name) return false;
+        auto it = g_handlers.find(name);
+        if (it == g_handlers.end() || !it->second.cpp_fn) return false;
+
+        return invoke_cpp_handler_safely(
+            it->second.cpp_fn, args, nargs, result);
+    }
+
     void initialize() {
         // Hook is now done in dllmain.cpp via linked list (same as callback's CreateJassNativeHook).
         // This function is kept for API compatibility but does nothing.

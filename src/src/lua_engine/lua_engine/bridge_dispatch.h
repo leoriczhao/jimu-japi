@@ -25,6 +25,12 @@ namespace warcraft3::lua_engine::bridge {
     // Called from lua_loader.cpp for built-in functions like EXExecuteScript.
     void register_cpp_handler(const char* name, const char* spec, cpp_handler_fn fn);
 
+    // Invoke an already-registered C++ handler directly, without touching the
+    // shared JASS hashtable. Used by the input filter to query the D3D proxy's
+    // real texture hit-test while dispatching TextureAddEvent callbacks.
+    bool invoke_cpp_handler(const char* name, const uint32_t* args,
+                            size_t nargs, uint32_t* result);
+
     // Initialize the UnitId hook. Called from lua_loader::initialize().
     void initialize();
 

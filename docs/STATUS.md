@@ -8,7 +8,7 @@
 - 普通实机回归：`108 passed, 0 failed, 108 total`（2026-07-31）
 - LocalPoint 交互回归：`109 passed, 0 failed, 109 total`（真实前台 Q 键，2026-07-30）
 - UI 交互回归：`110 passed, 0 failed, 110 total`（真实鼠标悬停 + 命令卡显隐，2026-07-30）
-- D3D 实机回归：`115 passed, 0 failed, 115 total`（proxy 加载、API 往返、真实渲染和鼠标移入/移出，2026-07-31）
+- D3D 实机回归：`120 passed, 0 failed, 120 total`（proxy、真实渲染、鼠标命中、JASS code 按下/弹起回调，2026-07-31）
 - 验收入口：先运行 `src\build.bat`，再按第 4 节选择普通或交互模式
 
 ## 1. 总览
@@ -20,7 +20,7 @@
 | 核心 runtime 能力 | 7/7 功能目标 | 自动回归 + 实机 | 可用 |
 | Lua DAP 调试器 | P0-P5 完成 | attach、断点、单步、栈、变量、求值实测 | 可用，需 `-WithDebugger` |
 | 非 D3D bridge native | 67/67 注册 | 普通 108/108 + 两套真实交互回归 | 已实现并验收 |
-| D3D proxy、字体/文字/贴图 | proxy 加载、注册、部署和诊断链已完成 | 普通 108/108 + D3D 115/115 + 真实视觉/鼠标交互 | 本阶段可用；事件回调等兼容项见缺口 |
+| D3D proxy、字体/文字/贴图/键盘事件 | proxy、注册、部署、诊断和 code 回调链已完成 | 普通 108/108 + D3D 120/120 + 真实视觉/鼠标/Shift 交互 | 可用；其余兼容项见缺口 |
 | JASS wrapper 自动生成（E4） | 未实现 | 无 | 可选后续 |
 | SaveFunc / func_bind | 仅 `open_code_run_logs` stub | 无完整验收 | 未完成/可选 |
 
@@ -65,6 +65,7 @@
 - 以游戏目录 `d3d9.dll` 代理启动，真实 D3D9 只从 Windows system directory 的绝对路径加载。
 - `yd_japi` 显式注册 D3D bridge；代理缺失时只记录日志，不影响非 D3D 初始化。
 - 字体、文字、贴图属性和 JASS string ABI 已完成 API 往返验证。
+- `SetHeroLevels(code)` 取址通道和 `TextureAddEvent` / `TextureRemoveEvent` 的 JASS timer 回调链已接通。
 - `GetD3DStatus` 提供加载、注册、wrapper、device、帧和贴图的进程内诊断位。
 - `-InteractiveD3D` 完成 hash 保护部署、视觉探针、真实渲染和鼠标命中验收。
 
@@ -77,8 +78,9 @@
 | `GetTargetObject` | `-InteractiveUi` 固定镜头创建敌方城镇大厅；真实鼠标点击/悬停后返回 handle `1050778`，与夹具 handle `1050778` 精确一致 | **完成** |
 | `SetUnitAbilityButtonShow` | 大法师 `AHbz` 命令卡槽从显示 `(0,2)` 变为隐藏 `nil,nil`，10 秒后自动恢复 `(0,2)`；真实窗口截图同时确认紫色暴风雪图标消失，交互套件为 `110/0/110` | **完成** |
 | D3D proxy 加载/注册/部署 | PE 导出包含未修饰的 `Direct3DCreate9`、`InitializeD3DAPI`，且 proxy 不导入自身 `d3d9.dll`；`yd_japi` 在进程内完成 handler 注册；部署以 sidecar SHA-256 保护未知文件；实测状态位达到 `0x7F` | **完成** |
-| D3D 字体/文字/贴图与命中 | 字体和文字属性、JASS string ABI、贴图尺寸/像素尺寸、trigger 开关均通过；真实 War3 窗口显示黄色标题和高对比棋盘，鼠标移入后变为绿色 `HOVER PASS`，移出后显示绿色最终通过标题；套件为 `115/0/115` | **完成** |
-| D3D 后续兼容项 | `TextureAddEvent` / `TextureRemoveEvent` 的 JASS code 回调、MPQ 内 BLP 解码、`rect` handle 裁剪尚未实现 | **未完成 / 不属于本阶段 proxy 交付** |
+| D3D 字体/文字/贴图与命中 | 字体和文字属性、JASS string ABI、贴图尺寸/像素尺寸、trigger 开关均通过；真实 War3 窗口显示标题和高对比棋盘，鼠标移入/移出命中正确 | **完成** |
+| D3D `TextureAddEvent` / `TextureRemoveEvent` | `SetHeroLevels(C)V` 捕获 code；事件保留独立按下/弹起 JASS timer；回调中 `GetExpiredTimer()` 对应父键的 `0xFE–0x101` 上下文全部命中；真实鼠标位于贴图内时按下/弹起 Shift，并在回调内移除事件；套件为 `120/0/120` | **键盘事件完成** |
+| D3D 后续兼容项 | 鼠标按钮码及“进入/离开”事件语义、MPQ 内 BLP 解码、`rect` handle 裁剪尚未完成 | **未完成** |
 
 ## 4. 验证入口
 
@@ -107,20 +109,20 @@ LocalPoint 真实交互回归（War3 获得前台焦点后按 Q；默认保留�
 成功条件是 `GetTargetObject` 返回值与城镇大厅 handle 精确相等，并且 `AHbz` 在命令卡中
 依次呈现 `(0,2) -> nil,nil -> (0,2)`。当前结果为 110/110。
 
-D3D proxy 实机回归（启动后把鼠标移入棋盘，再移到棋盘外；`-NoKill` 保留最终画面供检查）：
+D3D proxy 实机回归（鼠标移入棋盘后按一次 Shift，再移到棋盘外；`-NoKill` 保留最终画面供检查）：
 
 ```powershell
 .\tools\deploy.ps1 -BaseMap .\reference\base.w3m -InteractiveD3D -NoKill
 ```
 
 成功条件是进程内状态位覆盖加载、注册、真实 DLL、wrapper、device、帧和贴图（`0x7F`），
-字体/文字/贴图属性测试通过，真实窗口的标题依次进入 `VISUAL PASS`、`HOVER PASS` 和
-`VISUAL + HOVER PASS`。当前结果为 115/115。由于目标 War3 以提权进程运行，非提权部署进程
+字体/文字/贴图属性测试通过，Shift 的按下/弹起 JASS 回调上下文和事件移除通过，真实窗口的标题依次进入
+`VISUAL PASS`、`HOVER PASS`、`EVENT PASS` 和 `VISUAL + HOVER + EVENT PASS`。当前结果为 120/120。由于目标 War3 以提权进程运行，非提权部署进程
 无法读取模块列表；该限制不作为成功证据，加载结论由进程内状态、API 往返和真实渲染共同确认。
 
 ## 5. 下一阶段顺序
 
-1. 视兼容需求补齐 D3D 事件回调、MPQ BLP 和 `rect` handle 裁剪。
+1. 视兼容需求补齐 D3D 鼠标按钮/进入离开事件语义、MPQ BLP 和 `rect` handle 裁剪。
 2. 视需要实现 JASS wrapper 自动生成和 SaveFunc/func_bind。
 
 ## 6. 文档职责

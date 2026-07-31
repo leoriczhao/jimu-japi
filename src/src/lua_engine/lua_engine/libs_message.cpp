@@ -4,12 +4,15 @@
 #include <warcraft3/keyboard_code.h>
 #include <warcraft3/player.h>
 #include <warcraft3/message_dispatch.h>
+#include <warcraft3/jass/func_value.h>
+#include <warcraft3/jass/hook.h>
 #include <warcraft3/jass/inline_hook.h>
 #include <warcraft3/jass/trampoline_function.h>
 #include <base/hook/fp_call.h>
 #include "common.h"
 #include "callback.h"
 #include "libs_runtime.h"
+#include "lua_loader.h"
 #include "jassbind.h"
 #include "bridge_dispatch.h"
 #include "debug_log.h"
@@ -40,6 +43,25 @@ namespace warcraft3::lua_engine::message {
 	static int g_next_event_id   = 1;
 	static std::map<int, texture_entry>       g_textures;
 	static std::map<int, texture_event_entry> g_texture_events;
+
+	// D3D bridge events use real newD3d9 texture handles and JASS code values.
+	// Separate JASS timers are retained for press/release so rapid input cannot
+	// overwrite a pending callback. The press timer id is the public event id;
+	// the currently expired timer id is the builtin-compatible context parent.
+	struct d3d_texture_event_entry {
+		uint32_t event_id;
+		uint32_t press_timer;
+		uint32_t release_timer;
+		uint32_t texture_id;
+		int      keycode;
+		uint32_t press_code;
+		uint32_t release_code;
+	};
+
+	static std::map<uint32_t, d3d_texture_event_entry> g_d3d_texture_events;
+	static bool g_lua_message_hook_registered = false;
+
+	void install();
 
 	// ============================================================
 	// Convert WARK_* code to Windows VK code for simulation
@@ -511,8 +533,6 @@ namespace warcraft3::lua_engine::message {
 	// ============================================================
 	static void dispatch_texture_events(lua_State* L, int wark_key, bool is_press)
 	{
-		if (!L) return;
-
 		// Mouse position in client coords, queried on demand
 		// (same GetCursorPos/ScreenToClient approach as builtin-japi)
 		HWND hw = get_window();
@@ -527,6 +547,7 @@ namespace warcraft3::lua_engine::message {
 
 		for (auto& kv : g_texture_events)
 		{
+			if (!L) break;
 			const texture_event_entry& ev = kv.second;
 			// Match key: -1 means mouse event (button), otherwise keyboard
 			if (ev.keycode != wark_key) continue;
@@ -545,6 +566,44 @@ namespace warcraft3::lua_engine::message {
 			uint32_t lua_ref = is_press ? ev.press_lua_ref : ev.release_lua_ref;
 			if (lua_ref == 0) continue;
 			safe_call_ref(L, lua_ref, 0, jass::TYPE_BOOLEAN);
+		}
+
+		// The bridge-facing D3D events use the real renderer hit-test registered
+		// by newD3d9.dll, then schedule the supplied JASS code on the event's
+		// retained timer. Timer handle ids and hashtable slots match builtin-japi.
+		for (auto& kv : g_d3d_texture_events)
+		{
+			const d3d_texture_event_entry& ev = kv.second;
+			if (ev.keycode != wark_key) continue;
+
+			uint32_t texture_arg = ev.texture_id;
+			uint32_t inside = 0;
+			if (!bridge::invoke_cpp_handler(
+					"GetMouseInTexture", &texture_arg, 1, &inside) || !inside) {
+				continue;
+			}
+
+			uint32_t code = is_press ? ev.press_code : ev.release_code;
+			if (!code) continue;
+
+			uint32_t ht = bridge::get_ht_handle();
+			if (!ht) continue;
+			uint32_t timer = is_press ? ev.press_timer : ev.release_timer;
+			uint32_t parent = (uint32_t)jass::call("GetHandleId", timer);
+			if (!parent) continue;
+			jass::call("SaveInteger", ht, parent, 0x0FF, ev.texture_id);
+			jass::call("SaveInteger", ht, parent, 0x100, (uint32_t)wark_key);
+			jass::call("SaveInteger", ht, parent, 0x101, is_press ? 1u : 0u);
+			jass::call("SaveInteger", ht, parent, 0x0FE, ev.event_id);
+
+			jass::func_value const* timer_start = jass::jass_func("TimerStart");
+			if (!timer_start) continue;
+			jass::call_param param(4);
+			param.push<uintptr_t>(0, timer);
+			param.push_real(1, jass::to_real(0.0f));
+			param.push<bool>(2, false);
+			param.push<uintptr_t>(3, code);
+			timer_start->call(param);
 		}
 	}
 
@@ -751,13 +810,17 @@ namespace warcraft3::lua_engine::message {
 				lua_pushvalue(L, 3);
 				lua_setfield(L, LUA_REGISTRYINDEX, "_JASS_MESSAGE_HANDLE");
 				ML = get_mainthread(L);
+				g_lua_message_hook_registered = true;
 				install();
 			}
 			else if (lua_isnil(L, 3))
 			{
-				uninstall();
 				lua_pushnil(L);
 				lua_setfield(L, LUA_REGISTRYINDEX, "_JASS_MESSAGE_HANDLE");
+				g_lua_message_hook_registered = false;
+				if (g_texture_events.empty() && g_d3d_texture_events.empty()) {
+					uninstall();
+				}
 			}
 			return 0;
 		}
@@ -1036,6 +1099,8 @@ namespace warcraft3::lua_engine::message {
 		}
 
 		g_texture_events[ev_id] = ev;
+		ML = get_mainthread(L);
+		install();
 		lua_pushinteger(L, ev_id);
 		return 1;
 	}
@@ -1209,6 +1274,87 @@ namespace warcraft3::lua_engine::message {
 		return 0;
 	}
 
+	// Custom native used by builtin-japi's GetFuncAddr(code) wrapper. The map
+	// declares SetHeroLevels as (C)V, then reads the raw code value from slot 0.
+	// Registering it as a real JASS native keeps the original wrapper usable.
+	static void __cdecl SetHeroLevels_capture(jass::jcode_t code)
+	{
+		uint32_t ht = bridge::get_ht_handle();
+		uint32_t key = bridge::get_ht_key();
+		if (!ht || !key) return;
+		__try {
+			jass::call("SaveInteger", ht, key, 0, code);
+		} __except(EXCEPTION_EXECUTE_HANDLER) {
+			japi_log::sync_write("[D3D event] SetHeroLevels code capture failed");
+		}
+	}
+
+	static uint32_t TextureAddEvent_handler(const uint32_t* a, size_t nargs)
+	{
+		if (nargs < 4 || !a[0] || (!a[2] && !a[3])) return 0;
+
+		uint32_t status = 0;
+		if (!bridge::invoke_cpp_handler("GetD3DStatus", nullptr, 0, &status) ||
+			(status & 0x02u) == 0) {
+			return 0;
+		}
+
+		uint32_t press_timer = 0;
+		uint32_t release_timer = 0;
+		uint32_t event_id = 0;
+		press_timer = (uint32_t)jass::call("CreateTimer");
+		release_timer = (uint32_t)jass::call("CreateTimer");
+		if (press_timer) event_id = (uint32_t)jass::call("GetHandleId", press_timer);
+		if (!press_timer || !release_timer || !event_id) {
+			if (press_timer) jass::call("DestroyTimer", press_timer);
+			if (release_timer) jass::call("DestroyTimer", release_timer);
+			return 0;
+		}
+
+		jass::handle_ref(press_timer);
+		jass::handle_ref(release_timer);
+		d3d_texture_event_entry ev = {};
+		ev.event_id = event_id;
+		ev.press_timer = press_timer;
+		ev.release_timer = release_timer;
+		ev.texture_id = a[0];
+		ev.keycode = (int)a[1];
+		ev.press_code = a[2];
+		ev.release_code = a[3];
+		g_d3d_texture_events[event_id] = ev;
+
+		ML = lua_loader::getMainL();
+		install();
+		return event_id;
+	}
+
+	static uint32_t TextureRemoveEvent_handler(const uint32_t* a, size_t nargs)
+	{
+		if (nargs < 2) return 0;
+		auto it = g_d3d_texture_events.find(a[1]);
+		if (it == g_d3d_texture_events.end() || it->second.texture_id != a[0]) {
+			return 0;
+		}
+
+		uint32_t press_timer = it->second.press_timer;
+		uint32_t release_timer = it->second.release_timer;
+		g_d3d_texture_events.erase(it);
+		jass::call("DestroyTimer", press_timer);
+		jass::call("DestroyTimer", release_timer);
+		jass::handle_unref(press_timer);
+		jass::handle_unref(release_timer);
+		if (!g_lua_message_hook_registered && g_texture_events.empty() &&
+			g_d3d_texture_events.empty()) {
+			uninstall();
+		}
+		return 0;
+	}
+
+	static uint32_t GetTextureEventCount_handler(const uint32_t*, size_t)
+	{
+		return (uint32_t)g_d3d_texture_events.size();
+	}
+
 	void register_bridge_natives()
 	{
 		static bool done = false;
@@ -1228,6 +1374,13 @@ namespace warcraft3::lua_engine::message {
 		reg("LocalTargetOrder",    "(IHwidget;I)V",LocalTargetOrder_handler);
 		reg("GetTargetObject",     "()Hunit;",     GetTargetObject_handler);
 		reg("SetUnitAbilityButtonShow", "(IIB)V",  SetUnitAbilityButtonShow_handler);
+		reg("TextureAddEvent",     "(IIII)I",      TextureAddEvent_handler);
+		reg("TextureRemoveEvent",  "(II)V",        TextureRemoveEvent_handler);
+		reg("GetTextureEventCount", "()I",         GetTextureEventCount_handler);
+
+		// Required by the original JASS GetFuncAddr wrapper used to obtain the
+		// two code parameters passed to TextureAddEvent.
+		jass::japi_add((uintptr_t)SetHeroLevels_capture, "SetHeroLevels", "(C)V");
 	}
 
 	int open(lua_State* L)
