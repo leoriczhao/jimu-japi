@@ -99,7 +99,8 @@ map-inject/
 │   └── w3x2lni/                # 地图格式转换
 │
 ├── reference/
-│   ├── base.w3m                # 基座地图（干净的 war3map.j + initializePlugin）
+│   ├── empty-map/              # 默认空白测试地图源（64×64、无预放对象）
+│   ├── base.w3m                # 本地旧基座地图（gitignored）
 │   ├── vanilla_map/            # 基座地图的 unpacked 源文件
 │   ├── builtin-japi/           # 内置 JAPI 逆向（wenhao_plugin）
 │   │   ├── wenhao_plugin逆向分析报告.html  # 完整逆向报告（DLL 结构、模块、内存布局）
@@ -183,11 +184,11 @@ cd src
 
 ```powershell
 # 打包地图（合并 Lua + 注入 DLL + patch war3map.j 插入 LoadScript 调用）
-.\tools\pack.ps1 -BaseMap reference\base.w3m
+.\tools\pack.ps1
 # 输出：build/output.w3x
 
 # 打包 + 部署到 War3 + 启动 + 等待测试结果
-.\tools\deploy.ps1 -BaseMap reference\base.w3m
+.\tools\deploy.ps1
 
 # 详细工作流参见 AGENT.md
 ```

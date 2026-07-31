@@ -7,6 +7,7 @@ local runtime = require "jass.runtime"
 local japi    = require "jass.japi"
 local hook    = require "jass.hook"
 local util    = require "lib.util"
+local scene   = require "lib.scene"
 local test_ex = require "tests.test_ex"
 local test_d3d = require "tests.test_d3d"
 
@@ -502,6 +503,11 @@ end)
 -- ============================================================
 -- Summary
 local function finish()
+    local scene_ok, scene_err = pcall(scene.reset)
+    if not scene_ok then
+        fail = fail + 1
+        print("  [FAIL] restore empty rifleman scene : " .. tostring(scene_err))
+    end
     print("")
     print("========================================")
     local total = pass + fail

@@ -10,6 +10,18 @@ local runtime = require "jass.runtime"
 local japi    = require "jass.japi"
 local hook    = require "jass.hook"
 local util    = require "lib.util"
+local scene   = require "lib.scene"
+
+-- Establish a deterministic empty scene after JASS main() has completed:
+-- flat map, no melee base, and exactly one rifleman.
+local scene_timer = jass.CreateTimer()
+jass.TimerStart(scene_timer, 0.0, false, function()
+    jass.DestroyTimer(scene_timer)
+    local ok, err = pcall(scene.reset)
+    if not ok then
+        print("[japi-lua] scene initialization failed: " .. tostring(err))
+    end
+end)
 
 -- Start the DAP debugger via runtime config (VS Code: attach to 127.0.0.1:4278).
 -- Requires the map packed with -WithDebugger; failure is non-fatal.

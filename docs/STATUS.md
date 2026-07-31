@@ -9,6 +9,7 @@
 - LocalPoint 交互回归：`109 passed, 0 failed, 109 total`（真实前台 Q 键，2026-07-30）
 - UI 交互回归：`110 passed, 0 failed, 110 total`（真实鼠标悬停 + 命令卡显隐，2026-07-30）
 - D3D 实机回归：`120 passed, 0 failed, 120 total`（proxy、真实渲染、鼠标命中、JASS code 按下/弹起回调，2026-07-31）
+- 默认测试场景：64×64 平坦空图，无基地、野怪、树木或预放物件；最终仅保留 1 个火枪手（普通与 D3D 实机验收，2026-07-31）
 - 验收入口：先运行 `src\build.bat`，再按第 4 节选择普通或交互模式
 
 ## 1. 总览
@@ -21,6 +22,7 @@
 | Lua DAP 调试器 | P0-P5 完成 | attach、断点、单步、栈、变量、求值实测 | 可用，需 `-WithDebugger` |
 | 非 D3D bridge native | 67/67 注册 | 普通 108/108 + 两套真实交互回归 | 已实现并验收 |
 | D3D proxy、字体/文字/贴图/键盘事件 | proxy、注册、部署、诊断和 code 回调链已完成 | 普通 108/108 + D3D 120/120 + 真实视觉/鼠标/Shift 交互 | 可用；其余兼容项见缺口 |
+| 空白测试场景 | 64×64 空图 + 单火枪手确定性复位 | 普通 108/108 + D3D 120/120 + 真实窗口检查 | 可用；默认基座 |
 | JASS wrapper 自动生成（E4） | 未实现 | 无 | 可选后续 |
 | SaveFunc / func_bind | 仅 `open_code_run_logs` stub | 无完整验收 | 未完成/可选 |
 
@@ -31,8 +33,9 @@
 - callback exploit 从地图 MPQ 提取并加载 `yd_japi.dll`。
 - `UnitId` + hashtable RPC 完成 JASS/Lua bridge 分发。
 - Lua VM 惰性创建并从 MPQ 加载合并后的 `script\war3map.lua`。
-- `pack.ps1` 完成 Lua 合并、DLL/debugger 资源注入与地图重打包。
+- `pack.ps1` 默认使用可提交的 `reference/empty-map/` 源地图，也支持显式传入 `.w3m` / `.w3x` 或其他源目录；完成 Lua 合并、DLL/debugger 资源注入与地图重打包。
 - `deploy.ps1` 部署并启动真实 War3，按本次进程的新日志等待 `Results:`。
+- `lib.scene` 在初始化与测试结束时清空单位并创建唯一的无敌火枪手，防止测试夹具污染最终视觉画面。
 
 ### 2.2 Lua 模块（11/11）
 
@@ -80,6 +83,7 @@
 | D3D proxy 加载/注册/部署 | PE 导出包含未修饰的 `Direct3DCreate9`、`InitializeD3DAPI`，且 proxy 不导入自身 `d3d9.dll`；`yd_japi` 在进程内完成 handler 注册；部署以 sidecar SHA-256 保护未知文件；实测状态位达到 `0x7F` | **完成** |
 | D3D 字体/文字/贴图与命中 | 字体和文字属性、JASS string ABI、贴图尺寸/像素尺寸、trigger 开关均通过；真实 War3 窗口显示标题和高对比棋盘，鼠标移入/移出命中正确 | **完成** |
 | D3D `TextureAddEvent` / `TextureRemoveEvent` | `SetHeroLevels(C)V` 捕获 code；事件保留独立按下/弹起 JASS timer；回调中 `GetExpiredTimer()` 对应父键的 `0xFE–0x101` 上下文全部命中；真实鼠标位于贴图内时按下/弹起 Shift，并在回调内移除事件；套件为 `120/0/120` | **键盘事件完成** |
+| 默认空白地图 | `reference/empty-map/` 的对象层为 0 个 doodad、0 个预放单位（仅保留起始点）；无 Melee 初始化；真实窗口确认无基地/野怪/树木，中央仅 1 个火枪手；普通 `108/108`、D3D `120/120` | **完成并设为默认** |
 | D3D 后续兼容项 | 鼠标按钮码及“进入/离开”事件语义、MPQ 内 BLP 解码、`rect` handle 裁剪尚未完成 | **未完成** |
 
 ## 4. 验证入口
@@ -87,13 +91,13 @@
 普通实机回归（无人值守，当前结果为 108/108）：
 
 ```powershell
-.\tools\deploy.ps1 -BaseMap .\reference\base.w3m
+.\tools\deploy.ps1
 ```
 
 LocalPoint 真实交互回归（War3 获得前台焦点后按 Q；默认保留一小时等待手测）：
 
 ```powershell
-.\tools\deploy.ps1 -BaseMap .\reference\base.w3m -InteractivePoint
+.\tools\deploy.ps1 -InteractivePoint
 ```
 
 交互模式的成功条件不只是 hook 被调用或 submit 返回 `true`，还要求测试大法师实际触发
@@ -103,7 +107,7 @@ LocalPoint 真实交互回归（War3 获得前台焦点后按 Q；默认保留�
 隐藏保持 10 秒后自动恢复）：
 
 ```powershell
-.\tools\deploy.ps1 -BaseMap .\reference\base.w3m -InteractiveUi
+.\tools\deploy.ps1 -InteractiveUi
 ```
 
 成功条件是 `GetTargetObject` 返回值与城镇大厅 handle 精确相等，并且 `AHbz` 在命令卡中
@@ -112,13 +116,14 @@ LocalPoint 真实交互回归（War3 获得前台焦点后按 Q；默认保留�
 D3D proxy 实机回归（鼠标移入棋盘后按一次 Shift，再移到棋盘外；`-NoKill` 保留最终画面供检查）：
 
 ```powershell
-.\tools\deploy.ps1 -BaseMap .\reference\base.w3m -InteractiveD3D -NoKill
+.\tools\deploy.ps1 -InteractiveD3D -NoKill
 ```
 
 成功条件是进程内状态位覆盖加载、注册、真实 DLL、wrapper、device、帧和贴图（`0x7F`），
 字体/文字/贴图属性测试通过，Shift 的按下/弹起 JASS 回调上下文和事件移除通过，真实窗口的标题依次进入
 `VISUAL PASS`、`HOVER PASS`、`EVENT PASS` 和 `VISUAL + HOVER + EVENT PASS`。当前结果为 120/120。由于目标 War3 以提权进程运行，非提权部署进程
-无法读取模块列表；该限制不作为成功证据，加载结论由进程内状态、API 往返和真实渲染共同确认。
+无法读取模块列表；该限制不作为成功证据，加载结论由进程内状态、API 往返和真实渲染共同确认。最终窗口同时应显示
+平坦空场和唯一的火枪手，不应出现基地、野怪、树木或测试夹具残留。
 
 ## 5. 下一阶段顺序
 

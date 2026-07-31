@@ -2,9 +2,9 @@
 # Pack map: bundle Lua sources + inject DLL + patch war3map.j + repack into .w3x
 #
 # Usage:
-#   .\tools\pack.ps1                                    # all defaults
+#   .\tools\pack.ps1                                    # empty-map base
 #   .\tools\pack.ps1 -DllPath "path\to\yd_japi.dll"    # custom DLL
-#   .\tools\pack.ps1 -BaseMap "other.w3m"               # custom base map
+#   .\tools\pack.ps1 -BaseMap "other.w3m"               # custom map/archive/source dir
 #   .\tools\pack.ps1 -OutFile "out\test.w3x"            # custom output
 param(
     [string]$DllPath  = "",
@@ -24,7 +24,7 @@ $Script  = "$W3x2Lni\script"
 
 # Defaults
 if (-not $DllPath)  { $DllPath  = "$Root\src\build\bin\Release\yd_japi.dll" }
-if (-not $BaseMap)  { throw "BaseMap is required. Provide a base .w3m/.w3x map via -BaseMap parameter." }
+if (-not $BaseMap)  { $BaseMap = "$Root\reference\empty-map" }
 if (-not $OutFile)  { $OutFile  = "$Root\build\output.w3x" }
 if (-not $MapDir)   { $MapDir   = "$Root\map" }
 $CbSrc   = "$Root\tools\callback"
@@ -41,7 +41,7 @@ $OutFile = Resolve-Abs $OutFile
 $MapDir  = Resolve-Abs $MapDir
 
 # Validate
-if (-not (Test-Path $BaseMap)) { throw "Base map not found: $BaseMap" }
+if (-not (Test-Path $BaseMap)) { throw "Base map or source directory not found: $BaseMap" }
 if (-not (Test-Path $DllPath)) { throw "DLL not found: $DllPath`n  Build first: src\build.bat" }
 if (-not (Test-Path $Lua))     { throw "w3x2lni not found: $Lua" }
 if (-not (Test-Path $CbSrc))   { throw "callback not found: $CbSrc" }
@@ -152,11 +152,16 @@ function Bundle-Lua {
 
 # ── Main pipeline ───────────────────────────────────────────────
 
-# 1. Clean and unpack base map
+# 1. Clean and import base map
 if (Test-Path $WorkDir) { Remove-Item $WorkDir -Recurse -Force -ErrorAction SilentlyContinue }
 New-Item -ItemType Directory $WorkDir -Force | Out-Null
-Write-Host '  [1/5] Unpack base map'
-Use-W3x2Lni 'unpack' $BaseMap $WorkDir
+if ((Get-Item -LiteralPath $BaseMap).PSIsContainer) {
+    Write-Host '  [1/5] Copy base-map source directory'
+    Get-ChildItem -LiteralPath $BaseMap -Force | Copy-Item -Destination $WorkDir -Recurse -Force
+} else {
+    Write-Host '  [1/5] Unpack base map'
+    Use-W3x2Lni 'unpack' $BaseMap $WorkDir
+}
 
 $JFile = "$WorkDir\war3map.j"
 if (-not (Test-Path $JFile)) {
@@ -178,7 +183,12 @@ call initializePlugin(  )
     call SaveStr(japi_ht, japi__key, 0, "()V")
     call UnitId("LoadScript")
 "@
-$jContent = $jContent.Replace($old, $new)
+if ($jContent -notmatch [regex]::Escape('call UnitId("LoadScript")')) {
+    if ($jContent -notmatch [regex]::Escape($old)) {
+        throw "initializePlugin() call not found in base map war3map.j: $BaseMap"
+    }
+    $jContent = $jContent.Replace($old, $new)
+}
 Set-Content $JFile $jContent -Encoding ASCII -NoNewline
 
 # 4. Inject DLL and callback

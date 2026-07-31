@@ -64,7 +64,7 @@ cd src
 编写 Lua 脚本 → 打包进地图。
 
 ```powershell
-.\tools\pack.ps1 -BaseMap reference\base.w3m
+.\tools\pack.ps1
 # 输出：build/output.w3x
 ```
 
@@ -79,9 +79,9 @@ cd src
 
 **pack.ps1 流程**：
 
-1. 解包基座地图 → `build/work/`
+1. 复制默认 `reference/empty-map/` 源地图，或解包显式传入的 `.w3m` / `.w3x` → `build/work/`
 2. 合并 `map/` 下 Lua → `build/work/war3map.lua`（UTF-8 无 BOM；`__modcache` 模块缓存）
-3. **patch `build/work/war3map.j`**：在 `call initializePlugin(  )` 后插入 `SaveStr(...,"()V") + UnitId("LoadScript")`（找不到锚点会静默跳过，换基座图时注意）
+3. **patch `build/work/war3map.j`**：在 `call initializePlugin(  )` 后插入 `SaveStr(...,"()V") + UnitId("LoadScript")`（找不到锚点会立即报错）
 4. 复制 DLL → `build/work/japi.tga`，复制 callback，复制 `war3map.lua` → `script\war3map.lua`，更新 `(listfile)`
 5. 重新打包为 `build/output.w3x`
 
@@ -115,7 +115,7 @@ runtime.debugger = 4278   -- 启动 DAP 监听（需 -WithDebugger 打包）
 ## 工作流 3：部署测试
 
 ```powershell
-.\tools\deploy.ps1 -BaseMap reference\base.w3m
+.\tools\deploy.ps1
 # 打包 + 部署到 War3 + 启动 + 等待测试结果（判定依据：japi_debug.txt 出现 "Results:" 行）
 ```
 
@@ -128,7 +128,7 @@ runtime.debugger = 4278   -- 启动 DAP 监听（需 -WithDebugger 打包）
 ```powershell
 # 1. 编辑 map/war3map.lua
 # 2. 打包 + 测试
-.\tools\deploy.ps1 -BaseMap reference\base.w3m
+.\tools\deploy.ps1
 ```
 
 ### 场景 B：改 C++ DLL
@@ -138,7 +138,7 @@ runtime.debugger = 4278   -- 启动 DAP 监听（需 -WithDebugger 打包）
 # 2. 编译 DLL
 cd src; .\build.bat; cd ..
 # 3. 打包 + 测试
-.\tools\deploy.ps1 -BaseMap reference\base.w3m
+.\tools\deploy.ps1
 ```
 
 ---
@@ -155,7 +155,7 @@ cd src; .\build.bat; cd ..
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `-BaseMap` | **必填** | 基座地图（如 `reference\base.w3m`），不传则报错 |
+| `-BaseMap` | `reference\empty-map` | 基座地图文件或 unpacked 源目录 |
 | `-DllPath` | `src\build\bin\Release\yd_japi.dll` | DLL 路径 |
 | `-OutFile` | `build\output.w3x` | 输出路径 |
 | `-MapDir` | `map` | Lua 源码目录 |
@@ -164,7 +164,7 @@ cd src; .\build.bat; cd ..
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `-BaseMap` | **必填**（透传给 pack.ps1） | 基座地图 |
+| `-BaseMap` | `reference\empty-map`（由 pack.ps1 采用） | 可覆盖的基座地图文件或源目录 |
 | `-DllPath` | 同 pack.ps1 | DLL 路径 |
 | `-LogFile` | `C:\ProgramData\japi_debug.txt` | 结果判定日志 |
 | `-Timeout` | 120 | 超时秒数（超时只 WARNING，不以非零退出） |
