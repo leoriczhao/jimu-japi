@@ -13,6 +13,7 @@
 #include <windows.h>
 #include "CDirect3D9.h"
 #include "api.h"
+#include "status.h"
 
 // ── Real d3d9.dll loading ─────────────────────────────────────
 
@@ -29,15 +30,13 @@ static bool load_real_d3d9()
     strcat_s(sysDir, "\\d3d9.dll");
 
     g_hRealD3D9 = LoadLibraryA(sysDir);
-    if (!g_hRealD3D9) {
-        // Fallback: try loading from current directory
-        g_hRealD3D9 = LoadLibraryA("d3d9.dll");
-    }
     if (!g_hRealD3D9) return false;
 
     g_pfnDirect3DCreate9 = (IDirect3D9 * (WINAPI *)(UINT))
         GetProcAddress(g_hRealD3D9, "Direct3DCreate9");
-    return g_pfnDirect3DCreate9 != nullptr;
+    if (!g_pfnDirect3DCreate9) return false;
+    d3d9_status::set(d3d9_status::REAL_D3D9_LOADED);
+    return true;
 }
 
 // ── Exported functions ────────────────────────────────────────
@@ -56,6 +55,7 @@ IDirect3D9* WINAPI Direct3DCreate9(UINT SDKVersion)
 
     // Wrap with our proxy
     CDirect3D9* pProxy = new CDirect3D9(pD3D);
+    d3d9_status::set(d3d9_status::D3D9_WRAPPED);
     return pProxy;
 }
 
@@ -65,13 +65,16 @@ IDirect3D9* WINAPI Direct3DCreate9(UINT SDKVersion)
 //   from_string — jass::from_string function pointer (for string arg conversion)
 extern "C" __declspec(dllexport) void __cdecl InitializeD3DAPI(
     d3d9_api::register_handler_fn reg_fn,
-    const char* (*from_string)(uint32_t))
+    d3d9_api::from_string_fn from_string,
+    d3d9_api::create_string_fn create_string)
 {
     // Set up the string conversion function
     d3d9_api::set_from_string_fn(from_string);
+    d3d9_api::set_create_string_fn(create_string);
 
     // Register all d3d API handlers with the bridge dispatch
     d3d9_api::register_all_handlers(reg_fn);
+    d3d9_status::set(d3d9_status::API_REGISTERED);
 }
 
 // ── DLL entry point ───────────────────────────────────────────
@@ -82,6 +85,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
     {
     case DLL_PROCESS_ATTACH:
         DisableThreadLibraryCalls(hModule);
+        d3d9_status::set(d3d9_status::PROXY_LOADED);
         break;
     case DLL_PROCESS_DETACH:
         if (g_hRealD3D9) {

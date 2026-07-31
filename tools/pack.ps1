@@ -13,6 +13,7 @@ param(
     [string]$MapDir   = "",
     [switch]$InteractivePoint,
     [switch]$InteractiveUi,
+    [switch]$InteractiveD3D,
     [switch]$WithDebugger
 )
 
@@ -136,6 +137,9 @@ function Bundle-Lua {
     }
     if ($InteractiveUi) {
         $bundled = "_G.__JAPI_TEST_INTERACTIVE_UI = true`r`n" + $bundled
+    }
+    if ($InteractiveD3D) {
+        $bundled = "_G.__JAPI_TEST_INTERACTIVE_D3D = true`r`n" + $bundled
     }
 
     # Write UTF-8 without BOM (luaL_loadbuffer cannot skip a BOM, and ASCII

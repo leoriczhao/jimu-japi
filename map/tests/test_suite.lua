@@ -8,6 +8,7 @@ local japi    = require "jass.japi"
 local hook    = require "jass.hook"
 local util    = require "lib.util"
 local test_ex = require "tests.test_ex"
+local test_d3d = require "tests.test_d3d"
 
 -- Handle-level agnostic helpers (works with integer or userdata)
 local function handle_val(h)
@@ -516,6 +517,18 @@ local function finish()
     end
 end
 
+local function run_d3d_then_finish()
+    if type(test_d3d) == "table" and type(test_d3d.run) == "function" then
+        test_d3d.run(function(dp, df)
+            pass = pass + dp
+            fail = fail + df
+            finish()
+        end)
+    else
+        finish()
+    end
+end
+
 -- ============================================================
 -- 9. EX* natives fixture tests (tests.test_ex)
 -- Local-order assertions are asynchronous, so the final Results line is
@@ -525,10 +538,10 @@ if type(test_ex) == "table" and type(test_ex.run) == "function" then
     test_ex.run(function(ep, ef)
         pass = pass + ep
         fail = fail + ef
-        finish()
+        run_d3d_then_finish()
     end)
 else
-    finish()
+    run_d3d_then_finish()
 end
 end  -- run()
 

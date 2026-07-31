@@ -6,12 +6,14 @@
 
 #include "CDirect3DDevice9.h"
 #include "renderer.h"
+#include "status.h"
 
 CDirect3DDevice9::CDirect3DDevice9(IDirect3DDevice9* pOriginal)
     : m_pDevice(pOriginal)
     , m_ref(1)
 {
     d3d9_renderer::on_device_created(m_pDevice);
+    d3d9_status::set(d3d9_status::DEVICE_WRAPPED);
 }
 
 CDirect3DDevice9::~CDirect3DDevice9()

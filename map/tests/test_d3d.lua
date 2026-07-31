@@ -1,0 +1,159 @@
+-- D3D9 proxy visual and interaction fixture.
+-- Loaded in every bundle, but only run when pack.ps1 sets
+-- _G.__JAPI_TEST_INTERACTIVE_D3D.
+local jass = require "jass.common"
+local globals = require "jass.globals"
+
+local pass, fail = 0, 0
+
+local function test(name, fn)
+    local ok, err = pcall(fn)
+    if ok then
+        pass = pass + 1
+        print(string.format("  [PASS] %s", name))
+    else
+        fail = fail + 1
+        print(string.format("  [FAIL] %s : %s", name, tostring(err)))
+    end
+end
+
+local HT, KEY
+local function rpc_ready()
+    if HT then return true end
+    HT = globals.japi_ht
+    KEY = globals.japi__key
+    return HT ~= nil and KEY ~= nil
+end
+
+local function save_slot(slot, value)
+    local kind = type(value)
+    if kind == "number" then
+        if math.type(value) == "integer" then
+            jass.SaveInteger(HT, KEY, slot, value)
+        else
+            jass.SaveReal(HT, KEY, slot, value)
+        end
+    elseif kind == "string" then
+        jass.SaveStr(HT, KEY, slot, value)
+    elseif kind == "boolean" then
+        jass.SaveBoolean(HT, KEY, slot, value)
+    else
+        error("unsupported D3D RPC arg type " .. kind)
+    end
+end
+
+local function call(name, spec, ...)
+    assert(rpc_ready(), "japi hashtable globals not available")
+    for i, value in ipairs({...}) do
+        save_slot(i, value)
+    end
+    jass.SaveStr(HT, KEY, 0, spec)
+    jass.UnitId(name)
+    local ret = spec:match("%)(%a)")
+    if ret == "I" or ret == "H" then
+        return jass.LoadInteger(HT, KEY, 0)
+    elseif ret == "R" then
+        return jass.LoadReal(HT, KEY, 0)
+    elseif ret == "S" then
+        return jass.LoadStr(HT, KEY, 0)
+    elseif ret == "B" then
+        return jass.LoadBoolean(HT, KEY, 0)
+    end
+end
+
+local function run(done)
+    if not _G.__JAPI_TEST_INTERACTIVE_D3D then
+        done(0, 0)
+        return
+    end
+
+    print("\n-- D3D9 proxy visual fixture --")
+    local font, text, texture
+
+    test("D3D proxy registered, device wrapped, frame rendered", function()
+        local status = call("GetD3DStatus", "()I") or 0
+        assert((status & 0x3F) == 0x3F,
+            string.format("expected status bits 0x3F, got 0x%02X", status))
+    end)
+
+    test("D3D window dimensions available", function()
+        local width = call("GetWindowWidth", "()I")
+        local height = call("GetWindowHeight", "()I")
+        assert(width and width >= 640, "window width=" .. tostring(width))
+        assert(height and height >= 480, "window height=" .. tostring(height))
+    end)
+
+    test("D3D font properties and string ABI round-trip", function()
+        font = call("CreateFont", "()I")
+        assert(font and font ~= 0, "CreateFont returned 0")
+        call("SetFontHeight", "(II)V", font, 34)
+        call("SetFontWeight", "(II)V", font, 700)
+        call("SetFontItalic", "(IB)V", font, false)
+        call("SetFontFaceName", "(IS)V", font, "Arial")
+        assert(call("GetFontHeight", "(I)I", font) == 34)
+        assert(call("GetFontWeight", "(I)I", font) == 700)
+        assert(call("GetFontFaceName", "(I)S", font) == "Arial")
+    end)
+
+    test("D3D text object visible-state round-trip", function()
+        text = call("CreateText", "(ISRRRI)I", font,
+            "JAPI D3D VISUAL PASS - move cursor into checkerboard",
+            72.0, 72.0, -1.0, -256)
+        assert(text and text ~= 0, "CreateText returned 0")
+        assert(call("GetTextString", "(I)S", text):match("VISUAL PASS"))
+        assert(math.abs(call("GetTextX", "(I)R", text) - 72.0) < 0.01)
+        assert(math.abs(call("GetTextY", "(I)R", text) - 72.0) < 0.01)
+        assert(call("GetTextColor", "(I)I", text) == -256)
+    end)
+
+    test("D3D texture loads and exposes dimensions", function()
+        texture = call("CreateTexture", "(SRRRRII)I",
+            "japi_d3d_visual_probe.bmp", 72.0, 136.0, 256.0, 192.0, -1, 9000)
+        assert(texture and texture ~= 0, "CreateTexture returned 0")
+        assert(math.abs(call("GetTextureWidth", "(I)R", texture) - 256.0) < 0.01)
+        assert(math.abs(call("GetTextureHeight", "(I)R", texture) - 192.0) < 0.01)
+        assert(math.abs(call("GetTexturePixelWidth", "(I)R", texture) - 128.0) < 0.01,
+            "pixel width=" .. tostring(call("GetTexturePixelWidth", "(I)R", texture)))
+        assert(math.abs(call("GetTexturePixelHeight", "(I)R", texture) - 128.0) < 0.01,
+            "pixel height=" .. tostring(call("GetTexturePixelHeight", "(I)R", texture)))
+        local status = call("GetD3DStatus", "()I") or 0
+        assert((status & 0x40) == 0x40,
+            string.format("texture status bit missing: 0x%02X", status))
+    end)
+
+    test("D3D texture trigger switch gates hit-test", function()
+        call("SetTextureTrigger", "(IB)V", texture, false)
+        assert(call("GetMouseInTexture", "(I)B", texture) == false)
+        call("SetTextureTrigger", "(IB)V", texture, true)
+    end)
+
+    if not text or text == 0 or not texture or texture == 0 then
+        done(pass, fail)
+        return
+    end
+
+    print("  [WAIT] move the real cursor into the checkerboard, then move it out")
+    local entered = false
+    local timer = jass.CreateTimer()
+    jass.TimerStart(timer, 0.05, true, function()
+        local inside = call("GetMouseInTexture", "(I)B", texture)
+        if inside and not entered then
+            entered = true
+            call("SetTextString", "(IS)V", text,
+                "JAPI D3D HOVER PASS - now move cursor outside")
+            call("SetTextColor", "(II)V", text, -16711936)
+            print("  [D3D] cursor entered texture")
+        elseif entered and not inside then
+            pass = pass + 1
+            print("  [PASS] D3D real cursor enter/leave hit-test")
+            call("SetTextString", "(IS)V", text,
+                "JAPI D3D VISUAL + HOVER PASS")
+            call("SetTextColor", "(II)V", text, -16711936)
+            jass.PauseTimer(timer)
+            jass.DestroyTimer(timer)
+            done(pass, fail)
+        end
+    end)
+end
+
+return { run = run }

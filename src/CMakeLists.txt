@@ -157,6 +157,8 @@ set(D3D9_SOURCES
     src/d3d9/CDirect3DDevice9.cpp
     src/d3d9/renderer.cpp
     src/d3d9/api.cpp
+    src/d3d9/status.cpp
+    src/d3d9/newD3d9.def
 )
 
 add_library(newD3d9 SHARED ${D3D9_SOURCES})
@@ -172,10 +174,8 @@ target_compile_definitions(newD3d9 PRIVATE
     _CRT_SECURE_NO_WARNINGS
 )
 
-# Link against d3d9.lib only (D3DX9 loaded dynamically via LoadLibrary)
-target_link_libraries(newD3d9 PRIVATE
-    d3d9
-)
+# The real Direct3DCreate9 entry is resolved from the absolute system DLL path.
+# Do not import d3d9.dll here: this target is the proxy named d3d9.dll at deploy time.
 
 if(MSVC)
     target_compile_options(newD3d9 PRIVATE /W3 /EHsc)

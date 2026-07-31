@@ -8,8 +8,10 @@
 #   .\tools\deploy.ps1 -NoKill                          # leave War3 running after tests
 #   .\tools\deploy.ps1 -InteractivePoint                # require a real Q key for LocalPointOrder
 #   .\tools\deploy.ps1 -InteractiveUi                   # verify hover target and ability button UI
+#   .\tools\deploy.ps1 -InteractiveD3D                  # deploy proxy + run visual D3D probe
 param(
     [string]$DllPath = "",
+    [string]$D3DProxyPath = "",
     [string]$BaseMap = "",
     [string]$LogFile = "",
     [string]$MapName = "",
@@ -17,6 +19,7 @@ param(
     [switch]$NoKill,
     [switch]$InteractivePoint,
     [switch]$InteractiveUi,
+    [switch]$InteractiveD3D,
     [switch]$WithDebugger
 )
 
@@ -26,9 +29,11 @@ $War3Exe  = "$War3Dir\war3.exe"
 $TestMap  = if ($MapName) { "Maps\Test\$MapName" } else { "Maps\Test\output.w3x" }
 $PackScript = "$PSScriptRoot\pack.ps1"
 $OutFile  = "$Root\build\output.w3x"
+$D3DTarget = "$War3Dir\d3d9.dll"
+$D3DProbeTarget = "$War3Dir\japi_d3d_visual_probe.bmp"
 
 if (-not $LogFile) { $LogFile = "C:\ProgramData\japi_debug.txt" }
-if (($InteractivePoint -or $InteractiveUi) -and -not $PSBoundParameters.ContainsKey("Timeout")) {
+if (($InteractivePoint -or $InteractiveUi -or $InteractiveD3D) -and -not $PSBoundParameters.ContainsKey("Timeout")) {
     $Timeout = 3660
 }
 
@@ -38,9 +43,81 @@ if ($DllPath) {
         $DllPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PWD.Path, $DllPath))
     }
 }
+if (-not $D3DProxyPath) {
+    $D3DProxyPath = "$Root\src\build\bin\Release\newD3d9.dll"
+} elseif (-not [System.IO.Path]::IsPathRooted($D3DProxyPath)) {
+    $D3DProxyPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PWD.Path, $D3DProxyPath))
+}
 
 # Validate
 if (-not (Test-Path $War3Exe)) { throw "War3 not found: $War3Exe" }
+if ($InteractiveD3D -and -not (Test-Path $D3DProxyPath)) {
+    throw "D3D proxy not found: $D3DProxyPath`n  Build first: src\build.bat"
+}
+
+function Assert-D3DProxyContract {
+    param([string]$Path)
+    $objdump = Get-Command objdump.exe -ErrorAction SilentlyContinue
+    if (-not $objdump) { throw "objdump.exe is required to validate the D3D proxy exports" }
+    $pe = (& $objdump.Source -p $Path 2>&1) -join "`n"
+    if ($pe -notmatch "Direct3DCreate9" -or $pe -notmatch "InitializeD3DAPI") {
+        throw "D3D proxy is missing Direct3DCreate9 or InitializeD3DAPI export: $Path"
+    }
+    if ($pe -match "DLL Name:\s*d3d9\.dll") {
+        throw "D3D proxy imports d3d9.dll and may recurse: $Path"
+    }
+}
+
+function New-D3DProbeBmp {
+    param([string]$Path)
+    $width = 128
+    $height = 128
+    $stride = $width * 3
+    $pixelBytes = $stride * $height
+    $bytes = New-Object byte[] (54 + $pixelBytes)
+    $bytes[0] = [byte][char]'B'; $bytes[1] = [byte][char]'M'
+    [BitConverter]::GetBytes([int]$bytes.Length).CopyTo($bytes, 2)
+    [BitConverter]::GetBytes([int]54).CopyTo($bytes, 10)
+    [BitConverter]::GetBytes([int]40).CopyTo($bytes, 14)
+    [BitConverter]::GetBytes([int]$width).CopyTo($bytes, 18)
+    [BitConverter]::GetBytes([int]$height).CopyTo($bytes, 22)
+    [BitConverter]::GetBytes([int16]1).CopyTo($bytes, 26)
+    [BitConverter]::GetBytes([int16]24).CopyTo($bytes, 28)
+    [BitConverter]::GetBytes([int]$pixelBytes).CopyTo($bytes, 34)
+    for ($y = 0; $y -lt $height; $y++) {
+        for ($x = 0; $x -lt $width; $x++) {
+            $border = $x -lt 4 -or $y -lt 4 -or $x -ge ($width - 4) -or $y -ge ($height - 4)
+            $even = (([int]($x / 16) + [int]($y / 16)) % 2) -eq 0
+            if ($border) { $r = 255; $g = 255; $b = 0 }
+            elseif ($even) { $r = 255; $g = 0; $b = 255 }
+            else { $r = 0; $g = 255; $b = 255 }
+            $offset = 54 + $y * $stride + $x * 3
+            $bytes[$offset] = $b; $bytes[$offset + 1] = $g; $bytes[$offset + 2] = $r
+        }
+    }
+    $dir = Split-Path -Parent $Path
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory $dir -Force | Out-Null }
+    [System.IO.File]::WriteAllBytes($Path, $bytes)
+}
+
+function Install-OwnedArtifact {
+    param([string]$Source, [string]$Destination, [string]$Sidecar, [string]$Label)
+    $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Source).Hash
+    if (Test-Path -LiteralPath $Destination) {
+        $targetHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Destination).Hash
+        if ($targetHash -ne $sourceHash) {
+            $ownedHash = if (Test-Path -LiteralPath $Sidecar) {
+                (Get-Content -LiteralPath $Sidecar -Raw -ErrorAction SilentlyContinue).Trim()
+            } else { "" }
+            if ($ownedHash -ne $targetHash) {
+                throw "${Label} collision: refusing to overwrite unknown file $Destination`n  source=$sourceHash`n  target=$targetHash"
+            }
+        }
+    }
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop
+    Set-Content -LiteralPath $Sidecar -Value $sourceHash -Encoding Ascii -NoNewline
+    Write-Host "  ${Label}: $Destination ($sourceHash)"
+}
 
 # ── Step 1: Pack ────────────────────────────────────────────────
 Write-Host "[1/4] Packing map..."
@@ -49,6 +126,7 @@ if ($DllPath) { $packArgs["DllPath"] = $DllPath }
 if ($BaseMap) { $packArgs["BaseMap"] = $BaseMap }
 if ($InteractivePoint) { $packArgs["InteractivePoint"] = $true }
 if ($InteractiveUi) { $packArgs["InteractiveUi"] = $true }
+if ($InteractiveD3D) { $packArgs["InteractiveD3D"] = $true }
 if ($WithDebugger) { $packArgs["WithDebugger"] = $true }
 $packResult = & $PackScript @packArgs 2>&1
 if ($LASTEXITCODE -ne 0) {
@@ -65,6 +143,17 @@ if (-not (Test-Path $destDir)) { New-Item -ItemType Directory $destDir -Force | 
 Copy-Item $OutFile $destMap -Force -ErrorAction Stop
 Write-Host "  Deployed to $destMap"
 
+if ($InteractiveD3D) {
+    Assert-D3DProxyContract $D3DProxyPath
+    $probeSource = "$Root\build\d3d\japi_d3d_visual_probe.bmp"
+    New-D3DProbeBmp $probeSource
+    Install-OwnedArtifact $D3DProxyPath $D3DTarget "$War3Dir\.japi_d3d_proxy.sha256" "D3D proxy"
+    Install-OwnedArtifact $probeSource $D3DProbeTarget "$War3Dir\.japi_d3d_probe.sha256" "D3D visual probe"
+    if (-not (Test-Path "$War3Dir\D3DX9_42.dll")) {
+        throw "D3DX9_42.dll is required for the visual texture probe: $War3Dir\D3DX9_42.dll"
+    }
+}
+
 # ── Step 3: Launch War3 ────────────────────────────────────────
 Write-Host "[3/4] Launching War3..."
 Remove-Item $LogFile -Force -ErrorAction SilentlyContinue
@@ -72,12 +161,33 @@ $stalePrimary = Test-Path $LogFile
 if ($stalePrimary) {
     Write-Host "  NOTE: $LogFile is locked by a stale instance; per-pid log will be used by the DLL."
 }
-$war3 = Start-Process -FilePath $War3Exe -ArgumentList "-window", "-loadfile", "$TestMap" -PassThru
+$war3 = Start-Process -FilePath $War3Exe -WorkingDirectory $War3Dir -ArgumentList "-window", "-loadfile", "$TestMap" -PassThru
 $launchTime = Get-Date
 $altLogFile = "C:\ProgramData\japi_debug_$($war3.Id).txt"
 # Watch both, but ONLY match a "Results:" line in a file whose mtime is after
 # launch — a stale log can contain an old Results line and must never match.
 $logCandidates = @($altLogFile, $LogFile)
+
+if ($InteractiveD3D) {
+    $proxyLoaded = $false
+    for ($i = 0; $i -lt 40 -and -not $war3.HasExited; $i++) {
+        try {
+            $proxyModule = (Get-Process -Id $war3.Id -ErrorAction Stop).Modules |
+                Where-Object { $_.ModuleName -ieq "d3d9.dll" -and $_.FileName -ieq $D3DTarget } |
+                Select-Object -First 1
+            if ($proxyModule) { $proxyLoaded = $true; break }
+        } catch {}
+        Start-Sleep -Milliseconds 250
+    }
+    if (-not $proxyLoaded) {
+        if ($war3.HasExited) {
+            throw "War3 exited before D3D proxy verification: $D3DTarget"
+        }
+        Write-Host "  WARNING: module enumeration could not prove the proxy path; GetD3DStatus will provide the in-process proof"
+    } else {
+        Write-Host "  Verified loaded module: $D3DTarget"
+    }
+}
 
 # ── Step 4: Wait for results ───────────────────────────────────
 Write-Host "[4/4] Waiting for test results (${Timeout}s timeout)..."

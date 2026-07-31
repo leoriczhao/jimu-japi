@@ -6,6 +6,7 @@
 // All rendering happens in on_end_scene(), called from the hooked EndScene().
 
 #include "renderer.h"
+#include "status.h"
 #include <d3d9.h>
 #include <algorithm>
 #include <cmath>
@@ -98,7 +99,8 @@ static IDirect3DTexture9* load_texture(IDirect3DDevice9* dev, const char* path)
         IDirect3DDevice9*, const char*, IDirect3DTexture9**) = nullptr;
 
     if (!hD3DX9) {
-        hD3DX9 = LoadLibraryA("d3dx9_43.dll");
+        hD3DX9 = LoadLibraryA("d3dx9_42.dll");
+        if (!hD3DX9) hD3DX9 = LoadLibraryA("d3dx9_43.dll");
         if (!hD3DX9) hD3DX9 = LoadLibraryA("d3dx9_33.dll");
         if (hD3DX9) {
             pfnD3DXCreateTextureFromFileA = (decltype(pfnD3DXCreateTextureFromFileA))
@@ -130,6 +132,7 @@ static void reload_texture(TextureObj& obj)
                 obj.pixelWidth = (int)desc.Width;
                 obj.pixelHeight = (int)desc.Height;
             }
+            d3d9_status::set(d3d9_status::TEXTURE_LOADED);
         }
     }
 }
@@ -366,6 +369,7 @@ static void render_fps(IDirect3DDevice9* dev)
 
 void on_end_scene(IDirect3DDevice9* pDevice)
 {
+    d3d9_status::set(d3d9_status::FRAME_RENDERED);
     // Update delta time
     DWORD now = GetTickCount();
     if (g_last_tick == 0) g_last_tick = now;
@@ -733,6 +737,20 @@ void set_texture_trigger(texture_handle_t h, bool value)
 {
     auto it = g_textures.find(h);
     if (it != g_textures.end()) it->second.triggerEnabled = value;
+}
+
+bool get_mouse_in_texture(texture_handle_t h)
+{
+    auto it = g_textures.find(h);
+    if (it == g_textures.end()) return false;
+
+    const TextureObj& obj = it->second;
+    if (!obj.visible || !obj.triggerEnabled || !obj.texture) return false;
+
+    const float mx = get_mouse_vector_x();
+    const float my = get_mouse_vector_y();
+    return mx >= obj.x && mx < obj.x + obj.width &&
+           my >= obj.y && my < obj.y + obj.height;
 }
 
 void get_texture_src_rect(texture_handle_t h, float* left, float* top, float* right, float* bottom)

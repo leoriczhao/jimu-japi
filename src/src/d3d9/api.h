@@ -27,4 +27,8 @@ namespace d3d9_api {
     typedef const char* (*from_string_fn)(uint32_t);
     void set_from_string_fn(from_string_fn fn);
 
+    // Convert a C string to the native string id expected by bridge_dispatch.
+    typedef uint32_t (*create_string_fn)(const char*);
+    void set_create_string_fn(create_string_fn fn);
+
 }  // namespace d3d9_api

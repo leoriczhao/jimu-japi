@@ -129,6 +129,7 @@ float            get_texture_pixel_height(texture_handle_t h);
 void             set_texture(texture_handle_t h, const char* path);
 void             set_texture_show(texture_handle_t h, bool value);
 void             set_texture_trigger(texture_handle_t h, bool value);
+bool             get_mouse_in_texture(texture_handle_t h);
 
 // Source rect (texture cropping)
 // Returns: left, top, right, bottom via output params

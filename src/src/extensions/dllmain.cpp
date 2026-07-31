@@ -42,6 +42,39 @@ namespace warcraft3::lua_engine::bridge {
 
 static bool g_initialized = false;
 
+static bool initialize_d3d_api()
+{
+    HMODULE d3d = GetModuleHandleA("d3d9.dll");
+    if (!d3d) {
+        japi_log::sync_write("D3D: d3d9.dll is not loaded; D3D handlers unavailable");
+        return false;
+    }
+
+    typedef void (__cdecl *initialize_d3d_fn)(
+        void (*)(const char*, const char*, warcraft3::lua_engine::bridge::cpp_handler_fn),
+        const char* (*)(uint32_t),
+        uint32_t (*)(const char*));
+
+    auto init = reinterpret_cast<initialize_d3d_fn>(
+        GetProcAddress(d3d, "InitializeD3DAPI"));
+    if (!init) {
+        japi_log::sync_write("D3D: loaded d3d9.dll is not the project proxy; D3D handlers unavailable");
+        return false;
+    }
+
+    init(
+        &warcraft3::lua_engine::bridge::register_cpp_handler,
+        &warcraft3::jass::from_string,
+        &warcraft3::jass::create_string);
+
+    char module_path[MAX_PATH] = {0};
+    GetModuleFileNameA(d3d, module_path, MAX_PATH);
+    char buf[MAX_PATH + 64];
+    snprintf(buf, sizeof(buf), "D3D: InitializeD3DAPI DONE (%s)", module_path);
+    japi_log::sync_write(buf);
+    return true;
+}
+
 // HookUnitId — exported for completeness but not called from war3map.j anymore.
 extern "C" __declspec(dllexport) uint32_t __cdecl HookUnitId()
 {
@@ -147,6 +180,10 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
     warcraft3::japi::initialize_ex_natives();
     warcraft3::lua_engine::message::register_bridge_natives();
     SYNC_LOG("Step 2: initialize_ex_natives + message bridge natives DONE");
+
+    // The proxy must already be loaded as d3d9.dll before the process creates
+    // its render device. Registration is optional so non-D3D maps still work.
+    initialize_d3d_api();
 
     // Step 3: Register bridge handlers + flush natives
     warcraft3::lua_engine::bridge::register_cpp_handler(

@@ -9,6 +9,7 @@
 
 #include "api.h"
 #include "renderer.h"
+#include "status.h"
 #include <cstring>
 #include <cstdio>
 
@@ -32,6 +33,8 @@
 namespace {
     typedef const char* (*from_string_fn)(uint32_t);
     from_string_fn g_from_string = nullptr;
+    typedef uint32_t (*create_string_fn)(const char*);
+    create_string_fn g_create_string = nullptr;
 
     // Helper to read a string from a uint32_t arg (jstring_t)
     const char* arg_to_string(uint32_t val) {
@@ -39,6 +42,10 @@ namespace {
             return g_from_string(val);
         }
         return "";
+    }
+
+    uint32_t string_to_result(const char* val) {
+        return g_create_string ? g_create_string(val ? val : "") : 0;
     }
 
     // Helper to reinterpret uint32_t as float
@@ -106,16 +113,11 @@ static uint32_t h_SetFontItalic(const uint32_t* args, size_t nargs) {
 }
 
 static uint32_t h_GetFontFaceName(const uint32_t* args, size_t nargs) {
-    // Returns a string — we need to store it and return a pointer.
-    // The bridge dispatch expects a const char* for 'S' return type.
-    // We store in a static buffer and return the pointer.
-    static char buf[256];
     if (nargs >= 1) {
         const char* name = d3d9_renderer::get_font_facename((d3d9_renderer::font_handle_t)args[0]);
-        strncpy(buf, name ? name : "", 255);
-        buf[255] = '\0';
+        return string_to_result(name);
     }
-    return (uint32_t)(uintptr_t)buf;
+    return string_to_result("");
 }
 
 static uint32_t h_SetFontFaceName(const uint32_t* args, size_t nargs) {
@@ -143,13 +145,11 @@ static uint32_t h_CreateText(const uint32_t* args, size_t nargs) {
 }
 
 static uint32_t h_GetTextString(const uint32_t* args, size_t nargs) {
-    static char buf[4096];
     if (nargs >= 1) {
         const char* s = d3d9_renderer::get_text_string((d3d9_renderer::text_handle_t)args[0]);
-        strncpy(buf, s ? s : "", 4095);
-        buf[4095] = '\0';
+        return string_to_result(s);
     }
-    return (uint32_t)(uintptr_t)buf;
+    return string_to_result("");
 }
 
 static uint32_t h_SetTextString(const uint32_t* args, size_t nargs) {
@@ -320,6 +320,14 @@ static uint32_t h_SetTextureTrigger(const uint32_t* args, size_t nargs) {
     return 0;
 }
 
+static uint32_t h_GetMouseInTexture(const uint32_t* args, size_t nargs) {
+    if (nargs >= 1) {
+        return d3d9_renderer::get_mouse_in_texture(
+            (d3d9_renderer::texture_handle_t)args[0]) ? 1u : 0u;
+    }
+    return 0;
+}
+
 static uint32_t h_SetTextureSrcRect(const uint32_t* args, size_t nargs) {
     // Spec: (IHrect;)V — the rect is passed as a handle, we need to extract left/bottom/right/top
     // For now, use simplified 4-float version
@@ -368,6 +376,11 @@ static uint32_t h_ShowFpsText(const uint32_t* args, size_t nargs) {
 static uint32_t h_SetKeyboard(const uint32_t* args, size_t nargs) {
     if (nargs >= 2) d3d9_renderer::set_keyboard((int)args[0], args[1] != 0);
     return 0;
+}
+
+static uint32_t h_GetD3DStatus(const uint32_t* args, size_t nargs) {
+    (void)args; (void)nargs;
+    return d3d9_status::get();
 }
 
 // ── Registration ──────────────────────────────────────────────
@@ -424,7 +437,8 @@ void register_all_handlers(register_handler_fn reg)
     reg("SetTexture",        "(IS)V",    h_SetTexture);
     reg("SetTextureShow",    "(IB)V",    h_SetTextureShow);
     reg("SetTextureTrigger", "(IB)V",    h_SetTextureTrigger);
-    reg("SetTextureSrcRect", "(Iffff)V", h_SetTextureSrcRect);
+    reg("GetMouseInTexture", "(I)B",     h_GetMouseInTexture);
+    reg("SetTextureSrcRect", "(IRRRR)V", h_SetTextureSrcRect);
 
     // Window/mouse/utility
     reg("GetMouseVectorX",   "()R",      h_GetMouseVectorX);
@@ -434,11 +448,16 @@ void register_all_handlers(register_handler_fn reg)
     reg("ShowConsole",       "(B)V",     h_ShowConsole);
     reg("ShowFpsText",       "(B)V",     h_ShowFpsText);
     reg("SetKeyboard",       "(IB)V",    h_SetKeyboard);
+    reg("GetD3DStatus",      "()I",      h_GetD3DStatus);
 }
 
 // Set the jass::from_string function pointer (called from InitializeD3DAPI)
 void set_from_string_fn(from_string_fn fn) {
     g_from_string = fn;
+}
+
+void set_create_string_fn(create_string_fn fn) {
+    g_create_string = fn;
 }
 
 }  // namespace d3d9_api
