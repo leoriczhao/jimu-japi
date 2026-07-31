@@ -503,7 +503,7 @@ end)
 -- ============================================================
 -- Summary
 local function finish()
-    local scene_ok, scene_err = pcall(scene.reset)
+    local scene_ok, scene_err = pcall(scene.reset, true)
     if not scene_ok then
         fail = fail + 1
         print("  [FAIL] restore empty rifleman scene : " .. tostring(scene_err))

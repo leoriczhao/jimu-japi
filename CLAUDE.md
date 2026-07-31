@@ -99,7 +99,7 @@ map-inject/
 │   └── w3x2lni/                # 地图格式转换
 │
 ├── reference/
-│   ├── empty-map/              # 默认空白测试地图源（64×64、无预放对象）
+│   ├── empty-map/              # 默认空白地图源 + Hrif 英雄火枪手对象定义
 │   ├── base.w3m                # 本地旧基座地图（gitignored）
 │   ├── vanilla_map/            # 基座地图的 unpacked 源文件
 │   ├── builtin-japi/           # 内置 JAPI 逆向（wenhao_plugin）

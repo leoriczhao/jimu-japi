@@ -163,6 +163,24 @@ if ((Get-Item -LiteralPath $BaseMap).PSIsContainer) {
     Use-W3x2Lni 'unpack' $BaseMap $WorkDir
 }
 
+# Compile source-controlled LNI object definitions into the binary object
+# files consumed by Warcraft III. The temporary archive round-trip lets the
+# repository keep editable .ini data instead of committing generated .w3u.
+$UnitObjectIni = "$WorkDir\war3map.w3u.ini"
+if (Test-Path -LiteralPath $UnitObjectIni) {
+    Write-Host '  [1b] Compile unit object data'
+    $ObjectMap = "$Root\build\work-object.w3x"
+    $ObjectDir = "$Root\build\work-object"
+    if (Test-Path -LiteralPath $ObjectMap) { Remove-Item -LiteralPath $ObjectMap -Force }
+    if (Test-Path -LiteralPath $ObjectDir) { Remove-Item -LiteralPath $ObjectDir -Recurse -Force }
+    Use-W3x2Lni 'obj' $WorkDir $ObjectMap
+    New-Item -ItemType Directory $ObjectDir -Force | Out-Null
+    Use-W3x2Lni 'unpack' $ObjectMap $ObjectDir
+    Remove-Item -LiteralPath $WorkDir -Recurse -Force
+    Move-Item -LiteralPath $ObjectDir -Destination $WorkDir
+    Remove-Item -LiteralPath $ObjectMap -Force
+}
+
 $JFile = "$WorkDir\war3map.j"
 if (-not (Test-Path $JFile)) {
     Set-Content $JFile "// empty war3map.j`r`n" -Encoding Ascii

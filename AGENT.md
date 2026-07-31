@@ -80,10 +80,11 @@ cd src
 **pack.ps1 流程**：
 
 1. 复制默认 `reference/empty-map/` 源地图，或解包显式传入的 `.w3m` / `.w3x` → `build/work/`
-2. 合并 `map/` 下 Lua → `build/work/war3map.lua`（UTF-8 无 BOM；`__modcache` 模块缓存）
-3. **patch `build/work/war3map.j`**：在 `call initializePlugin(  )` 后插入 `SaveStr(...,"()V") + UnitId("LoadScript")`（找不到锚点会立即报错）
-4. 复制 DLL → `build/work/japi.tga`，复制 callback，复制 `war3map.lua` → `script\war3map.lua`，更新 `(listfile)`
-5. 重新打包为 `build/output.w3x`
+2. 若存在 `war3map.w3u.ini`，先生成 Warcraft III 使用的 `war3map.w3u` 对象数据
+3. 合并 `map/` 下 Lua → `build/work/war3map.lua`（UTF-8 无 BOM；`__modcache` 模块缓存）
+4. **patch `build/work/war3map.j`**：在 `call initializePlugin(  )` 后插入 `SaveStr(...,"()V") + UnitId("LoadScript")`（找不到锚点会立即报错）
+5. 复制 DLL → `build/work/japi.tga`，复制 callback，复制 `war3map.lua` → `script\war3map.lua`，更新 `(listfile)`
+6. 重新打包为 `build/output.w3x`
 
 **Lua 侧注册 JAPI 函数**：
 
