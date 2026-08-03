@@ -6,6 +6,7 @@
 // All rendering happens in on_end_scene(), called from the hooked EndScene().
 
 #include "renderer.h"
+#include "resource_manager.h"
 #include "status.h"
 #include <d3d9.h>
 #include <algorithm>
@@ -22,10 +23,6 @@ namespace d3d9_renderer {
 // ── State ─────────────────────────────────────────────────────
 
 static IDirect3DDevice9* g_device = nullptr;
-
-static uint32_t g_next_font_handle    = 1;
-static uint32_t g_next_text_handle    = 1;
-static uint32_t g_next_texture_handle = 1;
 
 static std::map<font_handle_t, FontObj>      g_fonts;
 static std::map<text_handle_t, TextObj>      g_texts;
@@ -391,6 +388,7 @@ void on_end_scene(IDirect3DDevice9* pDevice)
         if (obj.remaining > 0.0f) {
             obj.remaining -= g_last_dt;
             if (obj.remaining <= 0.0f) {
+                d3d9_resources::release(it->first, d3d9_resources::ResourceType::Text);
                 it = g_texts.erase(it);
                 continue;
             }
@@ -415,22 +413,80 @@ void on_end_scene(IDirect3DDevice9* pDevice)
     }
 }
 
+void on_device_destroyed()
+{
+    on_device_lost();
+    g_device = nullptr;
+}
+
+uint32_t begin_session()
+{
+    return d3d9_resources::begin_session();
+}
+
+bool end_session(uint32_t session)
+{
+    if (session == 0 || session != d3d9_resources::active_session()) return false;
+
+    for (auto& [h, obj] : g_textures) {
+        if (obj.texture) {
+            obj.texture->Release();
+            obj.texture = nullptr;
+        }
+    }
+    for (auto& [h, font] : g_fonts) {
+        font.destroy();
+    }
+    g_textures.clear();
+    g_texts.clear();
+    g_fonts.clear();
+
+    g_last_dt = 0.0f;
+    g_last_tick = GetTickCount();
+    g_show_fps = false;
+    g_fps_frames = 0;
+    g_fps_time = 0.0f;
+    g_fps_value = 0.0f;
+    return d3d9_resources::invalidate_session(session);
+}
+
+bool is_device_ready()
+{
+    return g_device != nullptr;
+}
+
+d3d9_resources::ResourceCounts resource_counts()
+{
+    return d3d9_resources::counts();
+}
+
 // ── Font API ──────────────────────────────────────────────────
 
 font_handle_t create_font()
 {
-    font_handle_t h = g_next_font_handle++;
+    font_handle_t h = d3d9_resources::allocate(d3d9_resources::ResourceType::Font);
+    if (!h) return 0;
     g_fonts[h] = FontObj();
     return h;
 }
 
 void destroy_font(font_handle_t h)
 {
+    if (font_in_use(h)) return;
     auto it = g_fonts.find(h);
     if (it != g_fonts.end()) {
         it->second.destroy();
         g_fonts.erase(it);
+        d3d9_resources::release(h, d3d9_resources::ResourceType::Font);
     }
+}
+
+bool font_in_use(font_handle_t h)
+{
+    for (const auto& [text_handle, text] : g_texts) {
+        if (text.font == h) return true;
+    }
+    return false;
 }
 
 int get_font_height(font_handle_t h)
@@ -513,7 +569,9 @@ void set_font_facename(font_handle_t h, const char* value)
 
 text_handle_t create_text(font_handle_t font, const char* str, float x, float y, float time, uint32_t color)
 {
-    text_handle_t h = g_next_text_handle++;
+    if (!d3d9_resources::validate(font, d3d9_resources::ResourceType::Font)) return 0;
+    text_handle_t h = d3d9_resources::allocate(d3d9_resources::ResourceType::Text);
+    if (!h) return 0;
     TextObj& obj = g_texts[h];
     obj.text = str ? str : "";
     obj.x = x;
@@ -527,7 +585,9 @@ text_handle_t create_text(font_handle_t font, const char* str, float x, float y,
 
 void destroy_text(text_handle_t h)
 {
-    g_texts.erase(h);
+    if (g_texts.erase(h) != 0) {
+        d3d9_resources::release(h, d3d9_resources::ResourceType::Text);
+    }
 }
 
 static char g_text_buf[4096];
@@ -603,7 +663,8 @@ void set_text_color(text_handle_t h, uint32_t value)
 
 texture_handle_t create_texture(const char* path, float x, float y, float width, float height, uint32_t color, int level)
 {
-    texture_handle_t h = g_next_texture_handle++;
+    texture_handle_t h = d3d9_resources::allocate(d3d9_resources::ResourceType::Texture);
+    if (!h) return 0;
     TextureObj& obj = g_textures[h];
     obj.path = path ? path : "";
     obj.x = x;
@@ -630,6 +691,7 @@ void destroy_texture(texture_handle_t h)
             it->second.texture->Release();
         }
         g_textures.erase(it);
+        d3d9_resources::release(h, d3d9_resources::ResourceType::Texture);
     }
 }
 

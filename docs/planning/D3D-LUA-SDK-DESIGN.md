@@ -618,14 +618,19 @@ hash 均为 <code>CD3896606FE2F20861F34A1406457972F982D2A72ED8F4B9173606F4FCCF10
 | 阶段 | 内容 | 阶段完成条件 |
 |---|---|---|
 | P0（完成） | 审计阻断项：54-name manifest、禁止注册覆盖、WARK 键码、SrcRect 兼容、state-block 提交与干净产物溯源、卸载/会话清理合同 | manifest/注册/WARK/SrcRect/state-block、SUPPLY provenance 与真实游戏目录 DEPLOY 卸载/重装均已通过；STATUS 仍只写底层链路基本跑通 |
-| P1（进行中） | 版本化 C ABI、session、generation ResourceManager | ABI/handle/session 单元测试通过 |
-| P2 | <code>jass.d3d</code> userdata 与 Font/Text/Texture 基础 API | 用户无需 RPC 即可创建、修改、销毁 |
+| P1（完成） | 版本化 C ABI、session、generation ResourceManager | ABI/handle/session 原生合同及 1000 轮资源计数归零通过；自动地图结束钩子仍属于 P5 |
+| P2（下一步） | <code>jass.d3d</code> userdata 与 Font/Text/Texture 基础 API | 用户无需 RPC 即可创建、修改、销毁 |
 | P3 | 统一 render queue、D3DXFont、asset URI/MPQ/BLP | 地图内资源可发布使用，文字 alpha 与跨类型 z 正确 |
 | P4 | Subscription 与统一输入事件 | 键盘、鼠标、enter/leave/click 全部走真实 Texture |
 | P5 | GC、TTL、session close、device lost/reset、错误诊断 | 生命周期矩阵和压力测试通过 |
 | P6 | 安装/验证/卸载、迁移、API 文档、最终实机验收 | 第 15 节全部通过并记录证据 |
 
 阶段不能跨越完成门槛。例如 P2 的对象能显示，不代表 P5 生命周期完成。
+
+P1 实际导出为 <code>GetD3DSdkApi</code> ABI v1。当前 capability 只声明 session、type/generation handle、
+资源计数和 legacy bridge 共用 registry；Font/Text/Texture 的创建/销毁、Font 依赖、last-error 与显式
+session 批量清理均通过 <code>d3d_sdk_contract_test.exe</code>，并完成 1000 轮三类资源创建/销毁后计数归零。
+该结果不包含 Lua userdata、属性全表、GC、事件或真实地图结束钩子，不能作为 P2/P5 或用户 SDK 完成证据。
 
 ## 15. 验收标准
 

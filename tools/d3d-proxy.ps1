@@ -82,8 +82,10 @@ function Assert-D3DProxyContract([string]$Path) {
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to inspect D3D proxy: $Path"
     }
-    if ($pe -notmatch '\bDirect3DCreate9\b' -or $pe -notmatch '\bInitializeD3DAPI\b') {
-        throw "D3D proxy is missing Direct3DCreate9 or InitializeD3DAPI: $Path"
+    if ($pe -notmatch '\bDirect3DCreate9\b' -or
+        $pe -notmatch '\bInitializeD3DAPI\b' -or
+        $pe -notmatch '\bGetD3DSdkApi\b') {
+        throw "D3D proxy is missing Direct3DCreate9, InitializeD3DAPI, or GetD3DSdkApi: $Path"
     }
     if ($pe -match 'DLL Name:\s*d3d9\.dll') {
         throw "D3D proxy imports d3d9.dll and may recurse: $Path"

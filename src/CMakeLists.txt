@@ -156,6 +156,8 @@ set(D3D9_SOURCES
     src/d3d9/CDirect3D9.cpp
     src/d3d9/CDirect3DDevice9.cpp
     src/d3d9/renderer.cpp
+    src/d3d9/resource_manager.cpp
+    src/d3d9/sdk_api.cpp
     src/d3d9/api.cpp
     src/d3d9/status.cpp
     src/d3d9/newD3d9.def
@@ -187,4 +189,17 @@ set_target_properties(newD3d9 PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     PREFIX ""
     SUFFIX ".dll"
+)
+
+# Native ABI/lifecycle contract harness. It loads the built proxy dynamically,
+# so the test exercises the exported C boundary instead of linking internals.
+add_executable(d3d_sdk_contract_test
+    tests/d3d_sdk_contract_test.cpp
+)
+target_include_directories(d3d_sdk_contract_test PRIVATE
+    "${CMAKE_SOURCE_DIR}/src/d3d9"
+)
+add_dependencies(d3d_sdk_contract_test newD3d9)
+set_target_properties(d3d_sdk_contract_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )

@@ -12,6 +12,7 @@ namespace d3d9_renderer {
     void on_device_created(IDirect3DDevice9* pDevice);
     void on_device_lost();
     void on_device_reset();
+    void on_device_destroyed();
     void on_end_scene(IDirect3DDevice9* pDevice);
 }
 

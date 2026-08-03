@@ -18,7 +18,7 @@ CDirect3DDevice9::CDirect3DDevice9(IDirect3DDevice9* pOriginal)
 
 CDirect3DDevice9::~CDirect3DDevice9()
 {
-    d3d9_renderer::on_device_lost();
+    d3d9_renderer::on_device_destroyed();
     if (m_pDevice) {
         m_pDevice->Release();
         m_pDevice = nullptr;

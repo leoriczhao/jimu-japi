@@ -80,9 +80,9 @@
 - `SetTextureSrcRect` 已恢复 `(IHrect;)V`，新增 `(I)Hrect;` 的 `GetTextureSrcRect`；bridge 按 `SaveRectHandle` / `LoadRectHandle` 的真实 handle ABI 往返，实机测试验证四个边界值。
 
 以上只表示底层 proxy/bridge 可工作。当前没有正式 `jass.d3d` Lua 模块；用户只能复制测试夹具中的
-hashtable + `UnitId` RPC。`jass.message.texture_*` 仍是另一套逻辑命中区域，
-`DestroyText`、session 所有权、generation handle、GC/`__close`、device reset 保持和
-资源计数压力验收均未完成。完整设计与验收标准见
+hashtable + `UnitId` RPC。Proxy 已提供版本化 `GetD3DSdkApi`、显式 session、generation handle 和
+资源计数的 P1 原生基座，但尚未绑定到 Lua VM/地图结束事件。`jass.message.texture_*` 仍是另一套逻辑命中区域，
+`DestroyText` 公共 userdata、GC/`__close`、device reset 保持和自动 session close 均未完成。完整设计与验收标准见
 [D3D-LUA-SDK-DESIGN.md](planning/D3D-LUA-SDK-DESIGN.md)。
 
 ## 3. 重点验收与当前缺口
@@ -99,8 +99,8 @@ hashtable + `UnitId` RPC。`jass.message.texture_*` 仍是另一套逻辑命中�
 | D3D handler 合同与覆盖 | manifest 固化 54 个名字、49 个 proxy owner、5 个 canonical owner；验证器通过；fixture 触达 27/54，未触达 27 个；`121/121` 是累计测试总数 | **结构合同完成，行为覆盖未完成**；未测项不得视为已完成 |
 | D3D P0 兼容性 | D3D 不再注册 5 个 canonical 重名；`ShowConsole` 真实显隐通过；`SetKeyboard` 共用 WARK→VK；SrcRect Hrect getter/setter 实机往返通过 | **本批修复完成**；后续新增实现必须使用明确命名/版本化边界，不依赖覆盖 |
 | D3D 渲染隔离与产物溯源 | 完整 state-block 修复经真实窗口确认并提交为 `8bba4ae`；从 detached clean worktree 构建、实际部署 DLL 与 proxy sidecar 均为 `CD3896606FE2F20861F34A1406457972F982D2A72ED8F4B9173606F4FCCF101C`，普通与 D3D 实机均使用该提交态 DLL 通过 | **本批完成**；主工作区仍保留用户的非 D3D 修改，不影响该 detached commit 的 provenance |
-| D3D 卸载与会话清理 | 独立工具已在隔离目录验证幂等安装/验证/卸载、未知文件保护，并在真实游戏目录完成卸载→再次卸载→未安装验证→普通 108/108→从干净提交产物重装→hash 验证；当前仍无真实地图切换/VM 关闭资源清理钩子 | **部署生命周期完成，会话生命周期未完成**；不能据此宣称 SDK 可用 |
-| D3D Lua SDK | 无 `require "jass.d3d"`、强类型对象、完整销毁、GC/session/device reset、统一事件和 MPQ asset 合同；现有 D3D 测试直接调用内部 RPC | **未完成**；必须通过 [SDK 设计 §15](planning/D3D-LUA-SDK-DESIGN.md#15-验收标准) 的全部稳定验收 ID |
+| D3D 卸载与会话清理 | 独立工具已在隔离目录验证幂等安装/验证/卸载、未知文件保护，并在真实游戏目录完成卸载→再次卸载→未安装验证→普通 108/108→从干净提交产物重装→hash 验证；原生 ABI 的显式 `end_session` 已验证三类资源批量归零和同进程旧 handle 失效，但仍无真实地图切换/VM 关闭钩子 | **部署生命周期与显式 native session 完成，自动会话生命周期未完成**；不能据此宣称 SDK 可用 |
+| D3D Lua SDK | Proxy 已导出 `GetD3DSdkApi` ABI v1，具备 session、type/generation handle、Font 依赖、资源计数/批量清理和 last-error；原生合同含 1000 轮创建/销毁归零验证；仍无 `require "jass.d3d"`、强类型 userdata、GC/`__close`、统一事件和 MPQ asset 合同 | **P1 原生基座完成，用户 SDK 未完成**；必须通过 [SDK 设计 §15](planning/D3D-LUA-SDK-DESIGN.md#15-验收标准) 的全部稳定验收 ID |
 | 默认空白地图 | `reference/empty-map/` 的对象层为 0 个 doodad、0 个预放单位（仅保留起始点）；无 Melee 初始化；`Hrif` 继承英雄类型并在运行时设为 10 级；真实窗口确认中央仅 1 个英雄火枪手；普通 `108/108`、D3D `121/121` | **完成并设为默认** |
 | D3D 后续主线 | 公共 `jass.d3d`、session/generation、资源销毁与 GC、device reset、鼠标按钮/enter/leave/click、MPQ BLP、统一 z-order、卸载和压力验证均纳入 SDK 设计 | **未完成，属于当前主线而非可选项** |
 
@@ -145,10 +145,19 @@ D3D proxy 实机回归（鼠标移入棋盘后按一次 Shift，再移到棋盘�
 无法读取模块列表；该限制不作为成功证据，加载结论由进程内状态、API 往返和真实渲染共同确认。最终窗口同时应显示
 平坦空场和唯一的 10 级英雄火枪手（最终被选中并显示英雄界面），不应出现基地、野怪、树木或测试夹具残留。
 
+P1 原生 ABI/session 合同（不启动 War3）：
+
+```powershell
+.\src\build\bin\Release\d3d_sdk_contract_test.exe
+```
+
+成功条件包括 ABI version/size/capability 协商、错误版本拒绝、session 隔离、三类 type/generation handle、
+Font 依赖、显式 session 批量清理、旧 handle 跨 session 失效、last-error 和 1000 轮生命周期后资源计数归零。
+
 ## 5. 下一阶段顺序
 
-1. 补齐 Lua VM/地图 session 清理入口，并通过同进程新会话验证旧 handle 与旧回调失效。
-2. 按 P1–P6 实现 `jass.d3d`、版本化 C ABI、session/generation resource manager、MPQ asset、统一事件和 device lost/reset/GC 清理；proxy/探针/sidecar 的独立部署生命周期已完成，不再重复实现。
+1. 实现 P2 `jass.d3d` 强类型 userdata 和 Font/Text/Texture 基础属性，不允许用户接触裸 RPC。
+2. 补齐 Lua VM/地图自动 session 清理入口，并通过同进程新会话验证旧 userdata 与旧回调失效；继续实现 MPQ asset、统一事件和 device lost/reset/GC 清理。proxy/探针/sidecar 的独立部署生命周期已完成，不再重复实现。
 3. 只有 SDK 设计 §15 的全部稳定验收 ID 通过后，才能把 D3D 从“底层链路基本跑通”升级为“用户 SDK 可用”。
 4. 之后再评估 JASS wrapper 自动生成和 SaveFunc/func_bind。
 

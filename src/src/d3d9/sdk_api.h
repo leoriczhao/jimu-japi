@@ -1,0 +1,91 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+#if defined(_WIN32)
+#define D3D_SDK_CALL __cdecl
+#else
+#define D3D_SDK_CALL
+#endif
+
+enum D3DSdkResult : uint32_t {
+    D3D_SDK_OK = 0,
+    D3D_SDK_INVALID_ARGUMENT = 1,
+    D3D_SDK_SESSION_ACTIVE = 2,
+    D3D_SDK_NO_ACTIVE_SESSION = 3,
+    D3D_SDK_STALE_SESSION = 4,
+    D3D_SDK_INVALID_HANDLE = 5,
+    D3D_SDK_RESOURCE_IN_USE = 6,
+    D3D_SDK_CAPACITY_EXCEEDED = 7,
+};
+
+enum D3DSdkCapability : uint64_t {
+    D3D_SDK_CAP_SESSION = 1ull << 0,
+    D3D_SDK_CAP_GENERATION_HANDLES = 1ull << 1,
+    D3D_SDK_CAP_RESOURCE_COUNTS = 1ull << 2,
+    D3D_SDK_CAP_SHARED_LEGACY_REGISTRY = 1ull << 3,
+};
+
+enum D3DSdkResourceType : uint32_t {
+    D3D_SDK_RESOURCE_FONT = 1,
+    D3D_SDK_RESOURCE_TEXT = 2,
+    D3D_SDK_RESOURCE_TEXTURE = 3,
+};
+
+#pragma pack(push, 4)
+struct D3DSdkResourceCountsV1 {
+    uint32_t struct_size;
+    uint32_t session_id;
+    uint32_t font_count;
+    uint32_t text_count;
+    uint32_t texture_count;
+    uint32_t device_ready;
+};
+
+struct D3DSdkApiV1 {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t capabilities;
+
+    uint32_t (D3D_SDK_CALL *begin_session)(uint32_t* out_session);
+    uint32_t (D3D_SDK_CALL *end_session)(uint32_t session);
+    uint32_t (D3D_SDK_CALL *get_resource_counts)(
+        uint32_t session, D3DSdkResourceCountsV1* out_counts);
+    uint32_t (D3D_SDK_CALL *is_handle_alive)(
+        uint32_t session, uint32_t resource_type, uint32_t handle,
+        uint32_t* out_alive);
+
+    uint32_t (D3D_SDK_CALL *create_font)(
+        uint32_t session, uint32_t* out_handle);
+    uint32_t (D3D_SDK_CALL *destroy_font)(
+        uint32_t session, uint32_t handle);
+    uint32_t (D3D_SDK_CALL *create_text)(
+        uint32_t session, uint32_t font, const char* text,
+        float x, float y, float ttl, uint32_t color,
+        uint32_t* out_handle);
+    uint32_t (D3D_SDK_CALL *destroy_text)(
+        uint32_t session, uint32_t handle);
+    uint32_t (D3D_SDK_CALL *create_texture)(
+        uint32_t session, const char* path, float x, float y,
+        float width, float height, uint32_t color, int32_t level,
+        uint32_t* out_handle);
+    uint32_t (D3D_SDK_CALL *destroy_texture)(
+        uint32_t session, uint32_t handle);
+
+    uint32_t (D3D_SDK_CALL *copy_last_error)(char* buffer, uint32_t capacity);
+};
+#pragma pack(pop)
+
+constexpr uint32_t D3D_SDK_ABI_VERSION_1 = 1;
+constexpr uint32_t D3D_SDK_RESOURCE_COUNTS_V1_MIN_SIZE =
+    static_cast<uint32_t>(offsetof(D3DSdkResourceCountsV1, device_ready)
+        + sizeof(((D3DSdkResourceCountsV1*)nullptr)->device_ready));
+constexpr uint32_t D3D_SDK_API_V1_MIN_SIZE =
+    static_cast<uint32_t>(offsetof(D3DSdkApiV1, copy_last_error)
+        + sizeof(((D3DSdkApiV1*)nullptr)->copy_last_error));
+
+#ifdef __cplusplus
+extern "C" __declspec(dllexport) bool D3D_SDK_CALL GetD3DSdkApi(
+    uint32_t requested_version, D3DSdkApiV1* out_api);
+#endif

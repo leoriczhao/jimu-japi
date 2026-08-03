@@ -17,6 +17,8 @@
 #include <map>
 #include <cstdint>
 
+#include "resource_manager.h"
+
 namespace d3d9_renderer {
 
 // ── Handle types ──────────────────────────────────────────────
@@ -78,11 +80,19 @@ struct TextureObj {
 void on_device_created(IDirect3DDevice9* pDevice);
 void on_device_lost();
 void on_device_reset();
+void on_device_destroyed();
 void on_end_scene(IDirect3DDevice9* pDevice);
+
+// Session lifecycle shared by the versioned SDK ABI and legacy bridge.
+uint32_t begin_session();
+bool     end_session(uint32_t session);
+bool     is_device_ready();
+d3d9_resources::ResourceCounts resource_counts();
 
 // ── Font API ──────────────────────────────────────────────────
 font_handle_t create_font();
 void          destroy_font(font_handle_t h);
+bool          font_in_use(font_handle_t h);
 int           get_font_height(font_handle_t h);
 void          set_font_height(font_handle_t h, int value);
 int           get_font_width(font_handle_t h);
