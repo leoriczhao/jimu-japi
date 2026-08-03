@@ -1,6 +1,7 @@
 # D3D Lua SDK 与完整生命周期设计
 
-> 状态：P0/P1 已闭环，P2 Font/Text/Texture 公共对象层已实现并实机通过；P3-P6 与完整生命周期待实现。
+> 状态：P0/P1 已闭环，P2 Font/Text/Texture 公共对象层已实现；P3 的统一 render queue、D3DXFont 与文字 alpha
+> 已实机通过，asset URI/MPQ 仍未完成；P4-P6 与完整生命周期待实现。
 >
 > 本文是面向地图作者的 D3D Lua SDK 实现契约和验收标准。底层 proxy 的加载、转发、部署与历史验证仍见
 > [D3D-PROXY-DESIGN.md](D3D-PROXY-DESIGN.md)；项目当前完成度只以
@@ -24,14 +25,15 @@ worktree 构建、部署 DLL 与 sidecar hash 已一致；幂等安装/验证/�
 
 2026-08-03 的 P2 实现新增正式 <code>jass.d3d</code> 模块、Font/Text/Texture 强类型 userdata、基础属性、
 显式幂等销毁、GC/<code>__close</code>、Font 强引用/依赖拒绝和显式 session shutdown。公共 SDK fixture
-不调用 hashtable、<code>UnitId</code> 或手写 spec，实机 7 组通过；与底层 bridge 合计后的完整日志为
-128/128（108 普通 + 6 SDK 功能 + 13 bridge + 1 shutdown），不是 D3D API 数。P3 asset/render queue、
+不调用 hashtable、<code>UnitId</code> 或手写 spec。P3 渲染子项随后将 Text 改为 D3DXFont ARGB 绘制，并将
+Text/Texture 按 <code>z</code> 与创建序放入同一队列。实机公共 SDK 7 组通过；与底层 bridge 合计后的完整日志为
+129/129（108 普通 + 7 SDK 功能 + 13 bridge + 1 shutdown），不是 D3D API 数。P3 asset、
 P4 Subscription、P5 自动地图/VM 生命周期与 device reset、P6 文档/最终验收仍未完成。
 
-当前 P2 用户已经可以只通过 <code>jass.d3d</code> 创建、修改和销毁基础字体、文字或贴图，不再需要复制
-私有 RPC helper。与此同时，
-<code>jass.message.texture_*</code> 又维护一套不参与真实渲染的逻辑矩形。两套入口的对象身份、事件和生命周期
-并不统一，且文字缺少主动销毁入口。这不是可以交付给地图作者的 API。
+当前用户已经可以只通过 <code>jass.d3d</code> 创建、修改和销毁基础字体、文字或贴图，不再需要复制
+私有 RPC helper。与此同时，<code>jass.message.texture_*</code> 又维护一套不参与真实渲染的逻辑矩形；两套入口
+的对象身份、事件和生命周期并不统一，地图内 asset 和自动 session/device 生命周期也未闭环。因此仍不能把
+整个 SDK 标记为可交付。
 
 本阶段的目标不是再增加几个 bridge handler，而是交付一个稳定、可诊断、可清理、可写进用户文档的
 <code>jass.d3d</code> SDK。只有本文第 15 节的所有完成门槛同时满足后，D3D Lua SDK 才能标记为“可用”。
@@ -625,7 +627,7 @@ hash 均为 <code>CD3896606FE2F20861F34A1406457972F982D2A72ED8F4B9173606F4FCCF10
 | P0（完成） | 审计阻断项：54-name manifest、禁止注册覆盖、WARK 键码、SrcRect 兼容、state-block 提交与干净产物溯源、卸载/会话清理合同 | manifest/注册/WARK/SrcRect/state-block、SUPPLY provenance 与真实游戏目录 DEPLOY 卸载/重装均已通过；STATUS 仍只写底层链路基本跑通 |
 | P1（完成） | 版本化 C ABI、session、generation ResourceManager | ABI/handle/session 原生合同及 1000 轮资源计数归零通过；自动地图结束钩子仍属于 P5 |
 | P2（完成） | <code>jass.d3d</code> userdata 与 Font/Text/Texture 基础 API | 用户无需 RPC 即可创建、修改、销毁；公共 7 组实机通过 |
-| P3 | 统一 render queue、D3DXFont、asset URI/MPQ/BLP | 地图内资源可发布使用，文字 alpha 与跨类型 z 正确 |
+| P3（进行中） | 统一 render queue、D3DXFont、asset URI/MPQ/BLP | render queue/D3DXFont/文字 alpha 已实机通过；地图内 asset 与失败合同完成后才结束 P3 |
 | P4 | Subscription 与统一输入事件 | 键盘、鼠标、enter/leave/click 全部走真实 Texture |
 | P5 | GC、TTL、session close、device lost/reset、错误诊断 | 生命周期矩阵和压力测试通过 |
 | P6 | 安装/验证/卸载、迁移、API 文档、最终实机验收 | 第 15 节全部通过并记录证据 |
@@ -636,8 +638,9 @@ P1 实际导出为 <code>GetD3DSdkApi</code> ABI v1。P2 在不改变 v1 最小�
 <code>D3D_SDK_CAP_CORE_PROPERTIES</code> 和基础属性函数表；原生合同覆盖 ABI size/capability、全部基础属性、
 长字符串 buffer-too-small、旋转局部坐标命中、参数范围、Font 依赖、显式 session 清理及 1000 轮归零。
 Lua 层覆盖重复 require 的 session 稳定性、三类 userdata、Font 强引用、幂等销毁、use-after-destroy、GC、
-Font <code>__close</code> 和显式 shutdown。该结果仍不包含 Subscription、asset、统一 render queue、
-TTL/device reset、自动地图/VM 关闭或完整失败路径，不能作为 P3-P6 或用户 SDK 完成证据。
+Font <code>__close</code> 和显式 shutdown。P3 渲染子项还新增 <code>text_alpha</code>、
+<code>unified_render_queue</code> capability 与专用视觉面板。该结果仍不包含 Subscription、asset、
+TTL/device reset、自动地图/VM 关闭或完整失败路径，不能作为完整 P3-P6 或用户 SDK 完成证据。
 
 P1 源码提交 <code>b3f4da8</code> 已从 detached clean worktree 完整构建。clean proxy SHA-256 为
 <code>8D7089B68B9028A05C1DB1DAFB70D95B7974049A707EAF91C358633772225035</code>，clean
@@ -661,6 +664,19 @@ P2 已提供 API-02 的公共边界证据，并完成 API-01 中 Font/Text/Textu
 LIFE-04、LIFE-07 以及 LIFE-09 的显式无事件资源清理已通过；LIFE-02 尚未穷举每个业务方法，LIFE-08 目前只
 实测 Font，LIFE-09/LIFE-12 仍缺自动地图/VM 与同进程新会话。EVENT-04 的旋转几何命中基元已通过，
 但在 P4 Subscription 分发完成前不能把 EVENT-04 标为完整事件验收。
+
+### 14.2 P3 渲染子项验收边界
+
+P3 渲染实现不再使用 GDI backbuffer `DrawText` 绘制 SDK Text。Proxy 动态解析
+`D3DXCreateFontA`，D3DXFont 资源在属性修改时失效重建，并在 device lost/reset 回调中分别执行
+`OnLostDevice` / `OnResetDevice`。Text 与 Texture 共享单一队列，排序键为 `z`、全局创建序；每个
+Texture draw 前重新建立 fixed-function alpha 状态，整个 overlay 仍处于 `D3DSBT_ALL` 捕获/恢复范围。
+
+当前工作区 Win32 Release 构建、ABI/1000 轮合同和 handler 合同均通过；普通回归为 108/108，
+`-InteractiveD3D -NoKill` 为累计 129/129。专用面板的同 z 创建序为 low Text → opaque Texture →
+high Text，真实窗口只显示 high Text；100% 与 50% 文字透明度有明确视觉差异，0% 文字不可见。该证据完成
+LAYER-01 和文字侧 COLOR-01；贴图 alpha 的既有真实渲染仍保留，但 P3 只有在 asset/失败合同完成后才能结束。
+本段暂为工作区构建证据，提交态 SUPPLY-01 provenance 将在本批源码提交后另行补录。
 
 ## 15. 验收标准
 

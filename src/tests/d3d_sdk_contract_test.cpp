@@ -46,8 +46,11 @@ int main()
         | D3D_SDK_CAP_GENERATION_HANDLES
         | D3D_SDK_CAP_RESOURCE_COUNTS
         | D3D_SDK_CAP_SHARED_LEGACY_REGISTRY
-        | D3D_SDK_CAP_CORE_PROPERTIES;
-    CHECK((api.capabilities & required_caps) == required_caps, "required P1 capabilities are missing");
+        | D3D_SDK_CAP_CORE_PROPERTIES
+        | D3D_SDK_CAP_TEXT_ALPHA
+        | D3D_SDK_CAP_UNIFIED_RENDER_QUEUE;
+    CHECK((api.capabilities & required_caps) == required_caps,
+        "required P3 rendering capabilities are missing");
 
     uint32_t session1 = 0;
     CHECK(api.begin_session(&session1) == D3D_SDK_OK && session1 != 0,
@@ -266,6 +269,6 @@ int main()
         "repeat session close did not return a stable result");
 
     FreeLibrary(proxy);
-    std::puts("D3D SDK contract PASS: ABI v1, sessions, generation handles, dependencies, counters, stress=1000");
+    std::puts("D3D SDK contract PASS: ABI v1, sessions, generation handles, dependencies, alpha/z capabilities, counters, stress=1000");
     return 0;
 }

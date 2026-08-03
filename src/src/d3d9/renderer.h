@@ -1,7 +1,7 @@
 // renderer.h — Text and texture rendering system for D3D9 overlay
 //
 // Called from CDirect3DDevice9::EndScene(). Manages:
-//   - Font objects: GDI LOGFONT wrappers
+//   - Font objects: lazily created D3DXFont resources
 //   - Text objects: screen-space text with color and lifetime
 //   - Texture objects: D3D9 textures with position, size, color, rotation, z-order
 //
@@ -19,6 +19,8 @@
 
 #include "resource_manager.h"
 
+struct ID3DXFont;
+
 namespace d3d9_renderer {
 
 // ── Handle types ──────────────────────────────────────────────
@@ -33,11 +35,13 @@ struct FontObj {
     int         weight    = FW_NORMAL;
     bool        italic    = false;
     std::string faceName  = "Arial";
-    HFONT       hFont     = NULL;    // Created lazily, invalidated on change
+    ID3DXFont*  d3dFont   = nullptr; // Created lazily, invalidated on change
 
-    HFONT get_handle();
+    ID3DXFont* get_handle(IDirect3DDevice9* device);
     void  invalidate();
     void  destroy();
+    void  on_device_lost();
+    void  on_device_reset();
 };
 
 // ── Text object ───────────────────────────────────────────────
@@ -50,6 +54,7 @@ struct TextObj {
     font_handle_t font     = 0;
     bool         visible   = true;
     int          level     = 0;
+    uint64_t     creationOrder = 0;
 };
 
 // ── Texture object ────────────────────────────────────────────
@@ -65,6 +70,7 @@ struct TextureObj {
     float                rotation   = 0.0f;        // degrees
     bool                 visible    = true;
     bool                 triggerEnabled = true;
+    uint64_t             creationOrder = 0;
 
     // Source rect for texture cropping (in pixels, 0 = full texture)
     float                srcLeft    = 0.0f;

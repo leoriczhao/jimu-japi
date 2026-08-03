@@ -4,6 +4,7 @@
 local d3d = require "jass.d3d"
 
 local M = {}
+local visual_resources
 
 function M.run(done)
     if not _G.__JAPI_TEST_INTERACTIVE_D3D then
@@ -32,6 +33,7 @@ function M.run(done)
         local caps = d3d.capabilities()
         assert(caps.session and caps.generation_handles)
         assert(caps.resource_counts and caps.core_properties)
+        assert(caps.text_alpha and caps.unified_render_queue)
         local width, height = d3d.window_size()
         assert(width > 0 and height > 0)
         assert(d3d.rgba(0x11, 0x22, 0x33, 0x44) == 0x44112233)
@@ -157,6 +159,72 @@ function M.run(done)
         assert(not texture:contains(10, 10))
     end)
 
+    test("D3D SDK P3 alpha and unified z visual fixture configured", function()
+        visual_resources = {}
+        visual_resources.font = assert(d3d.Font.new {
+            face = "Arial",
+            height = 24,
+            weight = 700,
+        })
+
+        -- One deliberately interleaved same-z stack. Correct stable ordering
+        -- is: low text, opaque cover, high text. The old type-batched renderer
+        -- incorrectly placed both texts above both textures.
+        visual_resources.background = assert(d3d.Texture.new {
+            source = "japi_d3d_visual_probe.bmp",
+            x = 420, y = 136, width = 330, height = 240,
+            color = 0xFF707070, z = 100,
+        })
+        visual_resources.low = assert(d3d.Text.new {
+            font = visual_resources.font,
+            text = "LOW TEXT MUST BE HIDDEN",
+            x = 450, y = 180,
+            color = 0xFFFFFF00, z = 200,
+        })
+        visual_resources.cover = assert(d3d.Texture.new {
+            source = "japi_d3d_visual_probe.bmp",
+            x = 435, y = 165, width = 300, height = 60,
+            color = 0xFF202020, z = 200,
+        })
+        visual_resources.high = assert(d3d.Text.new {
+            font = visual_resources.font,
+            text = "HIGH TEXT MUST BE VISIBLE",
+            x = 450, y = 180,
+            color = 0xFF00FF00, z = 200,
+        })
+        visual_resources.title = assert(d3d.Text.new {
+            font = visual_resources.font,
+            text = "P3 UNIFIED Z + TEXT ALPHA",
+            x = 430, y = 140,
+            color = 0xFFFFFFFF, z = 300,
+        })
+        visual_resources.alpha100 = assert(d3d.Text.new {
+            font = visual_resources.font,
+            text = "ALPHA 100%",
+            x = 450, y = 245,
+            color = 0xFFFFFFFF, z = 300,
+        })
+        visual_resources.alpha50 = assert(d3d.Text.new {
+            font = visual_resources.font,
+            text = "ALPHA 50%",
+            x = 450, y = 280,
+            color = 0x80FFFFFF, z = 300,
+        })
+        visual_resources.alpha0 = assert(d3d.Text.new {
+            font = visual_resources.font,
+            text = "ALPHA 0% MUST BE INVISIBLE",
+            x = 450, y = 315,
+            color = 0x00FFFFFF, z = 300,
+        })
+
+        assert(visual_resources.low:get_z() == 200)
+        assert(visual_resources.cover:get_z() == 200)
+        assert(visual_resources.high:get_z() == 200)
+        assert(visual_resources.alpha100:get_color() == 0xFFFFFFFF)
+        assert(visual_resources.alpha50:get_color() == 0x80FFFFFF)
+        assert(visual_resources.alpha0:get_color() == 0x00FFFFFF)
+    end)
+
     test("D3D SDK explicit destruction and use-after-destroy", function()
         assert(texture:destroy())
         assert(texture:destroy())
@@ -173,6 +241,7 @@ function M.run(done)
     end)
 
     test("D3D SDK GC and __close return counts to baseline", function()
+        local baseline = assert(d3d.stats())
         do
             local gc_font = assert(d3d.Font.new {})
             local gc_text = assert(d3d.Text.new { font = gc_font, text = "gc" })
@@ -201,8 +270,11 @@ function M.run(done)
             assert(weak[1] == nil, "destroyed Text retained its Font uservalue")
         end
         local stats = assert(d3d.stats())
-        assert(stats.fonts == 0 and stats.texts == 0 and stats.textures == 0,
-            string.format("resource leak: f=%d t=%d x=%d",
+        assert(stats.fonts == baseline.fonts
+            and stats.texts == baseline.texts
+            and stats.textures == baseline.textures,
+            string.format("resource leak: before=%d/%d/%d after=%d/%d/%d",
+                baseline.fonts, baseline.texts, baseline.textures,
                 stats.fonts, stats.texts, stats.textures))
     end)
 
@@ -221,6 +293,8 @@ function M.shutdown(done)
             "bridge fixture did not leave mixed resources for batch cleanup")
         assert(d3d.shutdown())
         assert(d3d.shutdown())
+        visual_resources = nil
+        collectgarbage("collect")
         assert(not d3d.is_available())
         local status = d3d.status()
         assert(status.shutdown and status.session_id == 0)

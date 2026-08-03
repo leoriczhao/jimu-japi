@@ -808,6 +808,9 @@ int module_capabilities(lua_State* L)
     set("generation_handles", (g_api.capabilities & D3D_SDK_CAP_GENERATION_HANDLES) != 0);
     set("resource_counts", (g_api.capabilities & D3D_SDK_CAP_RESOURCE_COUNTS) != 0);
     set("core_properties", (g_api.capabilities & D3D_SDK_CAP_CORE_PROPERTIES) != 0);
+    set("text_alpha", (g_api.capabilities & D3D_SDK_CAP_TEXT_ALPHA) != 0);
+    set("unified_render_queue",
+        (g_api.capabilities & D3D_SDK_CAP_UNIFIED_RENDER_QUEUE) != 0);
     return 1;
 }
 

@@ -1,11 +1,12 @@
 // renderer.cpp — Text and texture rendering implementation
 //
-// Text rendering: GDI DrawText on backbuffer surface DC
+// Text rendering: D3DXFont with ARGB alpha blending
 // Texture rendering: DrawPrimitiveUP with transformed textured vertices
 //
 // All rendering happens in on_end_scene(), called from the hooked EndScene().
 
 #include "renderer.h"
+#include "d3dx9_font_abi.h"
 #include "resource_manager.h"
 #include "status.h"
 #include <d3d9.h>
@@ -27,6 +28,13 @@ static IDirect3DDevice9* g_device = nullptr;
 static std::map<font_handle_t, FontObj>      g_fonts;
 static std::map<text_handle_t, TextObj>      g_texts;
 static std::map<texture_handle_t, TextureObj> g_textures;
+static uint64_t g_next_creation_order = 1;
+
+static HMODULE g_d3dx_module = nullptr;
+static bool g_d3dx_load_attempted = false;
+static HRESULT (WINAPI *g_create_texture_from_file)(
+    IDirect3DDevice9*, const char*, IDirect3DTexture9**) = nullptr;
+static D3DXCreateFontA_fn g_create_font = nullptr;
 
 static float g_last_dt = 0.0f;
 static DWORD g_last_tick = 0;
@@ -49,36 +57,71 @@ struct VertexTL {
 
 // ── FontObj implementation ────────────────────────────────────
 
-HFONT FontObj::get_handle()
+static void ensure_d3dx_loaded()
 {
-    if (!hFont) {
-        hFont = CreateFontA(
-            height, width, 0, 0,
-            weight,
-            italic ? TRUE : FALSE,
-            FALSE, FALSE,
-            DEFAULT_CHARSET,
-            OUT_DEFAULT_PRECIS,
-            CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY,
-            DEFAULT_PITCH | FF_DONTCARE,
-            faceName.c_str()
-        );
+    if (g_d3dx_load_attempted) return;
+    g_d3dx_load_attempted = true;
+
+    g_d3dx_module = LoadLibraryA("d3dx9_42.dll");
+    if (!g_d3dx_module) g_d3dx_module = LoadLibraryA("d3dx9_43.dll");
+    if (!g_d3dx_module) g_d3dx_module = LoadLibraryA("d3dx9_33.dll");
+    if (g_d3dx_module) {
+        g_create_texture_from_file =
+            reinterpret_cast<decltype(g_create_texture_from_file)>(
+                GetProcAddress(g_d3dx_module, "D3DXCreateTextureFromFileA"));
+        g_create_font = reinterpret_cast<D3DXCreateFontA_fn>(
+            GetProcAddress(g_d3dx_module, "D3DXCreateFontA"));
     }
-    return hFont;
+}
+
+ID3DXFont* FontObj::get_handle(IDirect3DDevice9* device)
+{
+    if (!d3dFont && device) {
+        ensure_d3dx_loaded();
+        if (g_create_font) {
+            ID3DXFont* created = nullptr;
+            const HRESULT hr = g_create_font(
+                device,
+                height,
+                static_cast<UINT>(width),
+                static_cast<UINT>(weight),
+                1,
+                italic ? TRUE : FALSE,
+                DEFAULT_CHARSET,
+                OUT_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY,
+                DEFAULT_PITCH | FF_DONTCARE,
+                faceName.c_str(),
+                &created);
+            if (SUCCEEDED(hr)) d3dFont = created;
+        }
+    }
+    return d3dFont;
 }
 
 void FontObj::invalidate()
 {
-    if (hFont) {
-        DeleteObject(hFont);
-        hFont = NULL;
+    if (d3dFont) {
+        d3dFont->lpVtbl->Release(d3dFont);
+        d3dFont = nullptr;
     }
 }
 
 void FontObj::destroy()
 {
     invalidate();
+}
+
+void FontObj::on_device_lost()
+{
+    if (d3dFont) d3dFont->lpVtbl->OnLostDevice(d3dFont);
+}
+
+void FontObj::on_device_reset()
+{
+    if (d3dFont && FAILED(d3dFont->lpVtbl->OnResetDevice(d3dFont))) {
+        invalidate();
+    }
 }
 
 // ── Texture loading helper ────────────────────────────────────
@@ -90,24 +133,10 @@ static IDirect3DTexture9* load_texture(IDirect3DDevice9* dev, const char* path)
 {
     if (!path || !path[0]) return nullptr;
 
-    // Try loading via D3DX9 if available
-    static HMODULE hD3DX9 = nullptr;
-    static HRESULT (WINAPI *pfnD3DXCreateTextureFromFileA)(
-        IDirect3DDevice9*, const char*, IDirect3DTexture9**) = nullptr;
-
-    if (!hD3DX9) {
-        hD3DX9 = LoadLibraryA("d3dx9_42.dll");
-        if (!hD3DX9) hD3DX9 = LoadLibraryA("d3dx9_43.dll");
-        if (!hD3DX9) hD3DX9 = LoadLibraryA("d3dx9_33.dll");
-        if (hD3DX9) {
-            pfnD3DXCreateTextureFromFileA = (decltype(pfnD3DXCreateTextureFromFileA))
-                GetProcAddress(hD3DX9, "D3DXCreateTextureFromFileA");
-        }
-    }
-
-    if (pfnD3DXCreateTextureFromFileA) {
+    ensure_d3dx_loaded();
+    if (g_create_texture_from_file) {
         IDirect3DTexture9* tex = nullptr;
-        HRESULT hr = pfnD3DXCreateTextureFromFileA(dev, path, &tex);
+        HRESULT hr = g_create_texture_from_file(dev, path, &tex);
         if (SUCCEEDED(hr) && tex) return tex;
     }
 
@@ -162,9 +191,9 @@ void on_device_lost()
         }
     }
 
-    // Invalidate fonts (they'll be recreated on next use)
+    // D3DXFont retains the logical object while releasing default-pool data.
     for (auto& [h, font] : g_fonts) {
-        font.invalidate();
+        font.on_device_lost();
     }
 }
 
@@ -174,89 +203,48 @@ void on_device_reset()
     for (auto& [h, obj] : g_textures) {
         reload_texture(obj);
     }
+
+    for (auto& [h, font] : g_fonts) {
+        font.on_device_reset();
+    }
 }
 
 // ── Rendering ─────────────────────────────────────────────────
 
-static void render_text_objects(IDirect3DDevice9* dev)
+static void render_text_object(IDirect3DDevice9* dev, TextObj& obj)
 {
-    // Get backbuffer surface for GDI drawing
-    IDirect3DSurface9* backBuffer = nullptr;
-    if (FAILED(dev->GetRenderTarget(0, &backBuffer))) return;
+    if (obj.text.empty()) return;
+    auto fit = g_fonts.find(obj.font);
+    if (fit == g_fonts.end()) return;
 
-    HDC hdc = nullptr;
-    if (FAILED(backBuffer->GetDC(&hdc))) {
-        backBuffer->Release();
-        return;
-    }
+    ID3DXFont* font = fit->second.get_handle(dev);
+    if (!font) return;
 
-    // Set up for transparent text drawing
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, 0x000000);  // Will be overridden per-object
-
-    for (auto& [h, obj] : g_texts) {
-        if (!obj.visible) continue;
-        if (obj.text.empty()) continue;
-
-        // Find the font
-        auto fit = g_fonts.find(obj.font);
-        if (fit == g_fonts.end()) continue;
-
-        HFONT hFont = fit->second.get_handle();
-        if (!hFont) continue;
-
-        HFONT oldFont = (HFONT)SelectObject(hdc, hFont);
-
-        // Convert ARGB to GDI COLORREF (swap R and B)
-        uint32_t argb = obj.color;
-        uint8_t a = (argb >> 24) & 0xFF;
-        uint8_t r = (argb >> 16) & 0xFF;
-        uint8_t g_val = (argb >> 8) & 0xFF;
-        uint8_t b = argb & 0xFF;
-
-        // GDI doesn't support alpha in DrawText directly.
-        // We'll use the color as-is (ignore alpha for GDI text).
-        COLORREF cr = RGB(r, g_val, b);
-        SetTextColor(hdc, cr);
-
-        RECT rc;
-        rc.left = (LONG)obj.x;
-        rc.top = (LONG)obj.y;
-        rc.right = rc.left + 2000;  // generous bound
-        rc.bottom = rc.top + 2000;
-
-        DrawTextA(hdc, obj.text.c_str(), (int)obj.text.length(), &rc, DT_LEFT | DT_TOP | DT_NOCLIP);
-
-        SelectObject(hdc, oldFont);
-    }
-
-    backBuffer->ReleaseDC(hdc);
-    backBuffer->Release();
+    RECT rc = {};
+    rc.left = static_cast<LONG>(obj.x);
+    rc.top = static_cast<LONG>(obj.y);
+    rc.right = rc.left + 2000;
+    rc.bottom = rc.top + 2000;
+    font->lpVtbl->DrawTextA(
+        font,
+        nullptr,
+        obj.text.c_str(),
+        static_cast<INT>(obj.text.size()),
+        &rc,
+        DT_LEFT | DT_TOP | DT_NOCLIP,
+        static_cast<D3DCOLOR>(obj.color));
 }
 
-static void render_texture_objects(IDirect3DDevice9* dev)
+static void prepare_texture_render_state(IDirect3DDevice9* dev)
 {
-    // Collect visible textures and sort by level (z-order)
-    struct RenderEntry {
-        texture_handle_t handle;
-        TextureObj* obj;
-    };
-    std::vector<RenderEntry> sorted;
-    for (auto& [h, obj] : g_textures) {
-        if (obj.visible && obj.texture) {
-            sorted.push_back({ h, &obj });
-        }
-    }
-    std::sort(sorted.begin(), sorted.end(), [](const RenderEntry& a, const RenderEntry& b) {
-        return a.obj->level < b.obj->level;
-    });
-
-    // Set up render state for alpha-blended sprites
+    dev->SetVertexShader(nullptr);
+    dev->SetPixelShader(nullptr);
     dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
     dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
     dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
     dev->SetRenderState(D3DRS_LIGHTING, FALSE);
     dev->SetRenderState(D3DRS_ZENABLE, FALSE);
+    dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
     dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
     dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
     dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
@@ -264,73 +252,105 @@ static void render_texture_objects(IDirect3DDevice9* dev)
     dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
     dev->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
     dev->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+    dev->SetFVF(D3DFVF_TL);
+}
 
-    for (auto& entry : sorted) {
-        TextureObj& obj = *entry.obj;
+static void render_texture_object(IDirect3DDevice9* dev, TextureObj& obj)
+{
+    prepare_texture_render_state(dev);
+    dev->SetTexture(0, obj.texture);
 
-        dev->SetTexture(0, obj.texture);
-        dev->SetFVF(D3DFVF_TL);
-
-        // Calculate source UVs
-        float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f;
-        if (obj.srcRight > 0 && obj.srcBottom > 0 && obj.pixelWidth > 0 && obj.pixelHeight > 0) {
-            u0 = obj.srcLeft / (float)obj.pixelWidth;
-            v0 = obj.srcTop / (float)obj.pixelHeight;
-            u1 = obj.srcRight / (float)obj.pixelWidth;
-            v1 = obj.srcBottom / (float)obj.pixelHeight;
-        }
-
-        // Extract ARGB color
-        uint32_t col = obj.color;
-        float cx = obj.x + obj.width * 0.5f;
-        float cy = obj.y + obj.height * 0.5f;
-
-        // Build quad corners (before rotation)
-        float hw = obj.width * 0.5f;
-        float hh = obj.height * 0.5f;
-
-        float cosR = 1.0f, sinR = 0.0f;
-        if (obj.rotation != 0.0f) {
-            float rad = obj.rotation * (float)M_PI / 180.0f;
-            cosR = cosf(rad);
-            sinR = sinf(rad);
-        }
-
-        struct { float dx, dy, u, v; } corners[4] = {
-            { -hw, -hh, u0, v0 },  // top-left
-            {  hw, -hh, u1, v0 },  // top-right
-            {  hw,  hh, u1, v1 },  // bottom-right
-            { -hw,  hh, u0, v1 },  // bottom-left
-        };
-
-        VertexTL verts[6];  // 2 triangles
-        // Triangle 1: 0,1,2
-        // Triangle 2: 0,2,3
-        int indices[6] = { 0, 1, 2, 0, 2, 3 };
-
-        for (int i = 0; i < 6; i++) {
-            int ci = indices[i];
-            float dx = corners[ci].dx;
-            float dy = corners[ci].dy;
-            if (obj.rotation != 0.0f) {
-                float rdx = dx * cosR - dy * sinR;
-                float rdy = dx * sinR + dy * cosR;
-                dx = rdx;
-                dy = rdy;
-            }
-            verts[i].x = cx + dx;
-            verts[i].y = cy + dy;
-            verts[i].z = 0.0f;
-            verts[i].rhw = 1.0f;
-            verts[i].color = col;
-            verts[i].tu = corners[ci].u;
-            verts[i].tv = corners[ci].v;
-        }
-
-        dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST, 2, verts, sizeof(VertexTL));
+    // Calculate source UVs
+    float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f;
+    if (obj.srcRight > 0 && obj.srcBottom > 0 && obj.pixelWidth > 0 && obj.pixelHeight > 0) {
+        u0 = obj.srcLeft / (float)obj.pixelWidth;
+        v0 = obj.srcTop / (float)obj.pixelHeight;
+        u1 = obj.srcRight / (float)obj.pixelWidth;
+        v1 = obj.srcBottom / (float)obj.pixelHeight;
     }
 
+    uint32_t col = obj.color;
+    float cx = obj.x + obj.width * 0.5f;
+    float cy = obj.y + obj.height * 0.5f;
+
+    float hw = obj.width * 0.5f;
+    float hh = obj.height * 0.5f;
+
+    float cosR = 1.0f, sinR = 0.0f;
+    if (obj.rotation != 0.0f) {
+        float rad = obj.rotation * (float)M_PI / 180.0f;
+        cosR = cosf(rad);
+        sinR = sinf(rad);
+    }
+
+    struct { float dx, dy, u, v; } corners[4] = {
+        { -hw, -hh, u0, v0 },
+        {  hw, -hh, u1, v0 },
+        {  hw,  hh, u1, v1 },
+        { -hw,  hh, u0, v1 },
+    };
+
+    VertexTL verts[6];
+    int indices[6] = { 0, 1, 2, 0, 2, 3 };
+
+    for (int i = 0; i < 6; i++) {
+        int ci = indices[i];
+        float dx = corners[ci].dx;
+        float dy = corners[ci].dy;
+        if (obj.rotation != 0.0f) {
+            float rdx = dx * cosR - dy * sinR;
+            float rdy = dx * sinR + dy * cosR;
+            dx = rdx;
+            dy = rdy;
+        }
+        verts[i].x = cx + dx;
+        verts[i].y = cy + dy;
+        verts[i].z = 0.0f;
+        verts[i].rhw = 1.0f;
+        verts[i].color = col;
+        verts[i].tu = corners[ci].u;
+        verts[i].tv = corners[ci].v;
+    }
+
+    dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST, 2, verts, sizeof(VertexTL));
     dev->SetTexture(0, nullptr);
+}
+
+static void render_objects(IDirect3DDevice9* dev)
+{
+    enum class RenderKind { Text, Texture };
+    struct RenderEntry {
+        int level;
+        uint64_t creationOrder;
+        RenderKind kind;
+        void* object;
+    };
+
+    std::vector<RenderEntry> queue;
+    queue.reserve(g_texts.size() + g_textures.size());
+    for (auto& [h, obj] : g_texts) {
+        if (obj.visible && !obj.text.empty()) {
+            queue.push_back({obj.level, obj.creationOrder, RenderKind::Text, &obj});
+        }
+    }
+    for (auto& [h, obj] : g_textures) {
+        if (obj.visible && obj.texture) {
+            queue.push_back({obj.level, obj.creationOrder, RenderKind::Texture, &obj});
+        }
+    }
+
+    std::sort(queue.begin(), queue.end(), [](const RenderEntry& left, const RenderEntry& right) {
+        if (left.level != right.level) return left.level < right.level;
+        return left.creationOrder < right.creationOrder;
+    });
+
+    for (const RenderEntry& entry : queue) {
+        if (entry.kind == RenderKind::Text) {
+            render_text_object(dev, *static_cast<TextObj*>(entry.object));
+        } else {
+            render_texture_object(dev, *static_cast<TextureObj*>(entry.object));
+        }
+    }
 }
 
 static void render_fps(IDirect3DDevice9* dev)
@@ -404,8 +424,7 @@ void on_end_scene(IDirect3DDevice9* pDevice)
     IDirect3DStateBlock9* stateBlock = nullptr;
     if (SUCCEEDED(pDevice->CreateStateBlock(D3DSBT_ALL, &stateBlock)) && stateBlock) {
         if (SUCCEEDED(stateBlock->Capture())) {
-            render_texture_objects(pDevice);
-            render_text_objects(pDevice);
+            render_objects(pDevice);
             render_fps(pDevice);
             stateBlock->Apply();
         }
@@ -440,6 +459,7 @@ bool end_session(uint32_t session)
     g_textures.clear();
     g_texts.clear();
     g_fonts.clear();
+    g_next_creation_order = 1;
 
     g_last_dt = 0.0f;
     g_last_tick = GetTickCount();
@@ -573,6 +593,7 @@ text_handle_t create_text(font_handle_t font, const char* str, float x, float y,
     obj.color = color;
     obj.font = font;
     obj.visible = true;
+    obj.creationOrder = g_next_creation_order++;
     return h;
 }
 
@@ -701,6 +722,7 @@ texture_handle_t create_texture(const char* path, float x, float y, float width,
     obj.rotation = 0.0f;
     obj.visible = true;
     obj.triggerEnabled = true;
+    obj.creationOrder = g_next_creation_order++;
 
     if (g_device) {
         reload_texture(obj);

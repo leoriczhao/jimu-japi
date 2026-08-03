@@ -583,7 +583,9 @@ extern "C" __declspec(dllexport) bool D3D_SDK_CALL GetD3DSdkApi(
         | D3D_SDK_CAP_GENERATION_HANDLES
         | D3D_SDK_CAP_RESOURCE_COUNTS
         | D3D_SDK_CAP_SHARED_LEGACY_REGISTRY
-        | D3D_SDK_CAP_CORE_PROPERTIES;
+        | D3D_SDK_CAP_CORE_PROPERTIES
+        | D3D_SDK_CAP_TEXT_ALPHA
+        | D3D_SDK_CAP_UNIFIED_RENDER_QUEUE;
     api.begin_session = &begin_session;
     api.end_session = &end_session;
     api.get_resource_counts = &get_resource_counts;

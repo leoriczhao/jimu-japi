@@ -9,6 +9,7 @@ set(D3D9_SOURCES
     src/d3d9/dllmain.cpp
     src/d3d9/CDirect3D9.cpp
     src/d3d9/CDirect3DDevice9.cpp
+    src/d3d9/d3dx9_font_abi.h
     src/d3d9/renderer.cpp
     src/d3d9/api.cpp
     src/d3d9/status.cpp

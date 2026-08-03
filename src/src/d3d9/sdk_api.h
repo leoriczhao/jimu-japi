@@ -27,6 +27,8 @@ enum D3DSdkCapability : uint64_t {
     D3D_SDK_CAP_RESOURCE_COUNTS = 1ull << 2,
     D3D_SDK_CAP_SHARED_LEGACY_REGISTRY = 1ull << 3,
     D3D_SDK_CAP_CORE_PROPERTIES = 1ull << 4,
+    D3D_SDK_CAP_TEXT_ALPHA = 1ull << 5,
+    D3D_SDK_CAP_UNIFIED_RENDER_QUEUE = 1ull << 6,
 };
 
 enum D3DSdkResourceType : uint32_t {
