@@ -2,6 +2,13 @@
 
 > 本文是当前 D3D9 接入工作的实现契约。项目完成度仍只以
 > [`../STATUS.md`](../STATUS.md) 为唯一权威状态；本文负责记录本阶段的架构、风险和验收方法。
+>
+> 阶段边界更新（2026-07-31）：本文只证明底层 proxy、bridge、部署和视觉探针链路可工作，
+> 不定义或证明用户可用的 Lua SDK。`jass.d3d` 公共 API、对象所有权、GC/session、device reset、
+> MPQ asset 和完整验收统一由 [D3D-LUA-SDK-DESIGN.md](D3D-LUA-SDK-DESIGN.md) 约束。
+> 本文中的 120/120 是 2026-07-31 的历史累计结果；2026-08-03 当前结果为普通基线 108 项与
+> D3D fixture 13 项合计 121/121。两者都不是 D3D API 数量，也不能作为 handler 全覆盖或
+> Lua SDK 完成证据。
 
 ## 1. 目标与范围
 
@@ -10,12 +17,15 @@
 1. Warcraft III 进程启动时加载本项目的 `d3d9.dll` 代理；
 2. 代理加载系统真实 `d3d9.dll`，包装 `IDirect3D9` / `IDirect3DDevice9`，在 `EndScene` 绘制覆盖层；
 3. 地图加载 `yd_japi.dll` 后，显式找到已加载的代理并注册 D3D bridge handler；
-4. 部署工具按显式开关部署代理和视觉探针资源，并拒绝静默覆盖未知的 `d3d9.dll`；
+4. 部署工具按显式开关部署代理和视觉探针资源，并拒绝静默覆盖未知的 `d3d9.dll`；完整交付还必须
+   支持所有权校验后的幂等卸载；
 5. 自动测试验证注册和对象属性，真实 War3 窗口验证文字、字体、贴图及鼠标命中。
 
 本阶段不把内置 JAPI 的 `DLL_initializeD3d9` ABI 原样复刻。内置实现是“后加载插件 + Present 地址注册”，当前项目已有代码则是“进程启动代理 + COM wrapper”；两者的加载时机和 ABI 不兼容，强行混合会得到一条不可验证的链路。
 
-本阶段也不承诺 `TextureAddEvent` / `TextureRemoveEvent` 的 JASS code 回调兼容层、MPQ 内 BLP 解码和 `rect` handle 裁剪。这些保留为后续 D3D API 对齐工作；当前交付的真实交互边界是 `GetMouseInTexture` 命中测试和 `SetTextureTrigger` 开关。
+本阶段早期未承诺 `TextureAddEvent` / `TextureRemoveEvent`、MPQ 内 BLP 和 `rect` handle 裁剪；
+其中 JASS code 事件回调已由 §9 完成，Hrect source rect 已由 §2.4/§8.5 完成。MPQ BLP 与用户级资源
+生命周期仍属于后续 SDK 工作。
 
 ## 2. 已确认事实与当前缺口
 
@@ -26,7 +36,9 @@
 - 当前游戏目录没有第三方 `d3d9.dll`，但有官方 `D3DX9_42.dll`。
 - 因为 D3D9 是运行时加载，放在 `War3.exe` 同目录的代理必须在启动前就位；地图 MPQ 在游戏启动后才加载，不能承担第一次 D3D 截获。
 
-### 2.2 代码缺口
+### 2.2 实施前代码缺口（历史基线）
+
+以下条目记录本阶段开始时的缺口，§8 记录其中已完成的部分，不代表当前状态：
 
 - `newD3d9.dll` 当前 PE 只导出 `InitializeD3DAPI`，源码中的 `Direct3DCreate9` 没进入导出表。
 - `yd_japi.dll` 当前没有定位代理，也没有调用 `InitializeD3DAPI`。
@@ -34,6 +46,44 @@
 - 贴图加载只尝试 `d3dx9_43.dll` 和 `d3dx9_33.dll`，与目标目录现有的 `D3DX9_42.dll` 不匹配。
 - 部署脚本只部署地图，不部署代理或可识别的视觉探针资源。
 - 没有能区分“DLL 已加载、handler 已注册、设备已包装、帧已绘制”的状态证据。
+
+### 2.3 2026-07-31 当前审计基线
+
+- `src/src/d3d9/api.cpp` 注册 53 个唯一 handler。`map/tests/test_d3d.lua` 调用 29 个 RPC 名，
+  其中 25 个属于这 53 个；`GetTextureEventCount`、`TextureAddEvent`、`TextureRemoveEvent` 来自
+  message bridge，`SetHeroLevels` 是测试取址辅助。剩余 28 个 D3D handler 未被该 fixture 触达。
+- `initialize_ex_natives()` 和 message bridge 先注册，`initialize_d3d_api()` 后注册；因此 D3D 的
+  `ShowConsole(B)V` 会覆盖先前有效 handler，但 `renderer.cpp::show_console` 只是 stub。
+  `test_ex.lua` 目前只检查 hide/restore 调用不崩溃，不能证明 UI 实际隐藏和恢复。
+- D3D `SetKeyboard(IB)V` 把 WARK code 直接写入 `INPUT.ki.wVk`。Shift/Ctrl/Alt、方向键、F 键、
+  OEM 和数字键盘等编码与 Win32 VK 不一致；`libs_message.cpp::wark_to_vk` 已提供可复用的正确映射依据。
+- `SetTextureSrcRect` 当前注册为 `(IRRRR)V`，与内置 `(IHrect;)V` 不兼容；renderer 虽有
+  `get_texture_src_rect`，但 bridge 未注册内置 `(I)Hrect;` 的 `GetTextureSrcRect`。
+- state-block 保存/恢复修复已经解决单位“灵魂体”视觉污染并获实机确认，但 `renderer.cpp` 相对
+  `f5ede8395ae39b5554ae0dfd78835029e01f9901` 仍是未提交修改。当前构建 DLL、已部署 DLL 和 sidecar
+  hash 均为 `CA01703ACDB5C26251ED4D1A305910728D4844DA6408F4B0D781C07CFB6748AF`，只能证明它们
+  彼此一致，不能证明产物可追溯到某个 commit。
+- 当前工具已安装 proxy、视觉探针和两个所有权 sidecar，但尚无经过实机验收的完整卸载入口；
+  Lua VM/地图 session 清理也尚未实现。因此当前结论只能是“底层 proxy/bridge 基本跑通”。
+
+### 2.4 2026-08-03 P0 兼容修复现状
+
+- 机器可读 `handler_manifest.json` 现有 54 个兼容名字：历史 53 个名字加恢复的
+  `GetTextureSrcRect`。D3D proxy 注册 49 个，message/EX 的 canonical owner 注册 5 个；
+  `verify_contract.ps1` 验证名字、签名、owner、D3D 禁止重名和 fixture 映射。
+- D3D proxy 已移除 `GetMouseVectorX/Y`、`ShowConsole`、`ShowFpsText`、`SetKeyboard` 重名注册，
+  不依赖覆盖语义。普通回归中的 `ShowConsole` 已验证控制台 frame 真实隐藏并恢复。
+- `SetKeyboard` 由 message bridge 唯一注册，bridge 和 Lua message API 共用
+  `warcraft3::input::wark_to_vk`；WARK 不再直接写入 Win32 `wVk`。
+- `SetTextureSrcRect(IHrect;)V` 与 `GetTextureSrcRect(I)Hrect;` 已恢复。bridge 对 `Hrect;`
+  使用 `SaveRectHandle` / `LoadRectHandle`，实机 fixture 对四个边界值完成往返。
+- state-block 已扩展到完整 overlay pass，Capture 失败时跳过整个 pass；真实窗口中的单位、地形和 UI
+  均无状态污染。实现已提交为 `8bba4ae`；从该提交的 detached clean worktree 构建、实际部署 DLL 与
+  proxy sidecar hash 一致为 `CD3896606FE2F20861F34A1406457972F982D2A72ED8F4B9173606F4FCCF101C`。
+- 普通回归为 108/108；D3D 单实例脚本回归为 121/121，其中 D3D fixture 13 项，兼容面触达
+  27/54，仍有 27 个名字未被该 fixture 触达。
+- 本批提交态产物溯源已闭环；安全幂等卸载与地图/Lua session 清理仍未实现，所以卸载闭环和用户 SDK
+  生命周期仍未完成。
 
 ## 3. 选定架构
 
@@ -121,6 +171,9 @@
 - 目标存在且不同、又没有可信 sidecar：立即失败，打印源/目标 hash；不得自动改名、覆盖或删除。
 - 视觉探针使用项目专属文件名；若目标存在且内容不同，同样失败。
 - 非 D3D 部署不碰游戏目录中的 proxy；卸载采用单独、显式、只删除已知 hash 的动作，避免误删其他 wrapper。
+- 完整卸载对象包括 `d3d9.dll`、`japi_d3d_visual_probe.bmp`、`.japi_d3d_proxy.sha256` 和
+  `.japi_d3d_probe.sha256`。目标缺失时视为幂等成功；目标 hash 与 sidecar 不一致时拒绝删除。
+- War3 仍加载 proxy 时不得替换或删除；结束会话后卸载，再验证普通非 D3D 启动和目录无项目 D3D 残留。
 
 ## 5. 验证矩阵
 
@@ -134,6 +187,11 @@
 | 自动 API | Lua RPC | 字体、文字、贴图属性往返和像素尺寸通过；普通 108 项无回归 |
 | 视觉 | 真实 War3 窗口截图 | 黄色标题和棋盘贴图清晰可见、位置正确、无黑屏/闪退 |
 | 交互 | 真实鼠标进入/离开贴图 | 标题在 `VISUAL PASS` / `HOVER PASS` 间切换，命中仅在边界内为真 |
+| Handler 覆盖 | 机器可读 manifest + 测试映射 | 54 个兼容名字均有唯一 owner 和准确签名；累计测试数、fixture 数和 27/54 触达数分开报告 |
+| 兼容 | ShowConsole/SetKeyboard/SrcRect 专项 | 不覆盖 canonical handler；WARK→VK 全键组正确；SrcRect JASS 签名与 getter/setter 往返 |
+| 渲染隔离 | state-block 故障注入 + 实机窗口 | 捕获/恢复成功且无状态污染；捕获失败则跳过 overlay |
+| 产物溯源 | commit/provenance/hash | dirty=false；干净构建、部署 DLL、sidecar hash 一致 |
+| 卸载 | 安装→验证→会话结束→卸载→普通启动 | 只删除本项目已知文件，重复卸载幂等，未知文件不删除，无项目 D3D 残留 |
 
 ## 6. 实施顺序
 
@@ -148,14 +206,19 @@
 
 ## 7. 完成定义
 
-本阶段只有在以下条件同时满足时才可把“D3D proxy 加载/注册/部署/视觉验收”标为完成：
+本阶段只有在以下条件同时满足时才可把“D3D proxy 加载/注册/部署/视觉探针基础设施”标为完整闭环；
+当前只达到“底层 proxy/bridge 基本跑通”。即使以下全部满足，也不能把“D3D Lua SDK”标为完成：
 
 1. Proxy 的两项必要导出和真实 DLL 转发经 PE 检查；
 2. 未安装 proxy 时普通非 D3D 功能仍可工作，D3D 注册失败只记日志；
 3. `-InteractiveD3D` 能安全部署并启动测试图；
 4. 自动 D3D 状态和属性测试全绿，普通回归不下降；
 5. 真实窗口中字体/文字/贴图可见，鼠标进入和离开命中区产生预期变化；
-6. 文档记录真实命令、结果、视觉捕获证据和仍未覆盖的 API。
+6. 54-name handler manifest 清楚区分 owner 与已测/未测状态，不把累计测试总数当覆盖率；
+7. `ShowConsole`、`SetKeyboard` 和 SrcRect 的兼容阻断项通过专项测试；
+8. state-block 修复已提交，干净构建产物可追溯到 commit，部署 DLL/sidecar hash 一致；
+9. proxy、探针和 sidecar 完成安全幂等卸载，并验证卸载后普通启动；
+10. 文档记录真实命令、结果、视觉捕获证据和仍未覆盖的 API。
 
 ## 8. 实测记录
 
@@ -167,6 +230,11 @@
 - `objdump -p src\build\bin\Release\newD3d9.dll` 确认导出未修饰名 `Direct3DCreate9`、`InitializeD3DAPI`，导入表不含 `d3d9.dll`。
 - 本次 proxy SHA-256 为 `628C1B752108505E698669C20461C395B3413036F35FA550DF12F12708F53EC7`。
 - PowerShell 脚本语法、Lua 测试文件语法和 `git diff --check` 均通过；`pack.ps1 -InteractiveD3D` 打包 5 个 Lua 文件，0 error、0 warning。
+
+随后为修复 D3D state 泄漏重新构建并部署了
+`CA01703ACDB5C26251ED4D1A305910728D4844DA6408F4B0D781C07CFB6748AF`。该 hash 与当前
+`src\build\bin\Release\newD3d9.dll`、游戏目录 `d3d9.dll` 和 proxy sidecar 一致，实机视觉恢复正常；
+但对应 `renderer.cpp` 修改尚未提交，所以这是一条“脏工作区构建已实机验证”的证据，不是发布 provenance。
 
 ### 8.2 回归与实机结果
 
@@ -207,11 +275,39 @@
 
 ### 8.4 保留项
 
-本阶段完成的是 proxy 加载、注册、部署、字体/文字/贴图和真实命中链。以下项目仍按范围约定保留：
+本阶段已实测的是 proxy 加载、注册、部署、字体/文字/贴图和真实命中子链。以下项目仍按范围约定保留：
 
 - `TextureAddEvent` / `TextureRemoveEvent` 的 JASS code 回调兼容（原阶段保留，键盘路径后由 §9 完成）；
 - MPQ 内 BLP 资源解码；
 - `rect` handle 形式的贴图裁剪。
+
+### 8.5 2026-08-03 P0 修复实测
+
+当前修复使用仓库默认空白地图执行：
+
+```powershell
+.\src\build.bat
+.\src\src\d3d9\verify_contract.ps1
+.\tools\deploy.ps1
+.\tools\deploy.ps1 -InteractiveD3D
+```
+
+- Win32 Release 构建无编译或链接错误；contract 验证结果为
+  `surface=54, proxy=49, canonical=5, fixture=27/54, untested=27`。
+- 普通实机结果为 `108 passed, 0 failed, 108 total`；`ShowConsole` 的隐藏/恢复真实 frame 断言通过。
+- D3D 贴图 source rect 使用内置 Hrect ABI 完成 setter/getter 四边界往返。
+- 单一 War3 实例依次显示 `VISUAL PASS`、`HOVER PASS`、`EVENT PASS` 和
+  `VISUAL + HOVER + EVENT PASS`；最终脚本读取到 `121 passed, 0 failed, 121 total` 并自动终止 War3。
+- 修复提交为 `8bba4ae`。由于 `src\build.bat` 当前硬编码主工作区路径，detached worktree 验收改用
+  相同的 VS2022 Win32/CMake 参数直接配置构建；该干净构建无编译或链接错误。
+- detached clean worktree 的 `newD3d9.dll`、游戏目录 `d3d9.dll` 和
+  `.japi_d3d_proxy.sha256` 均为 `CD3896606FE2F20861F34A1406457972F982D2A72ED8F4B9173606F4FCCF101C`；
+  视觉探针和 sidecar 均为 `952B23437A15F2C65AA9C114920533E63D278D1765B70DA0EC5E709D153EAE6B`。
+- 普通 108/108 与 D3D 121/121 均使用该 clean worktree 的 `yd_japi.dll`；D3D 实机实际加载同一
+  clean worktree 的 proxy，脚本读取结果并自动终止 War3。
+
+这条记录完成本批 proxy 的提交态源码、干净构建、部署物和 sidecar provenance。主工作区仍保留用户的
+非 D3D 修改，但不参与 detached `8bba4ae` 构建。
 
 ## 9. 后续扩展：TextureAddEvent / TextureRemoveEvent
 
@@ -237,5 +333,23 @@
 普通回归保持 `108/108`；D3D 套件为 `120 passed, 0 failed, 120 total`，最终窗口显示
 `JAPI D3D VISUAL + HOVER + EVENT PASS` 和 `ALL TESTS PASSED 120/120`。
 
+这里的 120 是累计总数：108 个普通基线测试 + 12 个 D3D fixture 检查。该 fixture 只触达
+53 个 D3D handler 中的 25 个。真实 Shift 行为来自物理键盘输入和 message hook，不能证明 D3D
+`SetKeyboard` 的 WARK→VK 注入实现正确。
+
 尚未覆盖的是鼠标按钮码以及原版注释提到的鼠标进入/离开回调语义；MPQ BLP 和 `rect` handle
 裁剪也仍为后续项。
+
+## 10. 当前 D3D 修复与验收顺序
+
+该顺序属于 D3D 会话；构建、打包、测试统计和部署门禁框架由基础工作树负责，不在本文扩张实现范围：
+
+1. **已完成**：建立 54-name manifest，固化 27/54 触达与 27 个未触达名字；
+2. **已完成**：D3D 不再注册 5 个 canonical 重名，不依赖覆盖语义；
+3. **已完成实现并通过构建**：提取共用 WARK→VK 转换，覆盖全部已定义键组；
+4. **已完成并实机通过**：恢复 SrcRect 的 `(IHrect;)V` setter 和 `(I)Hrect;` getter；
+5. **已完成并实机通过**：state-block 与兼容修复提交为 `8bba4ae`，从 detached clean worktree
+   构建、重新部署并回读一致 hash；
+6. **待实现**：实机验收 proxy、探针和 sidecar 的安全幂等卸载，以及卸载后普通非 D3D 启动；
+7. **后续主线**：进入 [D3D-LUA-SDK-DESIGN.md](D3D-LUA-SDK-DESIGN.md) 的 session、userdata、统一事件、
+   device reset、GC 和 MPQ asset 实现。
