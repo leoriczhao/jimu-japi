@@ -632,6 +632,12 @@ P1 实际导出为 <code>GetD3DSdkApi</code> ABI v1。当前 capability 只声�
 session 批量清理均通过 <code>d3d_sdk_contract_test.exe</code>，并完成 1000 轮三类资源创建/销毁后计数归零。
 该结果不包含 Lua userdata、属性全表、GC、事件或真实地图结束钩子，不能作为 P2/P5 或用户 SDK 完成证据。
 
+P1 源码提交 <code>b3f4da8</code> 已从 detached clean worktree 完整构建。clean proxy SHA-256 为
+<code>8D7089B68B9028A05C1DB1DAFB70D95B7974049A707EAF91C358633772225035</code>，clean
+<code>yd_japi.dll</code> SHA-256 为
+<code>BEE52977457FFB3BD5DEC7B11F75B1CCF894134C5E0E61DD6170F5CEB4309D8B</code>；实际游戏目录 proxy 与
+sidecar 匹配该 hash，并使用同一 clean build 完成普通 108/108、D3D 121/121 与原生 ABI 合同测试。
+
 ## 15. 验收标准
 
 ### 15.1 构建与静态合同
