@@ -18,6 +18,7 @@ enum D3DSdkResult : uint32_t {
     D3D_SDK_INVALID_HANDLE = 5,
     D3D_SDK_RESOURCE_IN_USE = 6,
     D3D_SDK_CAPACITY_EXCEEDED = 7,
+    D3D_SDK_BUFFER_TOO_SMALL = 8,
 };
 
 enum D3DSdkCapability : uint64_t {
@@ -25,6 +26,7 @@ enum D3DSdkCapability : uint64_t {
     D3D_SDK_CAP_GENERATION_HANDLES = 1ull << 1,
     D3D_SDK_CAP_RESOURCE_COUNTS = 1ull << 2,
     D3D_SDK_CAP_SHARED_LEGACY_REGISTRY = 1ull << 3,
+    D3D_SDK_CAP_CORE_PROPERTIES = 1ull << 4,
 };
 
 enum D3DSdkResourceType : uint32_t {
@@ -74,6 +76,104 @@ struct D3DSdkApiV1 {
         uint32_t session, uint32_t handle);
 
     uint32_t (D3D_SDK_CALL *copy_last_error)(char* buffer, uint32_t capacity);
+
+    uint32_t (D3D_SDK_CALL *get_window_size)(
+        uint32_t session, int32_t* out_width, int32_t* out_height);
+
+    uint32_t (D3D_SDK_CALL *copy_font_face)(
+        uint32_t session, uint32_t handle, char* buffer, uint32_t capacity,
+        uint32_t* out_required);
+    uint32_t (D3D_SDK_CALL *set_font_face)(
+        uint32_t session, uint32_t handle, const char* value);
+    uint32_t (D3D_SDK_CALL *get_font_height)(
+        uint32_t session, uint32_t handle, int32_t* out_value);
+    uint32_t (D3D_SDK_CALL *set_font_height)(
+        uint32_t session, uint32_t handle, int32_t value);
+    uint32_t (D3D_SDK_CALL *get_font_width)(
+        uint32_t session, uint32_t handle, int32_t* out_value);
+    uint32_t (D3D_SDK_CALL *set_font_width)(
+        uint32_t session, uint32_t handle, int32_t value);
+    uint32_t (D3D_SDK_CALL *get_font_weight)(
+        uint32_t session, uint32_t handle, int32_t* out_value);
+    uint32_t (D3D_SDK_CALL *set_font_weight)(
+        uint32_t session, uint32_t handle, int32_t value);
+    uint32_t (D3D_SDK_CALL *get_font_italic)(
+        uint32_t session, uint32_t handle, uint32_t* out_value);
+    uint32_t (D3D_SDK_CALL *set_font_italic)(
+        uint32_t session, uint32_t handle, uint32_t value);
+
+    uint32_t (D3D_SDK_CALL *copy_text_string)(
+        uint32_t session, uint32_t handle, char* buffer, uint32_t capacity,
+        uint32_t* out_required);
+    uint32_t (D3D_SDK_CALL *set_text_string)(
+        uint32_t session, uint32_t handle, const char* value);
+    uint32_t (D3D_SDK_CALL *get_text_position)(
+        uint32_t session, uint32_t handle, float* out_x, float* out_y);
+    uint32_t (D3D_SDK_CALL *set_text_position)(
+        uint32_t session, uint32_t handle, float x, float y);
+    uint32_t (D3D_SDK_CALL *get_text_ttl)(
+        uint32_t session, uint32_t handle, float* out_value);
+    uint32_t (D3D_SDK_CALL *set_text_ttl)(
+        uint32_t session, uint32_t handle, float value);
+    uint32_t (D3D_SDK_CALL *get_text_color)(
+        uint32_t session, uint32_t handle, uint32_t* out_value);
+    uint32_t (D3D_SDK_CALL *set_text_color)(
+        uint32_t session, uint32_t handle, uint32_t value);
+    uint32_t (D3D_SDK_CALL *get_text_visible)(
+        uint32_t session, uint32_t handle, uint32_t* out_value);
+    uint32_t (D3D_SDK_CALL *set_text_visible)(
+        uint32_t session, uint32_t handle, uint32_t value);
+    uint32_t (D3D_SDK_CALL *get_text_level)(
+        uint32_t session, uint32_t handle, int32_t* out_value);
+    uint32_t (D3D_SDK_CALL *set_text_level)(
+        uint32_t session, uint32_t handle, int32_t value);
+    uint32_t (D3D_SDK_CALL *get_text_font)(
+        uint32_t session, uint32_t handle, uint32_t* out_font);
+    uint32_t (D3D_SDK_CALL *set_text_font)(
+        uint32_t session, uint32_t handle, uint32_t font);
+
+    uint32_t (D3D_SDK_CALL *copy_texture_source)(
+        uint32_t session, uint32_t handle, char* buffer, uint32_t capacity,
+        uint32_t* out_required);
+    uint32_t (D3D_SDK_CALL *set_texture_source)(
+        uint32_t session, uint32_t handle, const char* value);
+    uint32_t (D3D_SDK_CALL *get_texture_rect)(
+        uint32_t session, uint32_t handle, float* out_x, float* out_y,
+        float* out_width, float* out_height);
+    uint32_t (D3D_SDK_CALL *set_texture_rect)(
+        uint32_t session, uint32_t handle, float x, float y,
+        float width, float height);
+    uint32_t (D3D_SDK_CALL *get_texture_src_rect)(
+        uint32_t session, uint32_t handle, float* out_left, float* out_top,
+        float* out_right, float* out_bottom);
+    uint32_t (D3D_SDK_CALL *set_texture_src_rect)(
+        uint32_t session, uint32_t handle, float left, float top,
+        float right, float bottom);
+    uint32_t (D3D_SDK_CALL *get_texture_color)(
+        uint32_t session, uint32_t handle, uint32_t* out_value);
+    uint32_t (D3D_SDK_CALL *set_texture_color)(
+        uint32_t session, uint32_t handle, uint32_t value);
+    uint32_t (D3D_SDK_CALL *get_texture_rotation)(
+        uint32_t session, uint32_t handle, float* out_value);
+    uint32_t (D3D_SDK_CALL *set_texture_rotation)(
+        uint32_t session, uint32_t handle, float value);
+    uint32_t (D3D_SDK_CALL *get_texture_level)(
+        uint32_t session, uint32_t handle, int32_t* out_value);
+    uint32_t (D3D_SDK_CALL *set_texture_level)(
+        uint32_t session, uint32_t handle, int32_t value);
+    uint32_t (D3D_SDK_CALL *get_texture_visible)(
+        uint32_t session, uint32_t handle, uint32_t* out_value);
+    uint32_t (D3D_SDK_CALL *set_texture_visible)(
+        uint32_t session, uint32_t handle, uint32_t value);
+    uint32_t (D3D_SDK_CALL *get_texture_hit_test)(
+        uint32_t session, uint32_t handle, uint32_t* out_value);
+    uint32_t (D3D_SDK_CALL *set_texture_hit_test)(
+        uint32_t session, uint32_t handle, uint32_t value);
+    uint32_t (D3D_SDK_CALL *get_texture_pixel_size)(
+        uint32_t session, uint32_t handle, float* out_width, float* out_height);
+    uint32_t (D3D_SDK_CALL *texture_contains)(
+        uint32_t session, uint32_t handle, float x, float y,
+        uint32_t* out_contains);
 };
 #pragma pack(pop)
 

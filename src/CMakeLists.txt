@@ -63,6 +63,7 @@ set(LUA_ENGINE_SOURCES
     src/lua_engine/lua_engine/libs_sleep.cpp
     src/lua_engine/lua_engine/libs_slk.cpp
     src/lua_engine/lua_engine/libs_debugger.cpp
+    src/lua_engine/lua_engine/libs_d3d.cpp
     src/lua_engine/lua_engine/fix_baselib.cpp
     src/lua_engine/lua_engine/bridge_dispatch.cpp
 )

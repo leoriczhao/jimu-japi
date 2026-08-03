@@ -9,6 +9,7 @@ local hook    = require "jass.hook"
 local util    = require "lib.util"
 local scene   = require "lib.scene"
 local test_ex = require "tests.test_ex"
+local test_d3d_sdk = require "tests.test_d3d_sdk"
 local test_d3d = require "tests.test_d3d"
 
 -- Handle-level agnostic helpers (works with integer or userdata)
@@ -524,14 +525,33 @@ local function finish()
 end
 
 local function run_d3d_then_finish()
-    if type(test_d3d) == "table" and type(test_d3d.run) == "function" then
-        test_d3d.run(function(dp, df)
+    local function run_bridge_fixture()
+        if type(test_d3d) == "table" and type(test_d3d.run) == "function" then
+            test_d3d.run(function(dp, df)
+                pass = pass + dp
+                fail = fail + df
+                if type(test_d3d_sdk.shutdown) == "function" then
+                    test_d3d_sdk.shutdown(function(sp, sf)
+                        pass = pass + sp
+                        fail = fail + sf
+                        finish()
+                    end)
+                else
+                    finish()
+                end
+            end)
+        else
+            finish()
+        end
+    end
+    if type(test_d3d_sdk) == "table" and type(test_d3d_sdk.run) == "function" then
+        test_d3d_sdk.run(function(dp, df)
             pass = pass + dp
             fail = fail + df
-            finish()
+            run_bridge_fixture()
         end)
     else
-        finish()
+        run_bridge_fixture()
     end
 end
 

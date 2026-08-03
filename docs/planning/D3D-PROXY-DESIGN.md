@@ -350,6 +350,7 @@
 4. **已完成并实机通过**：恢复 SrcRect 的 `(IHrect;)V` setter 和 `(I)Hrect;` getter；
 5. **已完成并实机通过**：state-block 与兼容修复提交为 `8bba4ae`，从 detached clean worktree
    构建、重新部署并回读一致 hash；
-6. **待实现**：实机验收 proxy、探针和 sidecar 的安全幂等卸载，以及卸载后普通非 D3D 启动；
-7. **后续主线**：进入 [D3D-LUA-SDK-DESIGN.md](D3D-LUA-SDK-DESIGN.md) 的 session、userdata、统一事件、
-   device reset、GC 和 MPQ asset 实现。
+6. **已完成**：proxy、探针和 sidecar 的安全幂等卸载、未知文件保护，以及卸载后普通非 D3D 启动；
+7. **已完成 P1/P2**：版本化 session/generation ABI 与 `jass.d3d` Font/Text/Texture 基础 userdata；
+8. **后续主线**：进入 [D3D-LUA-SDK-DESIGN.md](D3D-LUA-SDK-DESIGN.md) 的 P3-P6：统一 render queue、
+   MPQ asset、Subscription、自动 session、device reset、完整 GC/失败路径和文档验收。

@@ -1,6 +1,6 @@
 # D3D Lua SDK 与完整生命周期设计
 
-> 状态：P0 兼容修复已实现并实机通过；公共 Lua SDK 与完整生命周期待实现。
+> 状态：P0/P1 已闭环，P2 Font/Text/Texture 公共对象层已实现并实机通过；P3-P6 与完整生命周期待实现。
 >
 > 本文是面向地图作者的 D3D Lua SDK 实现契约和验收标准。底层 proxy 的加载、转发、部署与历史验证仍见
 > [D3D-PROXY-DESIGN.md](D3D-PROXY-DESIGN.md)；项目当前完成度只以
@@ -20,11 +20,16 @@
 <code>GetTextureSrcRect</code>）：D3D proxy 注册 49 个，canonical message/EX owner 注册 5 个；
 fixture 触达 27/54。普通回归为 108/108，D3D fixture 13 项，累计 121/121。注册冲突、WARK 共用映射、
 SrcRect Hrect ABI 和完整 state-block 已修复并通过实机，提交 <code>8bba4ae</code> 的 detached clean
-worktree 构建、部署 DLL 与 sidecar hash 已一致。卸载、session、userdata、GC/reset 和公共
-<code>jass.d3d</code> 仍未完成。
+worktree 构建、部署 DLL 与 sidecar hash 已一致；幂等安装/验证/卸载和 P1 原生 session 也已闭环。
 
-当前用户若要创建字体、文字或贴图，必须复制测试文件中的私有 <code>call(name, spec, ...)</code>，
-手工操作 <code>japi_ht</code> 并调用 <code>UnitId</code>。与此同时，
+2026-08-03 的 P2 实现新增正式 <code>jass.d3d</code> 模块、Font/Text/Texture 强类型 userdata、基础属性、
+显式幂等销毁、GC/<code>__close</code>、Font 强引用/依赖拒绝和显式 session shutdown。公共 SDK fixture
+不调用 hashtable、<code>UnitId</code> 或手写 spec，实机 7 组通过；与底层 bridge 合计后的完整日志为
+128/128（108 普通 + 6 SDK 功能 + 13 bridge + 1 shutdown），不是 D3D API 数。P3 asset/render queue、
+P4 Subscription、P5 自动地图/VM 生命周期与 device reset、P6 文档/最终验收仍未完成。
+
+当前 P2 用户已经可以只通过 <code>jass.d3d</code> 创建、修改和销毁基础字体、文字或贴图，不再需要复制
+私有 RPC helper。与此同时，
 <code>jass.message.texture_*</code> 又维护一套不参与真实渲染的逻辑矩形。两套入口的对象身份、事件和生命周期
 并不统一，且文字缺少主动销毁入口。这不是可以交付给地图作者的 API。
 
@@ -58,24 +63,24 @@ worktree 构建、部署 DLL 与 sidecar hash 已一致。卸载、session、use
 
 | 能力 | 当前状态 | SDK 闭环要求 |
 |---|---|---|
-| Lua 入口 | 测试文件私有 RPC helper | 正式 <code>jass.d3d</code> 模块 |
-| Lua 对象 | 返回裸整数 handle | 强类型 userdata，拒绝跨类和陈旧 handle |
-| 字体生命周期 | 可创建/销毁 | userdata 所有权、依赖检查、GC/会话清理 |
-| 文字生命周期 | 可创建，无 <code>DestroyText</code> bridge | 显式销毁、TTL 到期、GC、依赖释放 |
-| 贴图生命周期 | 全局 map 持有，设备 reset 时重载 | 会话所有权、状态机、失败原因、缓存释放 |
+| Lua 入口 | P2 已注册 <code>jass.d3d</code>；proxy 缺失时模块仍可加载并报告 unavailable | 补齐 Subscription、状态/错误与发布文档后作为唯一用户入口 |
+| Lua 对象 | Font/Text/Texture 已为强类型 userdata，校验 session/type/generation | 增加 Subscription；完成全部跨类、陈旧对象和失败路径矩阵 |
+| 字体生命周期 | 显式销毁、GC/<code>__close</code>、Text 强引用与依赖拒绝已通过 | 自动地图/VM 清理与 device reset 状态机 |
+| 文字生命周期 | 显式销毁、GC、依赖释放与基础属性已通过 | TTL 到期状态同步、跨类型队列、文字 alpha、自动会话清理 |
+| 贴图生命周期 | 会话所有权、基础属性、旋转几何命中、显式销毁/GC 已通过 | asset 状态/失败原因、Subscription、缓存释放和 reset |
 | 事件 | 真实贴图 JASS 事件和 <code>jass.message</code> 逻辑矩形并存 | 单一事件注册中心和单一 Texture 身份 |
 | 资源来源 | 主要依赖游戏目录文件 | MPQ asset URI、BLP/常用图片、开发文件模式 |
 | 错误语义 | 多数失败返回 0 或空值 | <code>nil, error</code>、参数错误、结构化诊断 |
 | device lost/reset | 释放/尝试重载 | 句柄稳定、状态迁移、失败可见、事件不重复 |
-| 会话结束 | 依赖进程退出 | 按 Lua VM/session 批量清理 |
+| 会话结束 | 显式 <code>d3d.shutdown()</code> 可幂等批量清理 SDK/bridge 混合资源 | Lua VM/地图自动关闭、同进程新会话和旧回调隔离 |
 | 渲染隔离 | 已修复一次状态泄漏 | 自动状态一致性计数 + 实机视觉回归 |
 | Handler 覆盖 | manifest 已固化 54 个名字和唯一 owner；fixture 触达 27/54，27 个未调用 | 继续为未测项补行为测试；未测项不能标为完成 |
 | 注册冲突 | D3D 已移除 5 个 canonical 重名注册，<code>ShowConsole</code> 真实显隐通过 | 后续边界必须明确命名/版本化，禁止依赖覆盖语义 |
 | 键码兼容 | <code>SetKeyboard</code> 与 message API 已共用唯一 <code>wark_to_vk</code> | 实现完成；发布前保留全键组静态/行为回归 |
 | SrcRect 兼容 | <code>(IHrect;)V</code> 与 <code>(I)Hrect;</code> 已按真实 handle ABI 实机往返 | 实现完成；保留兼容回归 |
 | 产物溯源 | 提交 <code>8bba4ae</code> 的干净构建、部署和 sidecar hash 已一致 | 后续每个发布提交继续执行同一 provenance 门禁 |
-| 安装后清理 | 已有安装和 sidecar 保护，尚无已验收的完整卸载 | proxy、探针、sidecar 幂等卸载并验证普通启动 |
-| 测试对象 | 直接测内部 bridge | 公共 SDK 合同、生命周期、重入和压力测试 |
+| 安装后清理 | proxy、探针、sidecar 的幂等安装/验证/卸载、未知文件保护和卸载后普通启动已通过 | 发布时继续执行同一 hash/provenance 门禁 |
+| 测试对象 | 公共 SDK 7 组与底层 bridge 13 组已分离；SDK fixture 无裸 RPC | 扩展 asset、事件、reset、同进程生命周期和 soak |
 
 ## 4. 核心设计原则
 
@@ -619,7 +624,7 @@ hash 均为 <code>CD3896606FE2F20861F34A1406457972F982D2A72ED8F4B9173606F4FCCF10
 |---|---|---|
 | P0（完成） | 审计阻断项：54-name manifest、禁止注册覆盖、WARK 键码、SrcRect 兼容、state-block 提交与干净产物溯源、卸载/会话清理合同 | manifest/注册/WARK/SrcRect/state-block、SUPPLY provenance 与真实游戏目录 DEPLOY 卸载/重装均已通过；STATUS 仍只写底层链路基本跑通 |
 | P1（完成） | 版本化 C ABI、session、generation ResourceManager | ABI/handle/session 原生合同及 1000 轮资源计数归零通过；自动地图结束钩子仍属于 P5 |
-| P2（下一步） | <code>jass.d3d</code> userdata 与 Font/Text/Texture 基础 API | 用户无需 RPC 即可创建、修改、销毁 |
+| P2（完成） | <code>jass.d3d</code> userdata 与 Font/Text/Texture 基础 API | 用户无需 RPC 即可创建、修改、销毁；公共 7 组实机通过 |
 | P3 | 统一 render queue、D3DXFont、asset URI/MPQ/BLP | 地图内资源可发布使用，文字 alpha 与跨类型 z 正确 |
 | P4 | Subscription 与统一输入事件 | 键盘、鼠标、enter/leave/click 全部走真实 Texture |
 | P5 | GC、TTL、session close、device lost/reset、错误诊断 | 生命周期矩阵和压力测试通过 |
@@ -627,16 +632,29 @@ hash 均为 <code>CD3896606FE2F20861F34A1406457972F982D2A72ED8F4B9173606F4FCCF10
 
 阶段不能跨越完成门槛。例如 P2 的对象能显示，不代表 P5 生命周期完成。
 
-P1 实际导出为 <code>GetD3DSdkApi</code> ABI v1。当前 capability 只声明 session、type/generation handle、
-资源计数和 legacy bridge 共用 registry；Font/Text/Texture 的创建/销毁、Font 依赖、last-error 与显式
-session 批量清理均通过 <code>d3d_sdk_contract_test.exe</code>，并完成 1000 轮三类资源创建/销毁后计数归零。
-该结果不包含 Lua userdata、属性全表、GC、事件或真实地图结束钩子，不能作为 P2/P5 或用户 SDK 完成证据。
+P1 实际导出为 <code>GetD3DSdkApi</code> ABI v1。P2 在不改变 v1 最小前缀的前提下追加
+<code>D3D_SDK_CAP_CORE_PROPERTIES</code> 和基础属性函数表；原生合同覆盖 ABI size/capability、全部基础属性、
+长字符串 buffer-too-small、旋转局部坐标命中、参数范围、Font 依赖、显式 session 清理及 1000 轮归零。
+Lua 层覆盖重复 require 的 session 稳定性、三类 userdata、Font 强引用、幂等销毁、use-after-destroy、GC、
+Font <code>__close</code> 和显式 shutdown。该结果仍不包含 Subscription、asset、统一 render queue、
+TTL/device reset、自动地图/VM 关闭或完整失败路径，不能作为 P3-P6 或用户 SDK 完成证据。
 
 P1 源码提交 <code>b3f4da8</code> 已从 detached clean worktree 完整构建。clean proxy SHA-256 为
 <code>8D7089B68B9028A05C1DB1DAFB70D95B7974049A707EAF91C358633772225035</code>，clean
 <code>yd_japi.dll</code> SHA-256 为
 <code>BEE52977457FFB3BD5DEC7B11F75B1CCF894134C5E0E61DD6170F5CEB4309D8B</code>；实际游戏目录 proxy 与
 sidecar 匹配该 hash，并使用同一 clean build 完成普通 108/108、D3D 121/121 与原生 ABI 合同测试。
+
+P2 工作区构建已通过普通 108/108、D3D 128/128 和原生 ABI 合同；提交态 detached clean worktree 的
+hash、部署和复验将在 P2 提交后记录，完成前不得把工作区 DLL 当作发布产物。
+
+### 14.1 P2 验收边界
+
+P2 已提供 API-02 的公共边界证据，并完成 API-01 中 Font/Text/Texture 部分；FONT-01、TEXT-01、TEX-02
+的属性往返已通过，但 Font 变更视觉、文字 alpha、asset 加载和统一 z 属于 P3。LIFE-01 的三类资源幂等销毁、
+LIFE-04、LIFE-07 以及 LIFE-09 的显式无事件资源清理已通过；LIFE-02 尚未穷举每个业务方法，LIFE-08 目前只
+实测 Font，LIFE-09/LIFE-12 仍缺自动地图/VM 与同进程新会话。EVENT-04 的旋转几何命中基元已通过，
+但在 P4 Subscription 分发完成前不能把 EVENT-04 标为完整事件验收。
 
 ## 15. 验收标准
 

@@ -543,17 +543,10 @@ void set_font_italic(font_handle_t h, bool value)
     }
 }
 
-static char g_font_facename_buf[256];
-
 const char* get_font_facename(font_handle_t h)
 {
     auto it = g_fonts.find(h);
-    if (it != g_fonts.end()) {
-        strncpy(g_font_facename_buf, it->second.faceName.c_str(), 255);
-        g_font_facename_buf[255] = '\0';
-        return g_font_facename_buf;
-    }
-    return "";
+    return it != g_fonts.end() ? it->second.faceName.c_str() : "";
 }
 
 void set_font_facename(font_handle_t h, const char* value)
@@ -590,17 +583,10 @@ void destroy_text(text_handle_t h)
     }
 }
 
-static char g_text_buf[4096];
-
 const char* get_text_string(text_handle_t h)
 {
     auto it = g_texts.find(h);
-    if (it != g_texts.end()) {
-        strncpy(g_text_buf, it->second.text.c_str(), 4095);
-        g_text_buf[4095] = '\0';
-        return g_text_buf;
-    }
-    return "";
+    return it != g_texts.end() ? it->second.text.c_str() : "";
 }
 
 void set_text_string(text_handle_t h, const char* str)
@@ -659,6 +645,45 @@ void set_text_color(text_handle_t h, uint32_t value)
     if (it != g_texts.end()) it->second.color = value;
 }
 
+bool get_text_visible(text_handle_t h)
+{
+    auto it = g_texts.find(h);
+    return it != g_texts.end() && it->second.visible;
+}
+
+void set_text_visible(text_handle_t h, bool value)
+{
+    auto it = g_texts.find(h);
+    if (it != g_texts.end()) it->second.visible = value;
+}
+
+int get_text_level(text_handle_t h)
+{
+    auto it = g_texts.find(h);
+    return it != g_texts.end() ? it->second.level : 0;
+}
+
+void set_text_level(text_handle_t h, int value)
+{
+    auto it = g_texts.find(h);
+    if (it != g_texts.end()) it->second.level = value;
+}
+
+font_handle_t get_text_font(text_handle_t h)
+{
+    auto it = g_texts.find(h);
+    return it != g_texts.end() ? it->second.font : 0;
+}
+
+bool set_text_font(text_handle_t h, font_handle_t font)
+{
+    auto text = g_texts.find(h);
+    if (text == g_texts.end()) return false;
+    if (!d3d9_resources::validate(font, d3d9_resources::ResourceType::Font)) return false;
+    text->second.font = font;
+    return true;
+}
+
 // ── Texture API ───────────────────────────────────────────────
 
 texture_handle_t create_texture(const char* path, float x, float y, float width, float height, uint32_t color, int level)
@@ -693,6 +718,12 @@ void destroy_texture(texture_handle_t h)
         g_textures.erase(it);
         d3d9_resources::release(h, d3d9_resources::ResourceType::Texture);
     }
+}
+
+bool get_font_italic(font_handle_t h)
+{
+    auto it = g_fonts.find(h);
+    return it != g_fonts.end() && it->second.italic;
 }
 
 float get_texture_x(texture_handle_t h)
@@ -791,6 +822,12 @@ float get_texture_pixel_height(texture_handle_t h)
     return it != g_textures.end() ? (float)it->second.pixelHeight : 0.0f;
 }
 
+const char* get_texture_source(texture_handle_t h)
+{
+    auto it = g_textures.find(h);
+    return it != g_textures.end() ? it->second.path.c_str() : "";
+}
+
 void set_texture(texture_handle_t h, const char* path)
 {
     auto it = g_textures.find(h);
@@ -806,10 +843,50 @@ void set_texture_show(texture_handle_t h, bool value)
     if (it != g_textures.end()) it->second.visible = value;
 }
 
+bool get_texture_show(texture_handle_t h)
+{
+    auto it = g_textures.find(h);
+    return it != g_textures.end() && it->second.visible;
+}
+
 void set_texture_trigger(texture_handle_t h, bool value)
 {
     auto it = g_textures.find(h);
     if (it != g_textures.end()) it->second.triggerEnabled = value;
+}
+
+bool get_texture_trigger(texture_handle_t h)
+{
+    auto it = g_textures.find(h);
+    return it != g_textures.end() && it->second.triggerEnabled;
+}
+
+bool texture_contains(texture_handle_t h, float x, float y)
+{
+    auto it = g_textures.find(h);
+    if (it == g_textures.end()) return false;
+    const TextureObj& obj = it->second;
+    if (!obj.visible || !obj.triggerEnabled) return false;
+
+    // Drawing rotates around the rectangle center. Apply the inverse rotation
+    // to the point so hit testing follows the rendered quad instead of its AABB.
+    const float center_x = obj.x + obj.width * 0.5f;
+    const float center_y = obj.y + obj.height * 0.5f;
+    float local_x = x - center_x;
+    float local_y = y - center_y;
+    if (obj.rotation != 0.0f) {
+        const float radians = -obj.rotation * static_cast<float>(M_PI) / 180.0f;
+        const float cosine = cosf(radians);
+        const float sine = sinf(radians);
+        const float rotated_x = local_x * cosine - local_y * sine;
+        const float rotated_y = local_x * sine + local_y * cosine;
+        local_x = rotated_x;
+        local_y = rotated_y;
+    }
+    const float half_width = std::fabs(obj.width) * 0.5f;
+    const float half_height = std::fabs(obj.height) * 0.5f;
+    return local_x >= -half_width && local_x < half_width
+        && local_y >= -half_height && local_y < half_height;
 }
 
 bool get_mouse_in_texture(texture_handle_t h)
@@ -818,12 +895,11 @@ bool get_mouse_in_texture(texture_handle_t h)
     if (it == g_textures.end()) return false;
 
     const TextureObj& obj = it->second;
-    if (!obj.visible || !obj.triggerEnabled || !obj.texture) return false;
+    if (!obj.texture) return false;
 
     const float mx = get_mouse_vector_x();
     const float my = get_mouse_vector_y();
-    return mx >= obj.x && mx < obj.x + obj.width &&
-           my >= obj.y && my < obj.y + obj.height;
+    return texture_contains(h, mx, my);
 }
 
 void get_texture_src_rect(texture_handle_t h, float* left, float* top, float* right, float* bottom)

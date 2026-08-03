@@ -49,6 +49,7 @@ struct TextObj {
     uint32_t     color     = 0xFFFFFFFF;  // ARGB
     font_handle_t font     = 0;
     bool         visible   = true;
+    int          level     = 0;
 };
 
 // ── Texture object ────────────────────────────────────────────
@@ -100,6 +101,7 @@ void          set_font_width(font_handle_t h, int value);
 int           get_font_weight(font_handle_t h);
 void          set_font_weight(font_handle_t h, int value);
 void          set_font_italic(font_handle_t h, bool value);
+bool          get_font_italic(font_handle_t h);
 const char*   get_font_facename(font_handle_t h);
 void          set_font_facename(font_handle_t h, const char* value);
 
@@ -116,6 +118,12 @@ float         get_text_time(text_handle_t h);
 void          set_text_time(text_handle_t h, float value);
 uint32_t      get_text_color(text_handle_t h);
 void          set_text_color(text_handle_t h, uint32_t value);
+bool          get_text_visible(text_handle_t h);
+void          set_text_visible(text_handle_t h, bool value);
+int           get_text_level(text_handle_t h);
+void          set_text_level(text_handle_t h, int value);
+font_handle_t get_text_font(text_handle_t h);
+bool          set_text_font(text_handle_t h, font_handle_t font);
 
 // ── Texture API ───────────────────────────────────────────────
 texture_handle_t create_texture(const char* path, float x, float y, float width, float height, uint32_t color, int level);
@@ -136,10 +144,14 @@ float            get_texture_rotation(texture_handle_t h);
 void             set_texture_rotation(texture_handle_t h, float value);
 float            get_texture_pixel_width(texture_handle_t h);
 float            get_texture_pixel_height(texture_handle_t h);
+const char*      get_texture_source(texture_handle_t h);
 void             set_texture(texture_handle_t h, const char* path);
+bool             get_texture_show(texture_handle_t h);
 void             set_texture_show(texture_handle_t h, bool value);
+bool             get_texture_trigger(texture_handle_t h);
 void             set_texture_trigger(texture_handle_t h, bool value);
 bool             get_mouse_in_texture(texture_handle_t h);
+bool             texture_contains(texture_handle_t h, float x, float y);
 
 // Source rect (texture cropping)
 // Returns: left, top, right, bottom via output params
