@@ -1,7 +1,7 @@
 # D3D Lua SDK 与完整生命周期设计
 
-> 状态：P0/P1 已闭环，P2 Font/Text/Texture 公共对象层已实现；P3 的统一 render queue、D3DXFont 与文字 alpha
-> 已实机通过，asset URI/MPQ 仍未完成；P4-P6 与完整生命周期待实现。
+> 状态：P0-P3 已闭环；Font/Text/Texture、统一 render queue、D3DXFont/文字 alpha、asset URI/MPQ 与
+> 加载失败合同已实机通过。P4-P6、Subscription 与完整生命周期待实现，整体仍是“SDK 开发中”。
 >
 > 本文是面向地图作者的 D3D Lua SDK 实现契约和验收标准。底层 proxy 的加载、转发、部署与历史验证仍见
 > [D3D-PROXY-DESIGN.md](D3D-PROXY-DESIGN.md)；项目当前完成度只以
@@ -25,15 +25,16 @@ worktree 构建、部署 DLL 与 sidecar hash 已一致；幂等安装/验证/�
 
 2026-08-03 的 P2 实现新增正式 <code>jass.d3d</code> 模块、Font/Text/Texture 强类型 userdata、基础属性、
 显式幂等销毁、GC/<code>__close</code>、Font 强引用/依赖拒绝和显式 session shutdown。公共 SDK fixture
-不调用 hashtable、<code>UnitId</code> 或手写 spec。P3 渲染子项随后将 Text 改为 D3DXFont ARGB 绘制，并将
-Text/Texture 按 <code>z</code> 与创建序放入同一队列。实机公共 SDK 7 组通过；与底层 bridge 合计后的完整日志为
-129/129（108 普通 + 7 SDK 功能 + 13 bridge + 1 shutdown），不是 D3D API 数。P3 asset、
-P4 Subscription、P5 自动地图/VM 生命周期与 device reset、P6 文档/最终验收仍未完成。
+不调用 hashtable、<code>UnitId</code> 或手写 spec。P3 随后将 Text 改为 D3DXFont ARGB 绘制，将 Text/Texture
+按 <code>z</code> 与创建序放入同一队列，并实现 <code>asset://</code>/<code>game://</code>、MPQ 内存读取、
+BLP1/常用图片解码、共享 CPU cache、reload 与稳定失败合同。实机公共 SDK 功能 8 组通过；与底层 bridge
+合计后的完整日志为 130/130（108 普通 + 8 SDK 功能 + 13 bridge + 1 shutdown），不是 D3D API 数。
+P4 Subscription、P5 自动地图/VM 生命周期与完整 device reset、P6 文档/最终验收仍未完成。
 
-当前用户已经可以只通过 <code>jass.d3d</code> 创建、修改和销毁基础字体、文字或贴图，不再需要复制
-私有 RPC helper。与此同时，<code>jass.message.texture_*</code> 又维护一套不参与真实渲染的逻辑矩形；两套入口
-的对象身份、事件和生命周期并不统一，地图内 asset 和自动 session/device 生命周期也未闭环。因此仍不能把
-整个 SDK 标记为可交付。
+当前用户已经可以只通过 <code>jass.d3d</code> 创建、修改和销毁字体、文字或 MPQ/游戏资源贴图，不再需要复制
+私有 RPC helper，也不依赖开发机绝对路径。与此同时，<code>jass.message.texture_*</code> 又维护一套不参与真实
+渲染的逻辑矩形；两套入口的对象身份、事件和生命周期并不统一，自动 session/device 生命周期也未闭环。因此
+仍不能把整个 SDK 标记为可交付。
 
 本阶段的目标不是再增加几个 bridge handler，而是交付一个稳定、可诊断、可清理、可写进用户文档的
 <code>jass.d3d</code> SDK。只有本文第 15 节的所有完成门槛同时满足后，D3D Lua SDK 才能标记为“可用”。
@@ -68,11 +69,11 @@ P4 Subscription、P5 自动地图/VM 生命周期与 device reset、P6 文档/�
 | Lua 入口 | P2 已注册 <code>jass.d3d</code>；proxy 缺失时模块仍可加载并报告 unavailable | 补齐 Subscription、状态/错误与发布文档后作为唯一用户入口 |
 | Lua 对象 | Font/Text/Texture 已为强类型 userdata，校验 session/type/generation | 增加 Subscription；完成全部跨类、陈旧对象和失败路径矩阵 |
 | 字体生命周期 | 显式销毁、GC/<code>__close</code>、Text 强引用与依赖拒绝已通过 | 自动地图/VM 清理与 device reset 状态机 |
-| 文字生命周期 | 显式销毁、GC、依赖释放与基础属性已通过 | TTL 到期状态同步、跨类型队列、文字 alpha、自动会话清理 |
-| 贴图生命周期 | 会话所有权、基础属性、旋转几何命中、显式销毁/GC 已通过 | asset 状态/失败原因、Subscription、缓存释放和 reset |
+| 文字生命周期 | 显式销毁、GC、依赖释放、基础属性、跨类型队列和文字 alpha 已通过 | TTL 到期状态同步、自动会话清理与完整 device 状态诊断 |
+| 贴图生命周期 | 会话所有权、基础属性、旋转几何命中、显式销毁/GC、MPQ asset、reload、失败换源保留旧对象和 cache 释放已通过 | Subscription、完整状态/失败原因模型和真实 device reset 矩阵 |
 | 事件 | 真实贴图 JASS 事件和 <code>jass.message</code> 逻辑矩形并存 | 单一事件注册中心和单一 Texture 身份 |
-| 资源来源 | 主要依赖游戏目录文件 | MPQ asset URI、BLP/常用图片、开发文件模式 |
-| 错误语义 | 多数失败返回 0 或空值 | <code>nil, error</code>、参数错误、结构化诊断 |
+| 资源来源 | <code>asset://</code> 当前地图、<code>game://</code> 游戏搜索链与无 scheme 相对路径已从内存加载；<code>file://</code> 默认拒绝 | 发布文档明确边界；是否提供受控开发文件模式留到 P6 决策 |
+| 错误语义 | Asset 缺失/损坏/拒绝 URI 已有稳定 <code>nil, error</code>，失败不泄漏；其他公开面仍不完整 | 统一参数错误、对象状态和结构化诊断 |
 | device lost/reset | 释放/尝试重载 | 句柄稳定、状态迁移、失败可见、事件不重复 |
 | 会话结束 | 显式 <code>d3d.shutdown()</code> 可幂等批量清理 SDK/bridge 混合资源 | Lua VM/地图自动关闭、同进程新会话和旧回调隔离 |
 | 渲染隔离 | 已修复一次状态泄漏 | 自动状态一致性计数 + 实机视觉回归 |
@@ -80,9 +81,9 @@ P4 Subscription、P5 自动地图/VM 生命周期与 device reset、P6 文档/�
 | 注册冲突 | D3D 已移除 5 个 canonical 重名注册，<code>ShowConsole</code> 真实显隐通过 | 后续边界必须明确命名/版本化，禁止依赖覆盖语义 |
 | 键码兼容 | <code>SetKeyboard</code> 与 message API 已共用唯一 <code>wark_to_vk</code> | 实现完成；发布前保留全键组静态/行为回归 |
 | SrcRect 兼容 | <code>(IHrect;)V</code> 与 <code>(I)Hrect;</code> 已按真实 handle ABI 实机往返 | 实现完成；保留兼容回归 |
-| 产物溯源 | 提交 <code>8bba4ae</code> 的干净构建、部署和 sidecar hash 已一致 | 后续每个发布提交继续执行同一 provenance 门禁 |
+| 产物溯源 | P3 提交 <code>5dbcfd4</code> 的干净构建、部署和 sidecar hash 已一致 | 后续每个发布提交继续执行同一 provenance 门禁 |
 | 安装后清理 | proxy、探针、sidecar 的幂等安装/验证/卸载、未知文件保护和卸载后普通启动已通过 | 发布时继续执行同一 hash/provenance 门禁 |
-| 测试对象 | 公共 SDK 7 组与底层 bridge 13 组已分离；SDK fixture 无裸 RPC | 扩展 asset、事件、reset、同进程生命周期和 soak |
+| 测试对象 | 公共 SDK 功能 8 组、底层 bridge 13 组与 shutdown 1 组已分离；SDK fixture 无裸 RPC，asset 已覆盖 | 扩展事件、reset、同进程生命周期和 soak |
 
 ## 4. 核心设计原则
 
@@ -627,7 +628,7 @@ hash 均为 <code>CD3896606FE2F20861F34A1406457972F982D2A72ED8F4B9173606F4FCCF10
 | P0（完成） | 审计阻断项：54-name manifest、禁止注册覆盖、WARK 键码、SrcRect 兼容、state-block 提交与干净产物溯源、卸载/会话清理合同 | manifest/注册/WARK/SrcRect/state-block、SUPPLY provenance 与真实游戏目录 DEPLOY 卸载/重装均已通过；STATUS 仍只写底层链路基本跑通 |
 | P1（完成） | 版本化 C ABI、session、generation ResourceManager | ABI/handle/session 原生合同及 1000 轮资源计数归零通过；自动地图结束钩子仍属于 P5 |
 | P2（完成） | <code>jass.d3d</code> userdata 与 Font/Text/Texture 基础 API | 用户无需 RPC 即可创建、修改、销毁；公共 7 组实机通过 |
-| P3（进行中） | 统一 render queue、D3DXFont、asset URI/MPQ/BLP | render queue/D3DXFont/文字 alpha 已实机通过；地图内 asset 与失败合同完成后才结束 P3 |
+| P3（完成） | 统一 render queue、D3DXFont、asset URI/MPQ/BLP | alpha/z、地图内 PNG/BLP1、游戏 BLP、共享 cache、reload、失败合同、clean provenance 与真实窗口均通过 |
 | P4 | Subscription 与统一输入事件 | 键盘、鼠标、enter/leave/click 全部走真实 Texture |
 | P5 | GC、TTL、session close、device lost/reset、错误诊断 | 生命周期矩阵和压力测试通过 |
 | P6 | 安装/验证/卸载、迁移、API 文档、最终实机验收 | 第 15 节全部通过并记录证据 |
@@ -638,9 +639,10 @@ P1 实际导出为 <code>GetD3DSdkApi</code> ABI v1。P2 在不改变 v1 最小�
 <code>D3D_SDK_CAP_CORE_PROPERTIES</code> 和基础属性函数表；原生合同覆盖 ABI size/capability、全部基础属性、
 长字符串 buffer-too-small、旋转局部坐标命中、参数范围、Font 依赖、显式 session 清理及 1000 轮归零。
 Lua 层覆盖重复 require 的 session 稳定性、三类 userdata、Font 强引用、幂等销毁、use-after-destroy、GC、
-Font <code>__close</code> 和显式 shutdown。P3 渲染子项还新增 <code>text_alpha</code>、
-<code>unified_render_queue</code> capability 与专用视觉面板。该结果仍不包含 Subscription、asset、
-TTL/device reset、自动地图/VM 关闭或完整失败路径，不能作为完整 P3-P6 或用户 SDK 完成证据。
+Font <code>__close</code> 和显式 shutdown。P3 新增 <code>text_alpha</code>、<code>unified_render_queue</code>、
+<code>asset_memory</code> capability、专用视觉面板、asset URI/MPQ、共享 cache 和加载失败套件。该结果仍不包含
+Subscription、TTL、完整 device reset、自动地图/VM 关闭或全部 P5 失败路径，不能作为完整 P4-P6 或用户 SDK
+完成证据。
 
 P1 源码提交 <code>b3f4da8</code> 已从 detached clean worktree 完整构建。clean proxy SHA-256 为
 <code>8D7089B68B9028A05C1DB1DAFB70D95B7974049A707EAF91C358633772225035</code>，clean
@@ -673,9 +675,9 @@ P3 渲染实现不再使用 GDI backbuffer `DrawText` 绘制 SDK Text。Proxy �
 Texture draw 前重新建立 fixed-function alpha 状态，整个 overlay 仍处于 `D3DSBT_ALL` 捕获/恢复范围。
 
 当前工作区 Win32 Release 构建、ABI/1000 轮合同和 handler 合同均通过；普通回归为 108/108，
-`-InteractiveD3D -NoKill` 为累计 129/129。专用面板的同 z 创建序为 low Text → opaque Texture →
+当时的 `-InteractiveD3D -NoKill` 为累计 129/129。专用面板的同 z 创建序为 low Text → opaque Texture →
 high Text，真实窗口只显示 high Text；100% 与 50% 文字透明度有明确视觉差异，0% 文字不可见。该证据完成
-LAYER-01 和文字侧 COLOR-01；贴图 alpha 的既有真实渲染仍保留，但 P3 只有在 asset/失败合同完成后才能结束。
+LAYER-01 和文字侧 COLOR-01；贴图 alpha 的既有真实渲染仍保留。P3 的 asset/失败合同见下一节。
 
 源码提交 <code>49dccfc</code> 已从 detached clean worktree 以 vcvars32 + CMake Visual Studio 2022 Win32
 Release 完整构建；构建前 HEAD 精确指向该提交且 tracked diff 为零，构建后仅有
@@ -686,6 +688,44 @@ Release 完整构建；构建前 HEAD 精确指向该提交且 tracked diff 为�
 clean DLL：ABI/1000 轮合同、handler 合同、普通 108/108、D3D 129/129 与上述 alpha/z 真实视觉均通过；
 游戏目录 proxy 和 sidecar 回读均等于 clean proxy hash。发布候选副本保存在忽略目录
 <code>build/d3d/49dccfc-newD3d9.dll</code> 与 <code>build/d3d/49dccfc-yd_japi.dll</code>。
+
+### 14.3 P3 Asset 验收边界
+
+P3 的公开 Texture 边界不再把地图路径传给 D3DX 文件 API。Lua binding 先规范化 URI，再通过 Storm 从 MPQ/
+游戏资源搜索链读取字节；字节传入 ABI v1 尾部新增的 <code>create_texture_from_memory</code> 或
+<code>set_texture_source_memory</code>，调用返回前由 proxy 同步复制，不跨 DLL 转移缓冲区所有权。能力位为
+<code>D3D_SDK_CAP_ASSET_MEMORY</code>。
+
+URI 与资源合同如下：
+
+- 无 scheme 的相对路径规范化为 <code>asset://</code>，只搜索当前地图；<code>game://</code> 搜索游戏资源链。
+- 统一斜杠并折叠空段/<code>.</code>；拒绝空路径、NUL、绝对路径、盘符/冒号和 <code>..</code>。
+- <code>file://</code> 默认拒绝；错误只包含规范化或被拒绝的 URI，不泄漏系统路径。
+- 标准 BMP/PNG/JPG/TGA/DDS 从内存交给 D3DX；BLP1 JPEG/调色板与 alpha 子类型由内存解码器处理。
+- BLP2 palette、DXT1/DXT3/DXT5/raw 子集已有结构化实现和严格边界校验；目标 1.27a 的本轮真实资源验收只覆盖
+  BLP1，因此不把 BLP2 表述为实机完成。
+
+Proxy 以“规范化 URI + size + 内容 hash”为 key 保存弱引用共享 CPU 字节。Texture 保留重建设备资源所需的
+字节，device reset 时 handle 不变并从这些字节重建 GPU texture；最后一个引用销毁或 session 结束后 cache
+回收。构造只在完整解码成功后分配公开 handle；失败换源先构造候选，失败时保留旧 source/texture。内存不足、
+格式错误和内部异常都转换为稳定结果码，不留下 handle、GPU 对象或 cache entry。
+
+公共 fixture 的真实资源证据包括：打包时仅为 <code>-InteractiveD3D</code> 注入的 16×16 棋盘 PNG；地图已有的
+<code>asset://war3mapMap.blp</code>（BLP1，256×256）；以及
+<code>game://ReplaceableTextures/CommandButtons/BTNFootman.blp</code>。缺失、损坏、路径穿越和禁用
+<code>file://</code> 均返回精确稳定错误；重复源共享 cache，失败加载不增加资源/cache 计数，销毁后恢复基线，
+失败的 <code>set_source</code> 保留旧资源。该证据完成 TEX-01 和 TEX-03；TEX-02 的属性往返继续由既有公共测试覆盖。
+
+P3 源码提交 <code>5dbcfd4</code> 已从 HEAD 精确一致且 tracked diff 为零的 detached clean worktree，以
+vcvars32 + CMake Visual Studio 2022 Win32 Release 构建。Clean proxy SHA-256 为
+<code>CE3775261DDAE7DF1A6B6820E78EC47F8D7D9506E9368F4DD74084F0102BD13E</code>，clean
+<code>yd_japi.dll</code> SHA-256 为
+<code>8E5D7B18E18DC0667C33EF8C2025C39FA09CB45A6F7EE50AB592EED7D44E5AF4</code>。两份 clean DLL 显式部署后，
+ABI/1000 轮合同、handler 合同、普通 108/108、公共 SDK 功能 8 组、底层 bridge 13 组、shutdown 1 组以及真实
+PNG/alpha/z/鼠标/Shift 验收全部通过，累计 130/130；游戏目录 proxy 与 sidecar 回读均等于 clean proxy hash。
+发布候选副本保存在忽略目录 <code>build/d3d/5dbcfd4-newD3d9.dll</code> 与
+<code>build/d3d/5dbcfd4-yd_japi.dll</code>。这完成 P3，但不替代 P4 Subscription、P5 自动 session/device 生命周期
+和 P6 文档/最终验收。
 
 ## 15. 验收标准
 
@@ -700,7 +740,7 @@ clean DLL：ABI/1000 轮合同、handler 合同、普通 108/108、D3D 129/129 �
 | API-01 | Lua 注册 | <code>require "jass.d3d"</code> 成功，返回的类和方法完整 |
 | API-02 | 公共边界 | SDK 功能测试中不存在 <code>UnitId</code>、<code>japi_ht</code> 或手写 spec |
 | COVER-01 | Handler manifest | 54 个兼容名字均有唯一 owner、准确签名、分类、实现状态和稳定测试 ID；未测项不能标为完成 |
-| COVER-02 | 统计语义 | 报告分别列累计测试数、D3D fixture 测试数和 handler 覆盖数，禁止把 121/121 表述为 D3D API 数 |
+| COVER-02 | 统计语义 | 报告分别列累计测试数、D3D fixture 测试数和 handler 覆盖数，禁止把当前 130/130 表述为 D3D API 数 |
 | COMPAT-01 | 注册冲突 | D3D 初始化不覆盖 canonical <code>ShowConsole</code>/<code>ShowFpsText</code>/<code>SetKeyboard</code>；重复名字默认拒绝并记录 owner |
 | COMPAT-02 | WARK 键码 | <code>SetKeyboard</code> 与 message API 共用唯一 WARK→VK 映射；修饰键、方向键、F 键、OEM、数字键盘和无效码均通过 |
 | COMPAT-03 | SrcRect JASS ABI | <code>SetTextureSrcRect(IHrect;)V</code> 与 <code>GetTextureSrcRect(I)Hrect;</code> 按内置 wrapper 往返，旧四浮点实现不占用同名入口 |
