@@ -93,13 +93,13 @@ hashtable + `UnitId` RPC。`jass.message.texture_*` 仍是另一套逻辑命中�
 | `LocalPointOrder` | bridge ABI 调用安全；真实前台 Q 键进入 `message.hook`（code 81），共享 submit 提交 `blizzard` 点命令并返回 `true`；`EVENT_UNIT_SPELL_EFFECT` 触发且技能 id 为 `AHbz`；清理诊断代码并重编译后交互套件为 `109/0/109` | **完成**；普通右键移动走 smart-click 包，不是该 API 的 point-order 契约，详见逆向记录 08 §7.3 |
 | `GetTargetObject` | `-InteractiveUi` 固定镜头创建敌方城镇大厅；真实鼠标点击/悬停后返回 handle `1050778`，与夹具 handle `1050778` 精确一致 | **完成** |
 | `SetUnitAbilityButtonShow` | 大法师 `AHbz` 命令卡槽从显示 `(0,2)` 变为隐藏 `nil,nil`，10 秒后自动恢复 `(0,2)`；真实窗口截图同时确认紫色暴风雪图标消失，交互套件为 `110/0/110` | **完成** |
-| D3D proxy 加载/注册/部署 | PE 导出包含未修饰的 `Direct3DCreate9`、`InitializeD3DAPI`，且 proxy 不导入自身 `d3d9.dll`；`yd_japi` 在进程内完成 handler 注册；部署以 sidecar SHA-256 保护未知文件；实测状态位达到 `0x7F` | **运行链基本跑通**；提交态产物溯源已闭环，卸载与会话清理未闭环 |
+| D3D proxy 加载/注册/部署 | PE 导出包含未修饰的 `Direct3DCreate9`、`InitializeD3DAPI`，且 proxy 不导入自身 `d3d9.dll`；`yd_japi` 在进程内完成 handler 注册；`d3d-proxy.ps1` 以 sidecar SHA-256 保护安装、验证和卸载；实测状态位达到 `0x7F` | **运行链基本跑通**；提交态产物溯源与 proxy 部署生命周期已闭环，会话资源清理未闭环 |
 | D3D bridge 字体/文字/贴图与命中 | 字体和文字属性、JASS string ABI、贴图尺寸/像素尺寸、trigger 开关均通过；真实 War3 窗口显示标题和高对比棋盘，鼠标移入/移出命中正确 | **已选底层子链通过；不是完整 bridge 或用户 SDK** |
 | D3D bridge `TextureAddEvent` / `TextureRemoveEvent` | `SetHeroLevels(C)V` 捕获 code；事件保留独立按下/弹起 JASS timer；回调中 `GetExpiredTimer()` 对应父键的 `0xFE–0x101` 上下文全部命中；真实鼠标位于贴图内时按下/弹起 Shift，并在回调内移除事件；累计套件为 `121/0/121` | **底层 JASS 输入回调链跑通；Lua 事件未闭环** |
 | D3D handler 合同与覆盖 | manifest 固化 54 个名字、49 个 proxy owner、5 个 canonical owner；验证器通过；fixture 触达 27/54，未触达 27 个；`121/121` 是累计测试总数 | **结构合同完成，行为覆盖未完成**；未测项不得视为已完成 |
 | D3D P0 兼容性 | D3D 不再注册 5 个 canonical 重名；`ShowConsole` 真实显隐通过；`SetKeyboard` 共用 WARK→VK；SrcRect Hrect getter/setter 实机往返通过 | **本批修复完成**；后续新增实现必须使用明确命名/版本化边界，不依赖覆盖 |
 | D3D 渲染隔离与产物溯源 | 完整 state-block 修复经真实窗口确认并提交为 `8bba4ae`；从 detached clean worktree 构建、实际部署 DLL 与 proxy sidecar 均为 `CD3896606FE2F20861F34A1406457972F982D2A72ED8F4B9173606F4FCCF101C`，普通与 D3D 实机均使用该提交态 DLL 通过 | **本批完成**；主工作区仍保留用户的非 D3D 修改，不影响该 detached commit 的 provenance |
-| D3D 卸载与会话清理 | 当前安装有 proxy、视觉探针及各自 sidecar；设计已有 session close，但无已验收的完整卸载/地图切换/VM 关闭清理闭环 | **未完成**；必须纳入 SDK 完整生命周期验收 |
+| D3D 卸载与会话清理 | 独立工具已在隔离目录验证幂等安装/验证/卸载、未知文件保护，并在真实游戏目录完成卸载→再次卸载→未安装验证→普通 108/108→从干净提交产物重装→hash 验证；当前仍无真实地图切换/VM 关闭资源清理钩子 | **部署生命周期完成，会话生命周期未完成**；不能据此宣称 SDK 可用 |
 | D3D Lua SDK | 无 `require "jass.d3d"`、强类型对象、完整销毁、GC/session/device reset、统一事件和 MPQ asset 合同；现有 D3D 测试直接调用内部 RPC | **未完成**；必须通过 [SDK 设计 §15](planning/D3D-LUA-SDK-DESIGN.md#15-验收标准) 的全部稳定验收 ID |
 | 默认空白地图 | `reference/empty-map/` 的对象层为 0 个 doodad、0 个预放单位（仅保留起始点）；无 Melee 初始化；`Hrif` 继承英雄类型并在运行时设为 10 级；真实窗口确认中央仅 1 个英雄火枪手；普通 `108/108`、D3D `121/121` | **完成并设为默认** |
 | D3D 后续主线 | 公共 `jass.d3d`、session/generation、资源销毁与 GC、device reset、鼠标按钮/enter/leave/click、MPQ BLP、统一 z-order、卸载和压力验证均纳入 SDK 设计 | **未完成，属于当前主线而非可选项** |
@@ -147,8 +147,8 @@ D3D proxy 实机回归（鼠标移入棋盘后按一次 Shift，再移到棋盘�
 
 ## 5. 下一阶段顺序
 
-1. 实现并验收 proxy/探针/sidecar 幂等卸载，以及卸载后的普通启动和再次安装；补齐 Lua VM/地图 session 清理入口。
-2. 按 P1–P6 实现 `jass.d3d`、版本化 C ABI、session/generation resource manager、MPQ asset、统一事件和 device lost/reset/GC 清理。
+1. 补齐 Lua VM/地图 session 清理入口，并通过同进程新会话验证旧 handle 与旧回调失效。
+2. 按 P1–P6 实现 `jass.d3d`、版本化 C ABI、session/generation resource manager、MPQ asset、统一事件和 device lost/reset/GC 清理；proxy/探针/sidecar 的独立部署生命周期已完成，不再重复实现。
 3. 只有 SDK 设计 §15 的全部稳定验收 ID 通过后，才能把 D3D 从“底层链路基本跑通”升级为“用户 SDK 可用”。
 4. 之后再评估 JASS wrapper 自动生成和 SaveFunc/func_bind。
 

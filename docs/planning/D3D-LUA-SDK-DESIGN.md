@@ -617,8 +617,8 @@ hash 均为 <code>CD3896606FE2F20861F34A1406457972F982D2A72ED8F4B9173606F4FCCF10
 
 | 阶段 | 内容 | 阶段完成条件 |
 |---|---|---|
-| P0（进行中） | 审计阻断项：54-name manifest、禁止注册覆盖、WARK 键码、SrcRect 兼容、state-block 提交与干净产物溯源、卸载/会话清理合同 | manifest/注册/WARK/SrcRect/state-block 与 SUPPLY provenance 已实机通过；仍需 DEPLOY 卸载闭环；STATUS 仍只写底层链路基本跑通 |
-| P1 | 版本化 C ABI、session、generation ResourceManager | ABI/handle/session 单元测试通过 |
+| P0（完成） | 审计阻断项：54-name manifest、禁止注册覆盖、WARK 键码、SrcRect 兼容、state-block 提交与干净产物溯源、卸载/会话清理合同 | manifest/注册/WARK/SrcRect/state-block、SUPPLY provenance 与真实游戏目录 DEPLOY 卸载/重装均已通过；STATUS 仍只写底层链路基本跑通 |
+| P1（进行中） | 版本化 C ABI、session、generation ResourceManager | ABI/handle/session 单元测试通过 |
 | P2 | <code>jass.d3d</code> userdata 与 Font/Text/Texture 基础 API | 用户无需 RPC 即可创建、修改、销毁 |
 | P3 | 统一 render queue、D3DXFont、asset URI/MPQ/BLP | 地图内资源可发布使用，文字 alpha 与跨类型 z 正确 |
 | P4 | Subscription 与统一输入事件 | 键盘、鼠标、enter/leave/click 全部走真实 Texture |
