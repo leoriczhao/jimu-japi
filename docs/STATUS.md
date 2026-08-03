@@ -101,7 +101,7 @@ device reset 状态机、自动地图/VM session close 和同进程新地图验�
 | D3D bridge `TextureAddEvent` / `TextureRemoveEvent` | `SetHeroLevels(C)V` 捕获 code；事件保留独立按下/弹起 JASS timer；回调中 `GetExpiredTimer()` 对应父键的 `0xFE–0x101` 上下文全部命中；真实鼠标位于贴图内时按下/弹起 Shift，并在回调内移除事件；该底层 fixture 为 13 组 | **底层 JASS 输入回调链跑通；Lua Subscription 未闭环** |
 | D3D handler 合同与覆盖 | manifest 固化 54 个名字、49 个 proxy owner、5 个 canonical owner；验证器通过；底层 fixture 触达 27/54，未触达 27 个；`128/128` 是累计测试总数 | **结构合同完成，行为覆盖未完成**；未测项不得视为已完成 |
 | D3D P0 兼容性 | D3D 不再注册 5 个 canonical 重名；`ShowConsole` 真实显隐通过；`SetKeyboard` 共用 WARK→VK；SrcRect Hrect getter/setter 实机往返通过 | **本批修复完成**；后续新增实现必须使用明确命名/版本化边界，不依赖覆盖 |
-| D3D 渲染隔离与产物溯源 | state-block 修复提交为 `8bba4ae`；P1 源码提交 `b3f4da8` 再次从 detached clean worktree 构建并实际部署，proxy 与 sidecar hash 为 `8D7089B68B9028A05C1DB1DAFB70D95B7974049A707EAF91C358633772225035`，clean `yd_japi.dll` hash 为 `BEE52977457FFB3BD5DEC7B11F75B1CCF894134C5E0E61DD6170F5CEB4309D8B`；同一 clean build 通过普通 108/108、D3D 121/121 和原生 ABI 合同 | **P1 提交态产物闭环完成**；主工作区仍保留用户的非 D3D 修改，不影响 detached commit provenance |
+| D3D 渲染隔离与产物溯源 | state-block 修复提交为 `8bba4ae`；P2 源码提交 `50ebb0f` 从 detached clean worktree 以 Win32 Release 完整构建并实际部署。clean proxy、游戏目录 proxy 与 sidecar hash 均为 `C40D1111694EA607B69DFECD36A9D8669170F3B262C194C706311C3E1AA16FF1`；clean `yd_japi.dll` hash 为 `BA34B6E0D615C5797854D81E788A23F7547E897A7913E00FCEBCFAF5A5F2A9C0`；同一 clean build 通过 ABI/1000 轮合同、普通 108/108、D3D 128/128 与真实视觉/鼠标/Shift | **P2 提交态产物闭环完成**；主工作区的非 D3D 修改未进入 detached commit |
 | D3D 卸载与会话清理 | 独立工具已在隔离目录验证幂等安装/验证/卸载、未知文件保护，并在真实游戏目录完成卸载→再次卸载→未安装验证→普通 108/108→从干净提交产物重装→hash 验证；原生 ABI 的显式 `end_session` 已验证三类资源批量归零和同进程旧 handle 失效，但仍无真实地图切换/VM 关闭钩子 | **部署生命周期与显式 native session 完成，自动会话生命周期未完成**；不能据此宣称 SDK 可用 |
 | D3D Lua SDK | `require "jass.d3d"` 返回 Font/Text/Texture 类；基础属性、任意长度字符串、旋转局部坐标命中、强类型/代际 handle、Font 强引用与依赖拒绝、三类幂等销毁、use-after-destroy、GC、Font `__close`、重复 require 的 session 稳定性和显式 shutdown 已通过公共 fixture；fixture 源码不调用裸 RPC | **P2 基础对象层完成，SDK 仍在开发**；Subscription、asset、统一渲染、完整生命周期/device 和文档门槛仍未完成 |
 | 默认空白地图 | `reference/empty-map/` 的对象层为 0 个 doodad、0 个预放单位（仅保留起始点）；无 Melee 初始化；`Hrif` 继承英雄类型并在运行时设为 10 级；真实窗口确认中央仅 1 个英雄火枪手；普通 `108/108`、D3D `128/128` | **完成并设为默认** |
@@ -158,6 +158,12 @@ P1 原生 ABI/session 合同（不启动 War3）：
 成功条件包括 ABI version/size/capability 协商、错误版本拒绝、session 隔离、三类 type/generation handle、
 Font 依赖、全部 P2 基础属性、长字符串 size/buffer 合同、旋转命中、数值校验、显式 session 批量清理、
 旧 handle 跨 session 失效、last-error 和 1000 轮生命周期后资源计数归零。
+
+P2 发布候选产物保存在忽略目录 `build\d3d\50ebb0f-newD3d9.dll` 与
+`build\d3d\50ebb0f-yd_japi.dll`。`src\build.bat` 当前固定切换到主工作区路径，不能直接作为 detached
+worktree 的 provenance 命令；本次 clean 构建因此在该 worktree 内使用等价的 MSVC Win32
+`cmake -S . -B build-clean` / `cmake --build build-clean --config Release`，且在构建前确认 HEAD 为
+`50ebb0f`、tracked diff 为零。
 
 ## 5. 下一阶段顺序
 

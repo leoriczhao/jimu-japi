@@ -645,8 +645,14 @@ P1 源码提交 <code>b3f4da8</code> 已从 detached clean worktree 完整构建
 <code>BEE52977457FFB3BD5DEC7B11F75B1CCF894134C5E0E61DD6170F5CEB4309D8B</code>；实际游戏目录 proxy 与
 sidecar 匹配该 hash，并使用同一 clean build 完成普通 108/108、D3D 121/121 与原生 ABI 合同测试。
 
-P2 工作区构建已通过普通 108/108、D3D 128/128 和原生 ABI 合同；提交态 detached clean worktree 的
-hash、部署和复验将在 P2 提交后记录，完成前不得把工作区 DLL 当作发布产物。
+P2 源码提交 <code>50ebb0f</code> 已从 detached clean worktree 以 Win32 Release 完整构建。clean proxy
+SHA-256 为 <code>C40D1111694EA607B69DFECD36A9D8669170F3B262C194C706311C3E1AA16FF1</code>，clean
+<code>yd_japi.dll</code> SHA-256 为
+<code>BA34B6E0D615C5797854D81E788A23F7547E897A7913E00FCEBCFAF5A5F2A9C0</code>。游戏目录 proxy 与
+sidecar 回读为同一 hash；部署显式使用该 clean <code>yd_japi.dll</code>，并通过 ABI/1000 轮合同、普通
+108/108、D3D 128/128 和真实视觉/鼠标/Shift 验收。构建前 tracked diff 为零；构建后仅存在生成的
+<code>src/build-clean/</code>。由于仓库 <code>src/build.bat</code> 固定切换到主工作区绝对路径，本次 detached
+构建使用同一 vcvars32 环境下的等价 CMake <code>-S/-B</code> 命令，未把脚本误构建的主目录产物计入证据。
 
 ### 14.1 P2 验收边界
 
