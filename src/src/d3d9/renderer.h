@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <memory>
+#include <cstddef>
 #include <cstdint>
 
 #include "resource_manager.h"
@@ -60,6 +62,7 @@ struct TextObj {
 // ── Texture object ────────────────────────────────────────────
 struct TextureObj {
     std::string          path;
+    std::shared_ptr<const std::vector<uint8_t>> sourceData;
     IDirect3DTexture9*   texture    = nullptr;
     float                x          = 0.0f;
     float                y          = 0.0f;
@@ -83,6 +86,19 @@ struct TextureObj {
     int                  pixelHeight = 0;
 };
 
+enum class TextureMemoryResult {
+    Ok,
+    InvalidData,
+    DeviceNotReady,
+    DecodeFailed,
+    CapacityExceeded,
+};
+
+struct AssetCacheCounts {
+    uint32_t entries = 0;
+    uint64_t bytes = 0;
+};
+
 // ── Lifecycle (called from CDirect3DDevice9) ──────────────────
 void on_device_created(IDirect3DDevice9* pDevice);
 void on_device_lost();
@@ -95,6 +111,7 @@ uint32_t begin_session();
 bool     end_session(uint32_t session);
 bool     is_device_ready();
 d3d9_resources::ResourceCounts resource_counts();
+AssetCacheCounts asset_cache_counts();
 
 // ── Font API ──────────────────────────────────────────────────
 font_handle_t create_font();
@@ -133,6 +150,10 @@ bool          set_text_font(text_handle_t h, font_handle_t font);
 
 // ── Texture API ───────────────────────────────────────────────
 texture_handle_t create_texture(const char* path, float x, float y, float width, float height, uint32_t color, int level);
+TextureMemoryResult create_texture_from_memory(
+    const char* source, const void* data, size_t size,
+    float x, float y, float width, float height, uint32_t color, int level,
+    texture_handle_t* out_handle);
 void             destroy_texture(texture_handle_t h);
 float            get_texture_x(texture_handle_t h);
 void             set_texture_x(texture_handle_t h, float value);
@@ -152,6 +173,8 @@ float            get_texture_pixel_width(texture_handle_t h);
 float            get_texture_pixel_height(texture_handle_t h);
 const char*      get_texture_source(texture_handle_t h);
 void             set_texture(texture_handle_t h, const char* path);
+TextureMemoryResult set_texture_from_memory(
+    texture_handle_t h, const char* source, const void* data, size_t size);
 bool             get_texture_show(texture_handle_t h);
 void             set_texture_show(texture_handle_t h, bool value);
 bool             get_texture_trigger(texture_handle_t h);

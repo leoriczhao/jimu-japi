@@ -1,13 +1,17 @@
 #include "../../d3d9/sdk_api.h"
+#include "storm.h"
 
 #include <lua.hpp>
 #include <windows.h>
 
 #include <cstdint>
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <limits>
 #include <string>
+#include <vector>
 
 namespace warcraft3::lua_engine::d3d {
 
@@ -77,7 +81,8 @@ bool initialize_api()
         | D3D_SDK_CAP_GENERATION_HANDLES
         | D3D_SDK_CAP_RESOURCE_COUNTS
         | D3D_SDK_CAP_SHARED_LEGACY_REGISTRY
-        | D3D_SDK_CAP_CORE_PROPERTIES;
+        | D3D_SDK_CAP_CORE_PROPERTIES
+        | D3D_SDK_CAP_ASSET_MEMORY;
     if ((g_api.capabilities & required) != required) {
         g_init_error = "D3D proxy is missing required core SDK capabilities";
         return false;
@@ -102,7 +107,8 @@ bool initialize_api()
         || !g_api.get_texture_level || !g_api.set_texture_level
         || !g_api.get_texture_visible || !g_api.set_texture_visible
         || !g_api.get_texture_hit_test || !g_api.set_texture_hit_test
-        || !g_api.get_texture_pixel_size || !g_api.texture_contains) {
+        || !g_api.get_texture_pixel_size || !g_api.texture_contains
+        || !g_api.create_texture_from_memory || !g_api.set_texture_source_memory) {
         g_init_error = "D3D proxy core SDK function table is incomplete";
         return false;
     }
@@ -296,6 +302,135 @@ std::string string_field(lua_State* L, int table, const char* name, const char* 
     lua_getfield(L, table, name);
     const char* value = lua_isnil(L, -1) ? fallback : luaL_checkstring(L, -1);
     std::string result = value ? value : "";
+    lua_pop(L, 1);
+    return result;
+}
+
+struct AssetPayload {
+    std::string canonical_uri;
+    std::vector<uint8_t> bytes;
+};
+
+constexpr size_t kMaxAssetBytes = 64u * 1024u * 1024u;
+
+std::string lower_ascii(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value;
+}
+
+bool normalize_asset_uri(
+    const std::string& input, std::string* canonical,
+    std::string* storm_path, uint32_t* search_scope, std::string* error)
+{
+    if (!canonical || !storm_path || !search_scope || !error) return false;
+    if (input.empty() || input.size() > 4096 || input.find('\0') != std::string::npos) {
+        *error = "D3D asset URI rejected: asset URI is empty or invalid";
+        return false;
+    }
+
+    std::string scheme = "asset";
+    std::string path = input;
+    const size_t scheme_end = input.find("://");
+    if (scheme_end != std::string::npos) {
+        scheme = lower_ascii(input.substr(0, scheme_end));
+        path = input.substr(scheme_end + 3u);
+        if (scheme == "file") {
+            *error = "D3D asset URI rejected: file:// is disabled";
+            return false;
+        }
+        if (scheme != "asset" && scheme != "game") {
+            *error = "D3D asset URI rejected: unsupported URI scheme";
+            return false;
+        }
+    }
+
+    std::replace(path.begin(), path.end(), '\\', '/');
+    const std::string rejected_uri = scheme + "://" + path;
+    if (path.empty() || path.front() == '/'
+        || (path.size() >= 2 && std::isalpha(static_cast<unsigned char>(path[0]))
+            && path[1] == ':')
+        || path.find(':') != std::string::npos) {
+        *error = "D3D asset URI rejected: " + rejected_uri;
+        return false;
+    }
+
+    std::vector<std::string> segments;
+    size_t begin = 0;
+    while (begin <= path.size()) {
+        const size_t end = path.find('/', begin);
+        const std::string segment = path.substr(
+            begin, end == std::string::npos ? std::string::npos : end - begin);
+        if (segment == "..") {
+            *error = "D3D asset URI rejected: " + rejected_uri;
+            return false;
+        }
+        if (!segment.empty() && segment != ".") segments.push_back(segment);
+        if (end == std::string::npos) break;
+        begin = end + 1u;
+    }
+    if (segments.empty()) {
+        *error = "D3D asset URI rejected: " + rejected_uri;
+        return false;
+    }
+
+    std::string normalized;
+    for (size_t i = 0; i < segments.size(); ++i) {
+        if (i) normalized.push_back('/');
+        normalized += segments[i];
+    }
+    *canonical = scheme + "://" + normalized;
+    *storm_path = normalized;
+    std::replace(storm_path->begin(), storm_path->end(), '/', '\\');
+    *search_scope = scheme == "asset" ? 1u : 0u;
+    return true;
+}
+
+bool load_asset(const std::string& uri, AssetPayload* payload, std::string* error)
+{
+    if (!payload || !error) return false;
+    std::string storm_path;
+    uint32_t search_scope = 0;
+    if (!normalize_asset_uri(uri, &payload->canonical_uri,
+        &storm_path, &search_scope, error)) return false;
+
+    auto& storm = warcraft3::storm_s::instance();
+    if (!storm.valid()) {
+        *error = "D3D asset loader unavailable: " + payload->canonical_uri;
+        return false;
+    }
+    const void* buffer = nullptr;
+    size_t size = 0;
+    if (!storm.load_file(nullptr, storm_path.c_str(), &buffer, &size,
+        0, search_scope, nullptr) || !buffer) {
+        *error = "D3D asset not found: " + payload->canonical_uri;
+        return false;
+    }
+
+    bool ok = false;
+    if (size == 0 || size > kMaxAssetBytes) {
+        *error = "D3D asset size rejected: " + payload->canonical_uri;
+    } else {
+        try {
+            const auto* bytes = static_cast<const uint8_t*>(buffer);
+            payload->bytes.assign(bytes, bytes + size);
+            ok = true;
+        } catch (...) {
+            *error = "D3D asset allocation failed: " + payload->canonical_uri;
+        }
+    }
+    storm.unload_file(buffer);
+    return ok;
+}
+
+std::string source_field(lua_State* L, int table)
+{
+    lua_getfield(L, table, "source");
+    size_t length = 0;
+    const char* value = luaL_checklstring(L, -1, &length);
+    std::string result(value, length);
     lua_pop(L, 1);
     return result;
 }
@@ -641,10 +776,19 @@ int texture_new(lua_State* L)
     const int32_t level = integer_field(L, 1, "z", 0);
     const bool visible = boolean_field(L, 1, "visible", true);
     const bool hit_test = boolean_field(L, 1, "hit_test", true);
-    const std::string source = string_field(L, 1, "source", "");
+    const std::string source = source_field(L, 1);
+    AssetPayload asset;
+    std::string asset_error;
+    if (!load_asset(source, &asset, &asset_error)) {
+        lua_pushnil(L);
+        lua_pushlstring(L, asset_error.data(), asset_error.size());
+        return 2;
+    }
 
     uint32_t handle = 0;
-    uint32_t result = g_api.create_texture(g_session, source.c_str(), x, y,
+    uint32_t result = g_api.create_texture_from_memory(
+        g_session, asset.canonical_uri.c_str(), asset.bytes.data(),
+        static_cast<uint32_t>(asset.bytes.size()), x, y,
         width, height, color, level, &handle);
     if (result == D3D_SDK_OK) result = g_api.set_texture_rotation(
         g_session, handle, rotation);
@@ -672,9 +816,77 @@ int texture_get_source(lua_State* L)
 int texture_set_source(lua_State* L)
 {
     auto* self = check_resource(L, 1, D3D_SDK_RESOURCE_TEXTURE);
-    if (g_api.set_texture_source(self->session, self->handle, luaL_checkstring(L, 2))
-        != D3D_SDK_OK) return raise_result_error(L);
+    size_t length = 0;
+    const char* source = luaL_checklstring(L, 2, &length);
+    AssetPayload asset;
+    std::string asset_error;
+    if (!load_asset(std::string(source, length), &asset, &asset_error)) {
+        lua_pushnil(L);
+        lua_pushlstring(L, asset_error.data(), asset_error.size());
+        return 2;
+    }
+    if (g_api.set_texture_source_memory(
+        self->session, self->handle, asset.canonical_uri.c_str(),
+        asset.bytes.data(), static_cast<uint32_t>(asset.bytes.size())) != D3D_SDK_OK) {
+        return push_result_error(L, "texture asset update failed");
+    }
     lua_pushboolean(L, 1);
+    return 1;
+}
+
+bool copy_texture_source_value(ResourceUserdata* self, std::string* out)
+{
+    if (!self || !out) return false;
+    uint32_t required = 0;
+    if (g_api.copy_texture_source(
+        self->session, self->handle, nullptr, 0, &required) != D3D_SDK_OK
+        || required == 0) return false;
+    std::vector<char> buffer(required);
+    if (g_api.copy_texture_source(self->session, self->handle,
+        buffer.data(), required, &required) != D3D_SDK_OK) return false;
+    out->assign(buffer.data());
+    return true;
+}
+
+int texture_reload(lua_State* L)
+{
+    auto* self = check_resource(L, 1, D3D_SDK_RESOURCE_TEXTURE);
+    std::string source;
+    if (!copy_texture_source_value(self, &source)) {
+        return push_result_error(L, "unable to read texture source");
+    }
+    AssetPayload asset;
+    std::string asset_error;
+    if (!load_asset(source, &asset, &asset_error)) {
+        lua_pushnil(L);
+        lua_pushlstring(L, asset_error.data(), asset_error.size());
+        return 2;
+    }
+    if (g_api.set_texture_source_memory(
+        self->session, self->handle, asset.canonical_uri.c_str(),
+        asset.bytes.data(), static_cast<uint32_t>(asset.bytes.size())) != D3D_SDK_OK) {
+        return push_result_error(L, "texture reload failed");
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int texture_state(lua_State* L)
+{
+    auto* self = check_resource(L, 1, D3D_SDK_RESOURCE_TEXTURE);
+    D3DSdkResourceCountsV1 counts{};
+    counts.struct_size = sizeof(counts);
+    if (g_api.get_resource_counts(self->session, &counts) != D3D_SDK_OK) {
+        return raise_result_error(L);
+    }
+    lua_pushstring(L, counts.device_ready ? "ready" : "lost");
+    return 1;
+}
+
+int texture_error(lua_State* L)
+{
+    check_resource(L, 1, D3D_SDK_RESOURCE_TEXTURE);
+    lua_pushnil(L);
     return 1;
 }
 
@@ -811,6 +1023,7 @@ int module_capabilities(lua_State* L)
     set("text_alpha", (g_api.capabilities & D3D_SDK_CAP_TEXT_ALPHA) != 0);
     set("unified_render_queue",
         (g_api.capabilities & D3D_SDK_CAP_UNIFIED_RENDER_QUEUE) != 0);
+    set("asset_memory", (g_api.capabilities & D3D_SDK_CAP_ASSET_MEMORY) != 0);
     return 1;
 }
 
@@ -827,6 +1040,11 @@ int module_stats(lua_State* L)
     lua_pushinteger(L, counts.text_count); lua_setfield(L, -2, "texts");
     lua_pushinteger(L, counts.texture_count); lua_setfield(L, -2, "textures");
     lua_pushboolean(L, counts.device_ready != 0); lua_setfield(L, -2, "device_ready");
+    lua_newtable(L);
+    lua_pushinteger(L, counts.asset_cache_entries); lua_setfield(L, -2, "entries");
+    lua_pushinteger(L, static_cast<lua_Integer>(counts.asset_cache_bytes));
+    lua_setfield(L, -2, "bytes");
+    lua_setfield(L, -2, "asset_cache");
     return 1;
 }
 
@@ -968,6 +1186,7 @@ int open(lua_State* L)
     };
     static const luaL_Reg texture_methods[] = {
         {"get_source", texture_get_source}, {"set_source", texture_set_source},
+        {"state", texture_state}, {"error", texture_error}, {"reload", texture_reload},
         {"get_rect", texture_get_rect}, {"set_rect", texture_set_rect},
         {"get_source_rect", texture_get_source_rect}, {"set_source_rect", texture_set_source_rect},
         {"get_color", texture_color_get}, {"set_color", texture_color_set},

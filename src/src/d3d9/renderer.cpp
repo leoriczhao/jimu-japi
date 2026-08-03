@@ -9,11 +9,15 @@
 #include "d3dx9_font_abi.h"
 #include "resource_manager.h"
 #include "status.h"
+#include "texture_asset.h"
 #include <d3d9.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <new>
+#include <sstream>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -28,6 +32,7 @@ static IDirect3DDevice9* g_device = nullptr;
 static std::map<font_handle_t, FontObj>      g_fonts;
 static std::map<text_handle_t, TextObj>      g_texts;
 static std::map<texture_handle_t, TextureObj> g_textures;
+static std::map<std::string, std::weak_ptr<const std::vector<uint8_t>>> g_asset_cache;
 static uint64_t g_next_creation_order = 1;
 
 static HMODULE g_d3dx_module = nullptr;
@@ -143,6 +148,70 @@ static IDirect3DTexture9* load_texture(IDirect3DDevice9* dev, const char* path)
     return nullptr;
 }
 
+static uint64_t hash_asset_bytes(const void* data, size_t size)
+{
+    const auto* bytes = static_cast<const uint8_t*>(data);
+    uint64_t hash = 1469598103934665603ull;
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= bytes[i];
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+static std::string asset_cache_key(const char* source, const void* data, size_t size)
+{
+    std::ostringstream key;
+    key << (source ? source : "") << '#' << size << '#'
+        << std::hex << hash_asset_bytes(data, size);
+    return key.str();
+}
+
+static std::shared_ptr<const std::vector<uint8_t>> acquire_asset(
+    const char* source, const void* data, size_t size)
+{
+    const std::string key = asset_cache_key(source, data, size);
+    auto found = g_asset_cache.find(key);
+    if (found != g_asset_cache.end()) {
+        auto existing = found->second.lock();
+        if (existing) return existing;
+        g_asset_cache.erase(found);
+    }
+    const auto* begin = static_cast<const uint8_t*>(data);
+    auto created = std::make_shared<const std::vector<uint8_t>>(begin, begin + size);
+    g_asset_cache.emplace(key, created);
+    return created;
+}
+
+static void purge_asset_cache()
+{
+    for (auto it = g_asset_cache.begin(); it != g_asset_cache.end();) {
+        if (it->second.expired()) it = g_asset_cache.erase(it);
+        else ++it;
+    }
+}
+
+static TextureMemoryResult load_memory_texture(
+    const std::shared_ptr<const std::vector<uint8_t>>& data,
+    IDirect3DTexture9** out_texture, int* out_width, int* out_height)
+{
+    if (!data || data->empty()) return TextureMemoryResult::InvalidData;
+    if (!g_device) return TextureMemoryResult::DeviceNotReady;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    const auto result = d3d9_texture_asset::create_texture(
+        g_device, data->data(), data->size(), out_texture, &width, &height);
+    if (result != d3d9_texture_asset::DecodeResult::Ok) {
+        return result == d3d9_texture_asset::DecodeResult::InvalidData
+            || result == d3d9_texture_asset::DecodeResult::UnsupportedFormat
+            ? TextureMemoryResult::InvalidData
+            : TextureMemoryResult::DecodeFailed;
+    }
+    *out_width = static_cast<int>(width);
+    *out_height = static_cast<int>(height);
+    return TextureMemoryResult::Ok;
+}
+
 // Reload a texture object's D3D texture
 static void reload_texture(TextureObj& obj)
 {
@@ -150,7 +219,13 @@ static void reload_texture(TextureObj& obj)
         obj.texture->Release();
         obj.texture = nullptr;
     }
-    if (g_device && !obj.path.empty()) {
+    obj.pixelWidth = 0;
+    obj.pixelHeight = 0;
+    if (g_device && obj.sourceData) {
+        load_memory_texture(obj.sourceData, &obj.texture,
+            &obj.pixelWidth, &obj.pixelHeight);
+        if (obj.texture) d3d9_status::set(d3d9_status::TEXTURE_LOADED);
+    } else if (g_device && !obj.path.empty()) {
         obj.texture = load_texture(g_device, obj.path.c_str());
         if (obj.texture) {
             D3DSURFACE_DESC desc;
@@ -460,6 +535,7 @@ bool end_session(uint32_t session)
     g_texts.clear();
     g_fonts.clear();
     g_next_creation_order = 1;
+    g_asset_cache.clear();
 
     g_last_dt = 0.0f;
     g_last_tick = GetTickCount();
@@ -478,6 +554,19 @@ bool is_device_ready()
 d3d9_resources::ResourceCounts resource_counts()
 {
     return d3d9_resources::counts();
+}
+
+AssetCacheCounts asset_cache_counts()
+{
+    purge_asset_cache();
+    AssetCacheCounts counts{};
+    for (const auto& entry : g_asset_cache) {
+        auto data = entry.second.lock();
+        if (!data) continue;
+        ++counts.entries;
+        counts.bytes += data->size();
+    }
+    return counts;
 }
 
 // ── Font API ──────────────────────────────────────────────────
@@ -730,6 +819,87 @@ texture_handle_t create_texture(const char* path, float x, float y, float width,
     return h;
 }
 
+TextureMemoryResult create_texture_from_memory(
+    const char* source, const void* data, size_t size,
+    float x, float y, float width, float height, uint32_t color, int level,
+    texture_handle_t* out_handle)
+{
+    if (!out_handle || !source || !data || size == 0) {
+        return TextureMemoryResult::InvalidData;
+    }
+    *out_handle = 0;
+    const auto inspected = d3d9_texture_asset::validate(data, size);
+    if (inspected != d3d9_texture_asset::DecodeResult::Ok) {
+        return TextureMemoryResult::InvalidData;
+    }
+    if (!g_device) return TextureMemoryResult::DeviceNotReady;
+    try {
+        auto asset = acquire_asset(source, data, size);
+        IDirect3DTexture9* texture = nullptr;
+        int pixel_width = 0;
+        int pixel_height = 0;
+        const TextureMemoryResult loaded = load_memory_texture(
+            asset, &texture, &pixel_width, &pixel_height);
+        if (loaded != TextureMemoryResult::Ok) {
+            purge_asset_cache();
+            return loaded;
+        }
+
+        TextureObj obj;
+        try {
+            obj.path = source;
+            obj.sourceData = std::move(asset);
+            obj.texture = texture;
+            obj.x = x;
+            obj.y = y;
+            obj.width = width;
+            obj.height = height;
+            obj.color = color;
+            obj.level = level;
+            obj.rotation = 0.0f;
+            obj.visible = true;
+            obj.triggerEnabled = true;
+            obj.creationOrder = g_next_creation_order;
+            obj.pixelWidth = pixel_width;
+            obj.pixelHeight = pixel_height;
+        } catch (...) {
+            texture->Release();
+            throw;
+        }
+
+        const texture_handle_t handle =
+            d3d9_resources::allocate(d3d9_resources::ResourceType::Texture);
+        if (!handle) {
+            texture->Release();
+            purge_asset_cache();
+            return TextureMemoryResult::CapacityExceeded;
+        }
+        try {
+            const auto inserted = g_textures.emplace(handle, std::move(obj));
+            if (!inserted.second) {
+                texture->Release();
+                d3d9_resources::release(handle, d3d9_resources::ResourceType::Texture);
+                purge_asset_cache();
+                return TextureMemoryResult::CapacityExceeded;
+            }
+        } catch (...) {
+            texture->Release();
+            d3d9_resources::release(handle, d3d9_resources::ResourceType::Texture);
+            throw;
+        }
+        ++g_next_creation_order;
+        d3d9_status::set(d3d9_status::TEXTURE_LOADED);
+        *out_handle = handle;
+        return TextureMemoryResult::Ok;
+    } catch (const std::bad_alloc&) {
+        purge_asset_cache();
+        return TextureMemoryResult::CapacityExceeded;
+    } catch (...) {
+        purge_asset_cache();
+        return TextureMemoryResult::DecodeFailed;
+    }
+}
+
 void destroy_texture(texture_handle_t h)
 {
     auto it = g_textures.find(h);
@@ -739,6 +909,7 @@ void destroy_texture(texture_handle_t h)
         }
         g_textures.erase(it);
         d3d9_resources::release(h, d3d9_resources::ResourceType::Texture);
+        purge_asset_cache();
     }
 }
 
@@ -855,7 +1026,54 @@ void set_texture(texture_handle_t h, const char* path)
     auto it = g_textures.find(h);
     if (it != g_textures.end()) {
         it->second.path = path ? path : "";
+        it->second.sourceData.reset();
         reload_texture(it->second);
+        purge_asset_cache();
+    }
+}
+
+TextureMemoryResult set_texture_from_memory(
+    texture_handle_t h, const char* source, const void* data, size_t size)
+{
+    auto it = g_textures.find(h);
+    if (it == g_textures.end() || !source || !data || size == 0) {
+        return TextureMemoryResult::InvalidData;
+    }
+    const auto inspected = d3d9_texture_asset::validate(data, size);
+    if (inspected != d3d9_texture_asset::DecodeResult::Ok) {
+        return TextureMemoryResult::InvalidData;
+    }
+    if (!g_device) return TextureMemoryResult::DeviceNotReady;
+    IDirect3DTexture9* texture = nullptr;
+    try {
+        std::string new_source(source);
+        auto asset = acquire_asset(source, data, size);
+        int pixel_width = 0;
+        int pixel_height = 0;
+        const TextureMemoryResult loaded = load_memory_texture(
+            asset, &texture, &pixel_width, &pixel_height);
+        if (loaded != TextureMemoryResult::Ok) {
+            purge_asset_cache();
+            return loaded;
+        }
+
+        if (it->second.texture) it->second.texture->Release();
+        it->second.texture = texture;
+        it->second.path = std::move(new_source);
+        it->second.sourceData = std::move(asset);
+        it->second.pixelWidth = pixel_width;
+        it->second.pixelHeight = pixel_height;
+        purge_asset_cache();
+        d3d9_status::set(d3d9_status::TEXTURE_LOADED);
+        return TextureMemoryResult::Ok;
+    } catch (const std::bad_alloc&) {
+        if (texture) texture->Release();
+        purge_asset_cache();
+        return TextureMemoryResult::CapacityExceeded;
+    } catch (...) {
+        if (texture) texture->Release();
+        purge_asset_cache();
+        return TextureMemoryResult::DecodeFailed;
     }
 }
 

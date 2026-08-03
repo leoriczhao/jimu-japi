@@ -15,11 +15,39 @@ namespace {
 thread_local std::string g_last_error;
 constexpr int32_t kMinInt32 = (-2147483647 - 1);
 constexpr int32_t kMaxInt32 = 2147483647;
+constexpr uint32_t kMaxAssetBytes = 64u * 1024u * 1024u;
 
 uint32_t fail(D3DSdkResult result, const char* message)
 {
     g_last_error = message ? message : "D3D SDK error";
     return static_cast<uint32_t>(result);
+}
+
+uint32_t fail(D3DSdkResult result, const std::string& message)
+{
+    g_last_error = message;
+    return static_cast<uint32_t>(result);
+}
+
+uint32_t ok();
+
+uint32_t texture_memory_result(
+    d3d9_renderer::TextureMemoryResult result, const char* source)
+{
+    const std::string uri = source ? source : "";
+    switch (result) {
+    case d3d9_renderer::TextureMemoryResult::Ok:
+        return ok();
+    case d3d9_renderer::TextureMemoryResult::InvalidData:
+        return fail(D3D_SDK_ASSET_INVALID, "texture asset is invalid: " + uri);
+    case d3d9_renderer::TextureMemoryResult::DeviceNotReady:
+        return fail(D3D_SDK_DEVICE_NOT_READY, "D3D device is not ready: " + uri);
+    case d3d9_renderer::TextureMemoryResult::DecodeFailed:
+        return fail(D3D_SDK_DECODE_FAILED, "texture decode failed: " + uri);
+    case d3d9_renderer::TextureMemoryResult::CapacityExceeded:
+        return fail(D3D_SDK_CAPACITY_EXCEEDED, "texture handle capacity exceeded");
+    }
+    return fail(D3D_SDK_DECODE_FAILED, "unknown texture decode failure: " + uri);
 }
 
 uint32_t ok()
@@ -78,6 +106,9 @@ uint32_t D3D_SDK_CALL get_resource_counts(
     value.text_count = counts.texts;
     value.texture_count = counts.textures;
     value.device_ready = d3d9_renderer::is_device_ready() ? 1u : 0u;
+    const auto cache = d3d9_renderer::asset_cache_counts();
+    value.asset_cache_entries = cache.entries;
+    value.asset_cache_bytes = cache.bytes;
     std::memcpy(out_counts, &value, std::min<uint32_t>(caller_size, sizeof(value)));
     return ok();
 }
@@ -172,6 +203,27 @@ uint32_t D3D_SDK_CALL create_texture(
     *out_handle = d3d9_renderer::create_texture(
         path, x, y, width, height, color, static_cast<int>(level));
     return *out_handle ? ok() : fail(D3D_SDK_CAPACITY_EXCEEDED, "texture handle capacity exceeded");
+}
+
+uint32_t D3D_SDK_CALL create_texture_from_memory(
+    uint32_t session, const char* source, const void* data,
+    uint32_t data_size, float x, float y, float width, float height,
+    uint32_t color, int32_t level, uint32_t* out_handle)
+{
+    if (!out_handle) return fail(D3D_SDK_INVALID_ARGUMENT, "out_handle is null");
+    *out_handle = 0;
+    if (!source || !source[0] || !data || data_size == 0 || data_size > kMaxAssetBytes
+        || !std::isfinite(x) || !std::isfinite(y)
+        || !std::isfinite(width) || !std::isfinite(height)
+        || width < 0.0f || height < 0.0f) {
+        return fail(D3D_SDK_INVALID_ARGUMENT, "memory texture creation arguments are invalid");
+    }
+    const uint32_t check = require_session(session);
+    if (check != D3D_SDK_OK) return check;
+    const auto result = d3d9_renderer::create_texture_from_memory(
+        source, data, data_size, x, y, width, height, color,
+        static_cast<int>(level), out_handle);
+    return texture_memory_result(result, source);
 }
 
 uint32_t D3D_SDK_CALL destroy_texture(uint32_t session, uint32_t handle)
@@ -457,6 +509,20 @@ uint32_t D3D_SDK_CALL set_texture_source(
     return ok();
 }
 
+uint32_t D3D_SDK_CALL set_texture_source_memory(
+    uint32_t session, uint32_t handle, const char* source,
+    const void* data, uint32_t data_size)
+{
+    if (!source || !source[0] || !data || data_size == 0 || data_size > kMaxAssetBytes) {
+        return fail(D3D_SDK_INVALID_ARGUMENT, "memory texture source arguments are invalid");
+    }
+    const uint32_t check = require_resource(session, handle,
+        d3d9_resources::ResourceType::Texture, "texture handle is invalid");
+    if (check != D3D_SDK_OK) return check;
+    return texture_memory_result(d3d9_renderer::set_texture_from_memory(
+        handle, source, data, data_size), source);
+}
+
 uint32_t D3D_SDK_CALL get_texture_rect(
     uint32_t session, uint32_t handle, float* out_x, float* out_y,
     float* out_width, float* out_height)
@@ -585,7 +651,8 @@ extern "C" __declspec(dllexport) bool D3D_SDK_CALL GetD3DSdkApi(
         | D3D_SDK_CAP_SHARED_LEGACY_REGISTRY
         | D3D_SDK_CAP_CORE_PROPERTIES
         | D3D_SDK_CAP_TEXT_ALPHA
-        | D3D_SDK_CAP_UNIFIED_RENDER_QUEUE;
+        | D3D_SDK_CAP_UNIFIED_RENDER_QUEUE
+        | D3D_SDK_CAP_ASSET_MEMORY;
     api.begin_session = &begin_session;
     api.end_session = &end_session;
     api.get_resource_counts = &get_resource_counts;
@@ -640,6 +707,8 @@ extern "C" __declspec(dllexport) bool D3D_SDK_CALL GetD3DSdkApi(
     api.set_texture_hit_test = &set_texture_hit_test;
     api.get_texture_pixel_size = &get_texture_pixel_size;
     api.texture_contains = &texture_contains;
+    api.create_texture_from_memory = &create_texture_from_memory;
+    api.set_texture_source_memory = &set_texture_source_memory;
     std::memcpy(out_api, &api, std::min<uint32_t>(caller_size, sizeof(api)));
     return true;
 }

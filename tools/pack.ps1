@@ -214,9 +214,22 @@ Write-Host '  [4/5] Inject DLL + callback'
 Copy-Item $DllPath "$WorkDir\japi.tga" -Force
 Copy-Item $CbSrc  "$WorkDir\callback" -Force
 
+# Deterministic MPQ-only texture fixtures for the public D3D SDK acceptance.
+# They intentionally never exist beside war3.exe, proving asset:// uses Storm.
+if ($InteractiveD3D) {
+    $probePng = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAA5SURBVDhPY5Db8v8/Mv4fIIeCCckzEFJASH4QGIAuQEgDuvxwMABdgJAGdPnhYAC6ACEN6PLDwAAAlMCeH43ym2UAAAAASUVORK5CYII='
+    [System.IO.File]::WriteAllBytes(
+        "$WorkDir\d3d-sdk-probe.png", [Convert]::FromBase64String($probePng))
+    [System.IO.File]::WriteAllBytes(
+        "$WorkDir\d3d-sdk-corrupt.png", [System.Text.Encoding]::ASCII.GetBytes('not-an-image'))
+}
+
 # Update MPQ listfile so w3x2lni includes the new files
 $listfile = "$WorkDir\(listfile)"
 $needed = @("callback", "japi.tga")
+if ($InteractiveD3D) {
+    $needed += @("d3d-sdk-probe.png", "d3d-sdk-corrupt.png")
+}
 $existing = if (Test-Path $listfile) { Get-Content $listfile -Raw } else { "" }
 foreach ($f in $needed) {
     if ($existing -notmatch [regex]::Escape($f)) {

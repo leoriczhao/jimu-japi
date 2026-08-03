@@ -19,6 +19,9 @@ enum D3DSdkResult : uint32_t {
     D3D_SDK_RESOURCE_IN_USE = 6,
     D3D_SDK_CAPACITY_EXCEEDED = 7,
     D3D_SDK_BUFFER_TOO_SMALL = 8,
+    D3D_SDK_ASSET_INVALID = 9,
+    D3D_SDK_DEVICE_NOT_READY = 10,
+    D3D_SDK_DECODE_FAILED = 11,
 };
 
 enum D3DSdkCapability : uint64_t {
@@ -29,6 +32,7 @@ enum D3DSdkCapability : uint64_t {
     D3D_SDK_CAP_CORE_PROPERTIES = 1ull << 4,
     D3D_SDK_CAP_TEXT_ALPHA = 1ull << 5,
     D3D_SDK_CAP_UNIFIED_RENDER_QUEUE = 1ull << 6,
+    D3D_SDK_CAP_ASSET_MEMORY = 1ull << 7,
 };
 
 enum D3DSdkResourceType : uint32_t {
@@ -45,6 +49,9 @@ struct D3DSdkResourceCountsV1 {
     uint32_t text_count;
     uint32_t texture_count;
     uint32_t device_ready;
+    uint32_t asset_cache_entries;
+    uint32_t reserved;
+    uint64_t asset_cache_bytes;
 };
 
 struct D3DSdkApiV1 {
@@ -176,6 +183,16 @@ struct D3DSdkApiV1 {
     uint32_t (D3D_SDK_CALL *texture_contains)(
         uint32_t session, uint32_t handle, float x, float y,
         uint32_t* out_contains);
+
+    // Appended v1 asset-memory boundary. Buffers are copied synchronously by
+    // the proxy; ownership never crosses the DLL boundary.
+    uint32_t (D3D_SDK_CALL *create_texture_from_memory)(
+        uint32_t session, const char* source, const void* data,
+        uint32_t data_size, float x, float y, float width, float height,
+        uint32_t color, int32_t level, uint32_t* out_handle);
+    uint32_t (D3D_SDK_CALL *set_texture_source_memory)(
+        uint32_t session, uint32_t handle, const char* source,
+        const void* data, uint32_t data_size);
 };
 #pragma pack(pop)
 

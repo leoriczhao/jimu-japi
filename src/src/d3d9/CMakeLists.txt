@@ -10,6 +10,8 @@ set(D3D9_SOURCES
     src/d3d9/CDirect3D9.cpp
     src/d3d9/CDirect3DDevice9.cpp
     src/d3d9/d3dx9_font_abi.h
+    src/d3d9/texture_asset.h
+    src/d3d9/texture_asset.cpp
     src/d3d9/renderer.cpp
     src/d3d9/api.cpp
     src/d3d9/status.cpp
@@ -17,6 +19,8 @@ set(D3D9_SOURCES
 )
 
 add_library(newD3d9 SHARED ${D3D9_SOURCES})
+
+target_link_libraries(newD3d9 PRIVATE windowscodecs ole32)
 
 target_include_directories(newD3d9 PRIVATE
     "${CMAKE_SOURCE_DIR}/src"

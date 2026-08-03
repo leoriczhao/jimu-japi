@@ -33,7 +33,7 @@ function M.run(done)
         local caps = d3d.capabilities()
         assert(caps.session and caps.generation_handles)
         assert(caps.resource_counts and caps.core_properties)
-        assert(caps.text_alpha and caps.unified_render_queue)
+        assert(caps.text_alpha and caps.unified_render_queue and caps.asset_memory)
         local width, height = d3d.window_size()
         assert(width > 0 and height > 0)
         assert(d3d.rgba(0x11, 0x22, 0x33, 0x44) == 0x44112233)
@@ -124,7 +124,7 @@ function M.run(done)
     test("D3D SDK Texture userdata properties", function()
         local err
         texture, err = d3d.Texture.new {
-            source = "japi_d3d_visual_probe.bmp",
+            source = "d3d-sdk-probe.png",
             x = 320,
             y = 136,
             width = 256,
@@ -137,7 +137,7 @@ function M.run(done)
         }
         assert(texture, err)
         assert(type(texture) == "userdata")
-        assert(texture:get_source() == "japi_d3d_visual_probe.bmp")
+        assert(texture:get_source() == "asset://d3d-sdk-probe.png")
         local x, y, width, height = texture:get_rect()
         assert(x == 320 and y == 136 and width == 256 and height == 192)
         assert(texture:set_rect(340, 150, 240, 180))
@@ -153,10 +153,76 @@ function M.run(done)
         assert(texture:get_rotation() == 90 and texture:get_z() == 201)
         assert(texture:get_visible() and texture:get_hit_test())
         local pixel_width, pixel_height = texture:pixel_size()
-        assert(pixel_width == 128 and pixel_height == 128)
+        assert(pixel_width == 16 and pixel_height == 16)
         assert(texture:contains(460, 240))
         assert(not texture:contains(570, 160), "rotated hit test used the unrotated AABB")
         assert(not texture:contains(10, 10))
+    end)
+
+    test("D3D SDK MPQ PNG/BLP assets and failure contract", function()
+        local baseline = assert(d3d.stats())
+        local png = assert(d3d.Texture.new {
+            source = "asset://d3d-sdk-probe.png",
+            width = 32, height = 32,
+        })
+        local blp = assert(d3d.Texture.new {
+            source = "asset://war3mapMap.blp",
+            width = 32, height = 32,
+        })
+        local game_blp = assert(d3d.Texture.new {
+            source = "game://ReplaceableTextures/CommandButtons/BTNFootman.blp",
+            width = 32, height = 32,
+        })
+        local pw, ph = png:pixel_size()
+        assert(pw == 16 and ph == 16)
+        local bw, bh = blp:pixel_size()
+        assert(bw == 256 and bh == 256)
+        local gw, gh = game_blp:pixel_size()
+        assert(gw > 0 and gh > 0)
+        assert(png:state() == "ready" and png:error() == nil)
+        assert(png:reload())
+
+        local shared = assert(d3d.stats())
+        assert(shared.asset_cache.entries == baseline.asset_cache.entries + 2,
+            "same URI/data did not share one cache entry")
+
+        local missing, missing_err = d3d.Texture.new {
+            source = "asset://missing/d3d-sdk.png",
+        }
+        assert(missing == nil
+            and missing_err == "D3D asset not found: asset://missing/d3d-sdk.png")
+
+        local corrupt, corrupt_err = d3d.Texture.new {
+            source = "asset://d3d-sdk-corrupt.png",
+        }
+        assert(corrupt == nil
+            and corrupt_err == "texture asset is invalid: asset://d3d-sdk-corrupt.png")
+
+        local traversal, traversal_err = d3d.Texture.new {
+            source = "asset://../outside.png",
+        }
+        assert(traversal == nil
+            and traversal_err == "D3D asset URI rejected: asset://../outside.png")
+        local file, file_err = d3d.Texture.new {
+            source = "file://C:/outside.png",
+        }
+        assert(file == nil and file_err == "D3D asset URI rejected: file:// is disabled")
+
+        local old_source = texture:get_source()
+        local changed, change_err = texture:set_source("asset://missing/reload.png")
+        assert(changed == nil
+            and change_err == "D3D asset not found: asset://missing/reload.png")
+        assert(texture:get_source() == old_source,
+            "failed set_source replaced the working texture")
+
+        local after_failures = assert(d3d.stats())
+        assert(after_failures.textures == baseline.textures + 3,
+            "failed asset loads leaked a texture handle")
+        assert(game_blp:destroy() and blp:destroy() and png:destroy())
+        local final = assert(d3d.stats())
+        assert(final.textures == baseline.textures
+            and final.asset_cache.entries == baseline.asset_cache.entries,
+            "asset cache or handles did not return to baseline")
     end)
 
     test("D3D SDK P3 alpha and unified z visual fixture configured", function()
@@ -171,7 +237,7 @@ function M.run(done)
         -- is: low text, opaque cover, high text. The old type-batched renderer
         -- incorrectly placed both texts above both textures.
         visual_resources.background = assert(d3d.Texture.new {
-            source = "japi_d3d_visual_probe.bmp",
+            source = "asset://d3d-sdk-probe.png",
             x = 420, y = 136, width = 330, height = 240,
             color = 0xFF707070, z = 100,
         })
@@ -182,7 +248,7 @@ function M.run(done)
             color = 0xFFFFFF00, z = 200,
         })
         visual_resources.cover = assert(d3d.Texture.new {
-            source = "japi_d3d_visual_probe.bmp",
+            source = "asset://d3d-sdk-probe.png",
             x = 435, y = 165, width = 300, height = 60,
             color = 0xFF202020, z = 200,
         })
@@ -246,7 +312,7 @@ function M.run(done)
             local gc_font = assert(d3d.Font.new {})
             local gc_text = assert(d3d.Text.new { font = gc_font, text = "gc" })
             local gc_texture = assert(d3d.Texture.new {
-                source = "japi_d3d_visual_probe.bmp", width = 8, height = 8,
+                source = "asset://d3d-sdk-probe.png", width = 8, height = 8,
             })
             assert(gc_text and gc_texture)
         end

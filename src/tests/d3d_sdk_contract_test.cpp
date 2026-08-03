@@ -48,9 +48,12 @@ int main()
         | D3D_SDK_CAP_SHARED_LEGACY_REGISTRY
         | D3D_SDK_CAP_CORE_PROPERTIES
         | D3D_SDK_CAP_TEXT_ALPHA
-        | D3D_SDK_CAP_UNIFIED_RENDER_QUEUE;
+        | D3D_SDK_CAP_UNIFIED_RENDER_QUEUE
+        | D3D_SDK_CAP_ASSET_MEMORY;
     CHECK((api.capabilities & required_caps) == required_caps,
         "required P3 rendering capabilities are missing");
+    CHECK(api.create_texture_from_memory && api.set_texture_source_memory,
+        "asset-memory ABI functions are missing");
 
     uint32_t session1 = 0;
     CHECK(api.begin_session(&session1) == D3D_SDK_OK && session1 != 0,
@@ -159,6 +162,20 @@ int main()
     CHECK(api.copy_texture_source(session1, texture1, text_buffer, sizeof(text_buffer), &required)
         == D3D_SDK_OK && std::strcmp(text_buffer, "probe.bmp") == 0,
         "texture source round-trip failed");
+    const uint8_t corrupt_asset[] = { 'n', 'o', 't', '-', 'a', 'n', '-', 'i', 'm', 'a', 'g', 'e' };
+    uint32_t failed_texture = 123;
+    CHECK(api.create_texture_from_memory(session1, "asset://corrupt.png",
+        corrupt_asset, sizeof(corrupt_asset), 0.0f, 0.0f, 1.0f, 1.0f,
+        0xFFFFFFFFu, 0, &failed_texture) == D3D_SDK_ASSET_INVALID
+        && failed_texture == 0, "corrupt asset created a live texture handle");
+    CHECK(api.set_texture_source_memory(session1, texture1, "asset://corrupt.png",
+        corrupt_asset, sizeof(corrupt_asset)) == D3D_SDK_ASSET_INVALID,
+        "corrupt asset update did not fail deterministically");
+    std::memset(text_buffer, 0, sizeof(text_buffer));
+    CHECK(api.copy_texture_source(session1, texture1, text_buffer,
+        sizeof(text_buffer), &required) == D3D_SDK_OK
+        && std::strcmp(text_buffer, "probe.bmp") == 0,
+        "failed asset update replaced the working texture source");
     CHECK(api.set_texture_rect(session1, texture1, 20.0f, 21.0f, 22.0f, 23.0f)
         == D3D_SDK_OK, "texture rect setter failed");
     float value3 = 0.0f;
@@ -208,6 +225,8 @@ int main()
         "populated resource counts failed");
     CHECK(counts.font_count == 1 && counts.text_count == 1 && counts.texture_count == 1,
         "resource counts do not match live resources");
+    CHECK(counts.asset_cache_entries == 0 && counts.asset_cache_bytes == 0,
+        "failed asset decode leaked a cache entry");
     CHECK(api.destroy_font(session1, font1) == D3D_SDK_RESOURCE_IN_USE,
         "font dependency was not enforced");
 
@@ -269,6 +288,6 @@ int main()
         "repeat session close did not return a stable result");
 
     FreeLibrary(proxy);
-    std::puts("D3D SDK contract PASS: ABI v1, sessions, generation handles, dependencies, alpha/z capabilities, counters, stress=1000");
+    std::puts("D3D SDK contract PASS: ABI v1, sessions, generation handles, dependencies, alpha/z/assets capabilities, failure counters, stress=1000");
     return 0;
 }
