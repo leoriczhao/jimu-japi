@@ -42,6 +42,32 @@ namespace warcraft3::lua_engine::bridge {
 
 static bool g_initialized = false;
 
+static bool __cdecl read_rect_bounds(uint32_t rect, float* min_x, float* min_y,
+                                     float* max_x, float* max_y)
+{
+    if (!rect) return false;
+    if (min_x) *min_x = warcraft3::jass::from_real(
+        (warcraft3::jass::jreal_t)warcraft3::jass::call("GetRectMinX", rect));
+    if (min_y) *min_y = warcraft3::jass::from_real(
+        (warcraft3::jass::jreal_t)warcraft3::jass::call("GetRectMinY", rect));
+    if (max_x) *max_x = warcraft3::jass::from_real(
+        (warcraft3::jass::jreal_t)warcraft3::jass::call("GetRectMaxX", rect));
+    if (max_y) *max_y = warcraft3::jass::from_real(
+        (warcraft3::jass::jreal_t)warcraft3::jass::call("GetRectMaxY", rect));
+    return true;
+}
+
+static uint32_t __cdecl create_rect_handle(float min_x, float min_y,
+                                           float max_x, float max_y)
+{
+    uint32_t x0 = warcraft3::jass::to_real(min_x);
+    uint32_t y0 = warcraft3::jass::to_real(min_y);
+    uint32_t x1 = warcraft3::jass::to_real(max_x);
+    uint32_t y1 = warcraft3::jass::to_real(max_y);
+    return (uint32_t)warcraft3::jass::call(
+        "Rect", (uintptr_t)&x0, (uintptr_t)&y0, (uintptr_t)&x1, (uintptr_t)&y1);
+}
+
 static bool initialize_d3d_api()
 {
     HMODULE d3d = GetModuleHandleA("d3d9.dll");
@@ -53,7 +79,9 @@ static bool initialize_d3d_api()
     typedef void (__cdecl *initialize_d3d_fn)(
         void (*)(const char*, const char*, warcraft3::lua_engine::bridge::cpp_handler_fn),
         const char* (*)(uint32_t),
-        uint32_t (*)(const char*));
+        uint32_t (*)(const char*),
+        bool (*)(uint32_t, float*, float*, float*, float*),
+        uint32_t (*)(float, float, float, float));
 
     auto init = reinterpret_cast<initialize_d3d_fn>(
         GetProcAddress(d3d, "InitializeD3DAPI"));
@@ -65,7 +93,9 @@ static bool initialize_d3d_api()
     init(
         &warcraft3::lua_engine::bridge::register_cpp_handler,
         &warcraft3::jass::from_string,
-        &warcraft3::jass::create_string);
+        &warcraft3::jass::create_string,
+        &read_rect_bounds,
+        &create_rect_handle);
 
     char module_path[MAX_PATH] = {0};
     GetModuleFileNameA(d3d, module_path, MAX_PATH);

@@ -31,4 +31,12 @@ namespace d3d9_api {
     typedef uint32_t (*create_string_fn)(const char*);
     void set_create_string_fn(create_string_fn fn);
 
+    // Rect access stays in yd_japi because only that DLL is linked to the JASS
+    // runtime. The proxy receives stable callbacks during initialization.
+    typedef bool (*get_rect_fn)(uint32_t rect, float* min_x, float* min_y,
+                                float* max_x, float* max_y);
+    typedef uint32_t (*create_rect_fn)(float min_x, float min_y,
+                                       float max_x, float max_y);
+    void set_rect_fns(get_rect_fn get_fn, create_rect_fn create_fn);
+
 }  // namespace d3d9_api

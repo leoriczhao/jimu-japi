@@ -895,9 +895,17 @@ local function test_gameui()
         excall("ShowFpsText", "(B)V", true)
     end)
 
-    test("ShowConsole hide/restore does not crash", function()
+    test("ShowConsole hide/restore changes and restores console frames", function()
+        local original_x = excall("GetLittleMapX", "()R")
         excall("ShowConsole", "(B)V", false)
+        local hidden_x = excall("GetLittleMapX", "()R")
+        assert(math.abs(hidden_x - (-2.0)) < 0.001,
+            "hidden minimap x=" .. tostring(hidden_x))
         excall("ShowConsole", "(B)V", true)
+        local restored_x = excall("GetLittleMapX", "()R")
+        assert(math.abs(restored_x - original_x) < 0.001,
+            string.format("restored minimap x=%s original=%s",
+                tostring(restored_x), tostring(original_x)))
     end)
 end
 

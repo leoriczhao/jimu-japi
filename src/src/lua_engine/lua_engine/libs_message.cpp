@@ -2,6 +2,7 @@
 #include <warcraft3/war3_searcher.h>
 #include <warcraft3/version.h>
 #include <warcraft3/keyboard_code.h>
+#include <warcraft3/wark_to_vk.h>
 #include <warcraft3/player.h>
 #include <warcraft3/message_dispatch.h>
 #include <warcraft3/jass/func_value.h>
@@ -62,67 +63,6 @@ namespace warcraft3::lua_engine::message {
 	static bool g_lua_message_hook_registered = false;
 
 	void install();
-
-	// ============================================================
-	// Convert WARK_* code to Windows VK code for simulation
-	// ============================================================
-	static int wark_to_vk(int wark)
-	{
-		// Direct ASCII matches (A-Z, 0-9, space)
-		if (wark == WARK_SPACE)         return VK_SPACE;
-		if (wark >= WARK_0 && wark <= WARK_9)     return wark;   // 0x30..0x39
-		if (wark >= WARK_A && wark <= WARK_Z)     return wark;   // 0x41..0x5A
-		if (wark == WARK_SHIFT)         return VK_SHIFT;
-		if (wark == WARK_CTRL)          return VK_CONTROL;
-		if (wark == WARK_ALT)           return VK_MENU;
-
-		// Numpad
-		if (wark >= WARK_NUMPAD0 && wark <= WARK_NUMPAD9) return VK_NUMPAD0 + (wark - WARK_NUMPAD0);
-		if (wark == WARK_ADD)           return VK_ADD;
-		if (wark == WARK_SUBTRACT)      return VK_SUBTRACT;
-		if (wark == WARK_MULTIPLY)      return VK_MULTIPLY;
-		if (wark == WARK_DIVIDE)        return VK_DIVIDE;
-		if (wark == WARK_DECIMAL)       return VK_DECIMAL;
-
-		// OEM keys
-		if (wark == WARK_TILDE)         return VK_OEM_3;
-		if (wark == WARK_OEM_PLUS)      return VK_OEM_PLUS;
-		if (wark == WARK_OEM_MINUS)     return VK_OEM_MINUS;
-		if (wark == WARK_OEM_OBRACKE)   return VK_OEM_4;
-		if (wark == WARK_OEM_CBRACKE)   return VK_OEM_6;
-		if (wark == WARK_OEM_BACKSLASH) return VK_OEM_5;
-		if (wark == WARK_OEM_SEMICOLON) return VK_OEM_1;
-		if (wark == WARK_OEM_SQUOTMARKS)return VK_OEM_7;
-		if (wark == WARK_OEM_COMMA)     return VK_OEM_COMMA;
-		if (wark == WARK_OEM_PERIOD)    return VK_OEM_PERIOD;
-		if (wark == WARK_OEM_SLASH)     return VK_OEM_2;
-
-		// Special keys
-		if (wark == WARK_ESC)           return VK_ESCAPE;
-		if (wark == WARK_ENTER)         return VK_RETURN;
-		if (wark == WARK_BACKSPACE)     return VK_BACK;
-		if (wark == WARK_TAB)           return VK_TAB;
-		if (wark == WARK_RIGHT)         return VK_RIGHT;
-		if (wark == WARK_UP)            return VK_UP;
-		if (wark == WARK_LEFT)          return VK_LEFT;
-		if (wark == WARK_DOWN)          return VK_DOWN;
-		if (wark == WARK_INSERT)        return VK_INSERT;
-		if (wark == WARK_DELETE)        return VK_DELETE;
-		if (wark == WARK_HOME)          return VK_HOME;
-		if (wark == WARK_END)           return VK_END;
-		if (wark == WARK_PAGEUP)        return VK_PRIOR;
-		if (wark == WARK_PAGEDOWN)      return VK_NEXT;
-		if (wark == WARK_CAPSLOCK)      return VK_CAPITAL;
-		if (wark == WARK_NUMLOCK)       return VK_NUMLOCK;
-		if (wark == WARK_SCROLLLOCK)    return VK_SCROLL;
-		if (wark == WARK_PAUSE)         return VK_PAUSE;
-		if (wark == WARK_PRINTSCREEN)   return VK_SNAPSHOT;
-
-		// F-keys
-		if (wark >= WARK_F1 && wark <= WARK_F12) return VK_F1 + (wark - WARK_F1);
-
-		return 0;
-	}
 
 	static HWND FindWar3Window()
 	{
@@ -867,34 +807,28 @@ namespace warcraft3::lua_engine::message {
 	// Uses PostMessage to the War3 window so it arrives through the
 	// normal message queue (respects War3's internal dispatch).
 	// ============================================================
-	static int lset_keyboard(lua_State* L)
+	static bool post_keyboard(int wark_key, bool is_down)
 	{
-		int wark_key = (int)lua_tointeger(L, 1);
-		bool is_down = lua_toboolean(L, 2) != 0;
-
-		int vk = wark_to_vk(wark_key);
-		if (vk == 0)
-		{
-			lua_pushboolean(L, 0);
-			return 1;
-		}
+		int vk = warcraft3::input::wark_to_vk(wark_key);
+		if (vk == 0) return false;
 
 		HWND hw = get_window();
-		if (!hw)
-		{
-			lua_pushboolean(L, 0);
-			return 1;
-		}
+		if (!hw) return false;
 
 		UINT msg = is_down ? WM_KEYDOWN : WM_KEYUP;
 		LPARAM lParam = 0x00000001;  // repeat count=1, scan code=0
 		if (!is_down)
 		{
-			lParam |= (0xC0 << 24);  // set previous key state + transition state bits
+			lParam |= (0xC0 << 24);  // previous key state + transition state
 		}
+		return PostMessageW(hw, msg, (WPARAM)vk, lParam) != FALSE;
+	}
 
-		PostMessageW(hw, msg, (WPARAM)vk, lParam);
-		lua_pushboolean(L, 1);
+	static int lset_keyboard(lua_State* L)
+	{
+		int wark_key = (int)lua_tointeger(L, 1);
+		bool is_down = lua_toboolean(L, 2) != 0;
+		lua_pushboolean(L, post_keyboard(wark_key, is_down));
 		return 1;
 	}
 
@@ -902,18 +836,16 @@ namespace warcraft3::lua_engine::message {
 	static int lclick_keyboard(lua_State* L)
 	{
 		int wark_key = (int)lua_tointeger(L, 1);
-		int vk = wark_to_vk(wark_key);
-		if (vk == 0) return 0;
+		if (!post_keyboard(wark_key, true)) return 0;
+		post_keyboard(wark_key, false);
+		return 0;
+	}
 
-		HWND hw = get_window();
-		if (!hw) return 0;
-
-		// Press
-		LPARAM lParamDown = 0x00000001;
-		PostMessageW(hw, WM_KEYDOWN, (WPARAM)vk, lParamDown);
-		// Release
-		LPARAM lParamUp = 0x00000001 | (0xC0 << 24);
-		PostMessageW(hw, WM_KEYUP, (WPARAM)vk, lParamUp);
+	static uint32_t SetKeyboard_handler(const uint32_t* args, size_t nargs)
+	{
+		if (nargs >= 2) {
+			post_keyboard((int)args[0], args[1] != 0);
+		}
 		return 0;
 	}
 
@@ -1368,6 +1300,7 @@ namespace warcraft3::lua_engine::message {
 		reg("GetMouseY",           "()R",          GetMouseY_handler);
 		reg("GetMouseVectorX",     "()R",          GetMouseVectorX_handler);
 		reg("GetMouseVectorY",     "()R",          GetMouseVectorY_handler);
+		reg("SetKeyboard",         "(IB)V",        SetKeyboard_handler);
 		reg("GetPlayerSelectedUnit","(I)Hunit;",   GetPlayerSelectedUnit_handler);
 		reg("LocalOrder",          "(II)V",        LocalOrder_handler);
 		reg("LocalPointOrder",     "(IRRI)V",      LocalPointOrder_handler);

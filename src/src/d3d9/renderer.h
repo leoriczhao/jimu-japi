@@ -142,11 +142,7 @@ float get_mouse_vector_y();
 int   get_window_width();
 int   get_window_height();
 
-// ── Console/FPS ───────────────────────────────────────────────
-void show_console(bool show);
+// ── FPS overlay (internal; canonical JASS ShowFpsText lives in yd_japi) ──
 void show_fps_text(bool show);
-
-// ── Keyboard simulation ──────────────────────────────────────
-void set_keyboard(int key, bool down);
 
 }  // namespace d3d9_renderer

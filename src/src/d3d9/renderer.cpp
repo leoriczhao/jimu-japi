@@ -398,10 +398,21 @@ void on_end_scene(IDirect3DDevice9* pDevice)
         ++it;
     }
 
-    // Render
-    render_texture_objects(pDevice);
-    render_text_objects(pDevice);
-    render_fps(pDevice);
+    // Overlay drawing can change blend, depth, lighting, texture-stage, FVF,
+    // bindings, render targets and GDI/D3D interop state. Warcraft does not
+    // necessarily re-establish every value before the next frame, so isolate
+    // the complete overlay pass. If capture is unavailable, skip the whole
+    // pass rather than risk corrupting Warcraft's renderer.
+    IDirect3DStateBlock9* stateBlock = nullptr;
+    if (SUCCEEDED(pDevice->CreateStateBlock(D3DSBT_ALL, &stateBlock)) && stateBlock) {
+        if (SUCCEEDED(stateBlock->Capture())) {
+            render_texture_objects(pDevice);
+            render_text_objects(pDevice);
+            render_fps(pDevice);
+            stateBlock->Apply();
+        }
+        stateBlock->Release();
+    }
 }
 
 // ── Font API ──────────────────────────────────────────────────
@@ -759,8 +770,10 @@ void get_texture_src_rect(texture_handle_t h, float* left, float* top, float* ri
     if (it != g_textures.end()) {
         if (left) *left = it->second.srcLeft;
         if (top) *top = it->second.srcTop;
-        if (right) *right = it->second.srcRight;
-        if (bottom) *bottom = it->second.srcBottom;
+        if (right) *right = it->second.srcRight > 0.0f
+            ? it->second.srcRight : (float)it->second.pixelWidth;
+        if (bottom) *bottom = it->second.srcBottom > 0.0f
+            ? it->second.srcBottom : (float)it->second.pixelHeight;
     }
 }
 
@@ -828,30 +841,11 @@ int get_window_height()
     return rc.bottom - rc.top;
 }
 
-// ── Console/FPS ───────────────────────────────────────────────
-
-void show_console(bool show)
-{
-    // Hide/show the War3 console UI elements
-    // This is typically done by patching memory or using game-specific offsets.
-    // For now, this is a stub — the actual implementation depends on War3 internals.
-    (void)show;
-}
+// ── FPS ───────────────────────────────────────────────────────
 
 void show_fps_text(bool show)
 {
     g_show_fps = show;
-}
-
-// ── Keyboard simulation ──────────────────────────────────────
-
-void set_keyboard(int key, bool down)
-{
-    INPUT input = {};
-    input.type = INPUT_KEYBOARD;
-    input.ki.wVk = (WORD)key;
-    input.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
-    SendInput(1, &input, sizeof(INPUT));
 }
 
 }  // namespace d3d9_renderer

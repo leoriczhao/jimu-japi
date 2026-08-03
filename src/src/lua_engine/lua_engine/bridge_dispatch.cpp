@@ -54,11 +54,13 @@ namespace warcraft3::lua_engine::bridge {
 
     struct param_info {
         char type;  // 'I', 'R', 'S', 'B', 'H'
+        std::string handle_type;
     };
 
     struct parsed_spec {
         std::vector<param_info> params;
         char                    ret;  // 'I', 'R', 'S', 'B', 'V'
+        std::string             return_handle_type;
     };
 
     static parsed_spec parse_spec(const char* spec) {
@@ -68,16 +70,26 @@ namespace warcraft3::lua_engine::bridge {
 
         const char* p = spec + 1;
         while (*p && *p != ')') {
-            if (*p == ';') { p++; continue; }  // skip semicolons
             param_info pi;
             pi.type = *p;
-            result.params.push_back(pi);
             p++;
-            // skip lowercase subtype tags (e.g. Hplayer;)
-            while (*p && *p >= 'a' && *p <= 'z') p++;
+            if (pi.type == 'H') {
+                const char* begin = p;
+                while (*p && *p >= 'a' && *p <= 'z') p++;
+                pi.handle_type.assign(begin, p);
+                if (*p == ';') p++;
+            }
+            result.params.push_back(pi);
         }
         if (*p == ')') p++;
-        if (*p) result.ret = *p;
+        if (*p) {
+            result.ret = *p++;
+            if (result.ret == 'H') {
+                const char* begin = p;
+                while (*p && *p >= 'a' && *p <= 'z') p++;
+                result.return_handle_type.assign(begin, p);
+            }
+        }
         return result;
     }
 
@@ -125,6 +137,25 @@ namespace warcraft3::lua_engine::bridge {
         return (uint32_t)jass::call("LoadBoolean", ht, key, slot);
     }
 
+    static uint32_t ht_load_handle(uint32_t ht, uint32_t key, int slot,
+                                   const std::string& handle_type) {
+        if (handle_type == "rect") {
+            return (uint32_t)jass::call("LoadRectHandle", ht, key, slot);
+        }
+        // Existing compatibility handlers historically marshal non-rect
+        // handles as integer ids. Keep that ABI unchanged in this focused fix.
+        return (uint32_t)ht_load_int(ht, key, slot);
+    }
+
+    static void ht_save_handle(uint32_t ht, uint32_t key, int slot,
+                               uint32_t value, const std::string& handle_type) {
+        if (handle_type == "rect") {
+            jass::call("SaveRectHandle", ht, key, slot, value);
+            return;
+        }
+        ht_save_int(ht, key, slot, (int32_t)value);
+    }
+
     // ── Handler dispatch ───────────────────────────────────────────
 
     static void dispatch_handler(const char* name, const handler_entry& h) {
@@ -136,8 +167,12 @@ namespace warcraft3::lua_engine::bridge {
             for (size_t i = 0; i < spec.params.size() && i < 16; i++) {
                 int slot = (int)i + 1;
                 switch (spec.params[i].type) {
-                    case 'I': case 'H':
+                    case 'I':
                         args[i] = (uint32_t)ht_load_int(g_ht_handle, g_ht_key, slot);
+                        break;
+                    case 'H':
+                        args[i] = ht_load_handle(g_ht_handle, g_ht_key, slot,
+                                                 spec.params[i].handle_type);
                         break;
                     case 'R':
                         args[i] = ht_load_real(g_ht_handle, g_ht_key, slot);
@@ -162,8 +197,12 @@ namespace warcraft3::lua_engine::bridge {
 
             if (spec.ret != 'V') {
                 switch (spec.ret) {
-                    case 'I': case 'H':
+                    case 'I':
                         ht_save_int(g_ht_handle, g_ht_key, 0, (int32_t)result);
+                        break;
+                    case 'H':
+                        ht_save_handle(g_ht_handle, g_ht_key, 0, result,
+                                       spec.return_handle_type);
                         break;
                     case 'R':
                         ht_save_real(g_ht_handle, g_ht_key, 0, result);
@@ -202,8 +241,11 @@ namespace warcraft3::lua_engine::bridge {
             int slot = (int)i + 1;
             switch (spec.params[i].type) {
                 case 'I':
-                case 'H':
                     lua_pushinteger(L, ht_load_int(g_ht_handle, g_ht_key, slot));
+                    break;
+                case 'H':
+                    lua_pushinteger(L, ht_load_handle(g_ht_handle, g_ht_key, slot,
+                                                       spec.params[i].handle_type));
                     break;
                 case 'R': {
                     uint32_t rv = ht_load_real(g_ht_handle, g_ht_key, slot);
@@ -231,12 +273,15 @@ namespace warcraft3::lua_engine::bridge {
         // Write result back to hashtable
         if (error == LUA_OK && spec.ret != 'V') {
             switch (spec.ret) {
-                case 'I':
-                case 'H': {
+                case 'I': {
                     int32_t val = (int32_t)lua_tointeger(L, -1);
                     ht_save_int(g_ht_handle, g_ht_key, 0, val);
                     break;
                 }
+                case 'H':
+                    ht_save_handle(g_ht_handle, g_ht_key, 0,
+                        (uint32_t)lua_tointeger(L, -1), spec.return_handle_type);
+                    break;
                 case 'R': {
                     jass::jreal_t rv = jassbind::read_real(L, -1);
                     ht_save_real(g_ht_handle, g_ht_key, 0, rv);

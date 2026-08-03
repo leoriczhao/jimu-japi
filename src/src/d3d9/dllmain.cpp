@@ -66,11 +66,14 @@ IDirect3D9* WINAPI Direct3DCreate9(UINT SDKVersion)
 extern "C" __declspec(dllexport) void __cdecl InitializeD3DAPI(
     d3d9_api::register_handler_fn reg_fn,
     d3d9_api::from_string_fn from_string,
-    d3d9_api::create_string_fn create_string)
+    d3d9_api::create_string_fn create_string,
+    d3d9_api::get_rect_fn get_rect,
+    d3d9_api::create_rect_fn create_rect)
 {
     // Set up the string conversion function
     d3d9_api::set_from_string_fn(from_string);
     d3d9_api::set_create_string_fn(create_string);
+    d3d9_api::set_rect_fns(get_rect, create_rect);
 
     // Register all d3d API handlers with the bridge dispatch
     d3d9_api::register_all_handlers(reg_fn);

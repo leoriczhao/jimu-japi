@@ -35,6 +35,8 @@ namespace {
     from_string_fn g_from_string = nullptr;
     typedef uint32_t (*create_string_fn)(const char*);
     create_string_fn g_create_string = nullptr;
+    d3d9_api::get_rect_fn g_get_rect = nullptr;
+    d3d9_api::create_rect_fn g_create_rect = nullptr;
 
     // Helper to read a string from a uint32_t arg (jstring_t)
     const char* arg_to_string(uint32_t val) {
@@ -329,29 +331,32 @@ static uint32_t h_GetMouseInTexture(const uint32_t* args, size_t nargs) {
 }
 
 static uint32_t h_SetTextureSrcRect(const uint32_t* args, size_t nargs) {
-    // Spec: (IHrect;)V — the rect is passed as a handle, we need to extract left/bottom/right/top
-    // For now, use simplified 4-float version
-    if (nargs >= 5) {
+    if (nargs >= 2 && g_get_rect) {
+        float left = 0.0f;
+        float bottom = 0.0f;
+        float right = 0.0f;
+        float top = 0.0f;
+        if (!g_get_rect(args[1], &left, &bottom, &right, &top)) return 0;
         d3d9_renderer::set_texture_src_rect(
             (d3d9_renderer::texture_handle_t)args[0],
-            arg_to_float(args[1]), arg_to_float(args[2]),
-            arg_to_float(args[3]), arg_to_float(args[4])
-        );
+            left, top, right, bottom);
     }
     return 0;
 }
 
+static uint32_t h_GetTextureSrcRect(const uint32_t* args, size_t nargs) {
+    if (nargs < 1 || !g_create_rect) return 0;
+    float left = 0.0f;
+    float top = 0.0f;
+    float right = 0.0f;
+    float bottom = 0.0f;
+    d3d9_renderer::get_texture_src_rect(
+        (d3d9_renderer::texture_handle_t)args[0],
+        &left, &top, &right, &bottom);
+    return g_create_rect(left, bottom, right, top);
+}
+
 // ── Window/mouse/utility handlers ─────────────────────────────
-
-static uint32_t h_GetMouseVectorX(const uint32_t* args, size_t nargs) {
-    (void)args; (void)nargs;
-    return float_to_arg(d3d9_renderer::get_mouse_vector_x());
-}
-
-static uint32_t h_GetMouseVectorY(const uint32_t* args, size_t nargs) {
-    (void)args; (void)nargs;
-    return float_to_arg(d3d9_renderer::get_mouse_vector_y());
-}
 
 static uint32_t h_GetWindowWidth(const uint32_t* args, size_t nargs) {
     (void)args; (void)nargs;
@@ -361,21 +366,6 @@ static uint32_t h_GetWindowWidth(const uint32_t* args, size_t nargs) {
 static uint32_t h_GetWindowHeight(const uint32_t* args, size_t nargs) {
     (void)args; (void)nargs;
     return (uint32_t)d3d9_renderer::get_window_height();
-}
-
-static uint32_t h_ShowConsole(const uint32_t* args, size_t nargs) {
-    if (nargs >= 1) d3d9_renderer::show_console(args[0] != 0);
-    return 0;
-}
-
-static uint32_t h_ShowFpsText(const uint32_t* args, size_t nargs) {
-    if (nargs >= 1) d3d9_renderer::show_fps_text(args[0] != 0);
-    return 0;
-}
-
-static uint32_t h_SetKeyboard(const uint32_t* args, size_t nargs) {
-    if (nargs >= 2) d3d9_renderer::set_keyboard((int)args[0], args[1] != 0);
-    return 0;
 }
 
 static uint32_t h_GetD3DStatus(const uint32_t* args, size_t nargs) {
@@ -438,16 +428,12 @@ void register_all_handlers(register_handler_fn reg)
     reg("SetTextureShow",    "(IB)V",    h_SetTextureShow);
     reg("SetTextureTrigger", "(IB)V",    h_SetTextureTrigger);
     reg("GetMouseInTexture", "(I)B",     h_GetMouseInTexture);
-    reg("SetTextureSrcRect", "(IRRRR)V", h_SetTextureSrcRect);
+    reg("SetTextureSrcRect", "(IHrect;)V", h_SetTextureSrcRect);
+    reg("GetTextureSrcRect", "(I)Hrect;", h_GetTextureSrcRect);
 
     // Window/mouse/utility
-    reg("GetMouseVectorX",   "()R",      h_GetMouseVectorX);
-    reg("GetMouseVectorY",   "()R",      h_GetMouseVectorY);
     reg("GetWindowWidth",    "()I",      h_GetWindowWidth);
     reg("GetWindowHeight",   "()I",      h_GetWindowHeight);
-    reg("ShowConsole",       "(B)V",     h_ShowConsole);
-    reg("ShowFpsText",       "(B)V",     h_ShowFpsText);
-    reg("SetKeyboard",       "(IB)V",    h_SetKeyboard);
     reg("GetD3DStatus",      "()I",      h_GetD3DStatus);
 }
 
@@ -458,6 +444,11 @@ void set_from_string_fn(from_string_fn fn) {
 
 void set_create_string_fn(create_string_fn fn) {
     g_create_string = fn;
+}
+
+void set_rect_fns(get_rect_fn get_fn, create_rect_fn create_fn) {
+    g_get_rect = get_fn;
+    g_create_rect = create_fn;
 }
 
 }  // namespace d3d9_api
