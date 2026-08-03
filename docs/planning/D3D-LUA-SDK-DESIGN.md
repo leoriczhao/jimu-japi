@@ -676,7 +676,16 @@ Texture draw 前重新建立 fixed-function alpha 状态，整个 overlay 仍处
 `-InteractiveD3D -NoKill` 为累计 129/129。专用面板的同 z 创建序为 low Text → opaque Texture →
 high Text，真实窗口只显示 high Text；100% 与 50% 文字透明度有明确视觉差异，0% 文字不可见。该证据完成
 LAYER-01 和文字侧 COLOR-01；贴图 alpha 的既有真实渲染仍保留，但 P3 只有在 asset/失败合同完成后才能结束。
-本段暂为工作区构建证据，提交态 SUPPLY-01 provenance 将在本批源码提交后另行补录。
+
+源码提交 <code>49dccfc</code> 已从 detached clean worktree 以 vcvars32 + CMake Visual Studio 2022 Win32
+Release 完整构建；构建前 HEAD 精确指向该提交且 tracked diff 为零，构建后仅有
+<code>src/build-clean/</code>。Clean proxy SHA-256 为
+<code>125806BE0D6DEE551B419E74AC2BE6DB4C8786CBE5F2735DD162E39CAF61A187</code>，clean
+<code>yd_japi.dll</code> SHA-256 为
+<code>F475E738D3FAF6CB268A182B88EBD8AA96738DB289B6D670F1E7BF776AA08367</code>。部署显式传入这两份
+clean DLL：ABI/1000 轮合同、handler 合同、普通 108/108、D3D 129/129 与上述 alpha/z 真实视觉均通过；
+游戏目录 proxy 和 sidecar 回读均等于 clean proxy hash。发布候选副本保存在忽略目录
+<code>build/d3d/49dccfc-newD3d9.dll</code> 与 <code>build/d3d/49dccfc-yd_japi.dll</code>。
 
 ## 15. 验收标准
 

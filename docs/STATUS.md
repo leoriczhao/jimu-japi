@@ -107,7 +107,7 @@ P3 渲染子项已经把 Text 改为 D3DXFont alpha 绘制，并把 Text/Texture
 | D3D 卸载与会话清理 | 独立工具已在隔离目录验证幂等安装/验证/卸载、未知文件保护，并在真实游戏目录完成卸载→再次卸载→未安装验证→普通 108/108→从干净提交产物重装→hash 验证；原生 ABI 的显式 `end_session` 已验证三类资源批量归零和同进程旧 handle 失效，但仍无真实地图切换/VM 关闭钩子 | **部署生命周期与显式 native session 完成，自动会话生命周期未完成**；不能据此宣称 SDK 可用 |
 | D3D Lua SDK | `require "jass.d3d"` 返回 Font/Text/Texture 类；P2 基础对象与 P3 D3DXFont alpha、跨类型稳定 z 队列均通过公共 fixture 和真实窗口；fixture 源码不调用裸 RPC | **SDK 仍在开发**；P3 asset、P4 Subscription、完整生命周期/device 和文档门槛仍未完成 |
 | 默认空白地图 | `reference/empty-map/` 的对象层为 0 个 doodad、0 个预放单位（仅保留起始点）；无 Melee 初始化；`Hrif` 继承英雄类型并在运行时设为 10 级；真实窗口确认中央仅 1 个英雄火枪手；普通 `108/108`、D3D `129/129` | **完成并设为默认** |
-| D3D P3 渲染 | Text 使用动态加载的 D3DXFont 绘制 ARGB；Text/Texture 按 `z`、创建序进入同一队列；真实窗口中 low text 被同 z 后创建 Texture 遮住、high text 再覆盖其上，0%/50%/100% 文字 alpha 正确 | **渲染子项完成，P3 尚未完成**；仍需 `asset://`/MPQ BLP/PNG 和加载失败合同 |
+| D3D P3 渲染 | Text 使用动态加载的 D3DXFont 绘制 ARGB；Text/Texture 按 `z`、创建序进入同一队列；真实窗口中 low text 被同 z 后创建 Texture 遮住、high text 再覆盖其上，0%/50%/100% 文字 alpha 正确；提交 `49dccfc` 的 detached clean build、ABI/handler、普通 108/108、D3D 129/129 和安装 hash 均通过 | **渲染子项与提交态 provenance 完成，P3 尚未完成**；仍需 `asset://`/MPQ BLP/PNG 和加载失败合同 |
 | D3D 后续主线 | P3 MPQ asset；P4 Subscription 与统一事件；P5 自动 session、TTL、device lost/reset 和完整压力/失败路径；P6 文档与最终验收 | **未完成，属于当前主线而非可选项** |
 
 ## 4. 验证入口
@@ -171,7 +171,7 @@ worktree 的 provenance 命令；本次 clean 构建因此在该 worktree 内使
 
 ## 5. 下一阶段顺序
 
-1. P3：实现 `asset://`/MPQ BLP/PNG 和加载失败合同；统一 render queue、D3DXFont 和文字 alpha 已完成工作区实机验收，提交态 provenance 待本批提交后补录。
+1. P3：实现 `asset://`/MPQ BLP/PNG 和加载失败合同；统一 render queue、D3DXFont、文字 alpha 与提交态 provenance 已完成。
 2. P4：实现 Subscription 与统一鼠标/键盘/enter/leave/click 事件，替代两套 texture 身份。
 3. P5：补齐 Lua VM/地图自动 session 清理、TTL、device lost/reset、同进程新会话、失败路径和压力/soak 验收。
 4. P6：完成 quickstart、API reference、迁移文档和全部 §15 门槛；在此之前状态保持“SDK 开发中”。
