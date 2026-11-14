@@ -18,6 +18,7 @@
 #include <memory>
 #include <new>
 #include <sstream>
+#include <string>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -286,6 +287,30 @@ void on_device_reset()
 
 // ── Rendering ─────────────────────────────────────────────────
 
+// Game and map strings reach the SDK as raw bytes. UTF-8 is the common case
+// (Lua sources and w3x2lni written object/trigger strings), but a zhCN game
+// MPQ hands back GBK. Try strict UTF-8 first and fall back to the ANSI code
+// page so both render as real characters instead of mojibake.
+static std::wstring text_to_wide(const std::string& text)
+{
+    if (text.empty()) return std::wstring();
+
+    auto convert = [&text](UINT code_page, DWORD flags) -> std::wstring {
+        const int length = MultiByteToWideChar(
+            code_page, flags, text.data(), static_cast<int>(text.size()), nullptr, 0);
+        if (length <= 0) return std::wstring();
+        std::wstring wide(static_cast<size_t>(length), L'\0');
+        MultiByteToWideChar(
+            code_page, flags, text.data(), static_cast<int>(text.size()),
+            &wide[0], length);
+        return wide;
+    };
+
+    std::wstring wide = convert(CP_UTF8, MB_ERR_INVALID_CHARS);
+    if (wide.empty()) wide = convert(CP_ACP, 0);
+    return wide;
+}
+
 static void render_text_object(IDirect3DDevice9* dev, TextObj& obj)
 {
     if (obj.text.empty()) return;
@@ -295,16 +320,19 @@ static void render_text_object(IDirect3DDevice9* dev, TextObj& obj)
     ID3DXFont* font = fit->second.get_handle(dev);
     if (!font) return;
 
+    const std::wstring wide = text_to_wide(obj.text);
+    if (wide.empty()) return;
+
     RECT rc = {};
     rc.left = static_cast<LONG>(obj.x);
     rc.top = static_cast<LONG>(obj.y);
     rc.right = rc.left + 2000;
     rc.bottom = rc.top + 2000;
-    font->lpVtbl->DrawTextA(
+    font->lpVtbl->DrawTextW(
         font,
         nullptr,
-        obj.text.c_str(),
-        static_cast<INT>(obj.text.size()),
+        wide.c_str(),
+        static_cast<INT>(wide.size()),
         &rc,
         DT_LEFT | DT_TOP | DT_NOCLIP,
         static_cast<D3DCOLOR>(obj.color));

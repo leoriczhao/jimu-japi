@@ -77,6 +77,7 @@
 - 以游戏目录 `d3d9.dll` 代理启动，真实 D3D9 只从 Windows system directory 的绝对路径加载。
 - `yd_japi` 显式注册 D3D bridge；代理缺失时只记录日志，不影响非 D3D 初始化。
 - 字体、文字、贴图属性和 JASS string ABI 已完成 API 往返验证。
+- 文字按 UTF-8 优先、系统 ANSI 回退解码后用 `DrawTextW` 绘制。此前走 `DrawTextA`，UTF-8 的中文（Lua 源码、w3x2lni 写出的对象/触发器字符串）会渲染成乱码；GBK 来源（游戏 MPQ）仍走回退分支。实机截图中 `步兵` 正常显示。
 - `SetHeroLevels(code)` 取址通道和 `TextureAddEvent` / `TextureRemoveEvent` 的 JASS timer 回调链已接通。
 - `GetD3DStatus` 提供加载、注册、wrapper、device、帧和贴图的进程内诊断位。
 - `-InteractiveD3D` 完成 hash 保护部署、视觉探针、真实渲染和鼠标命中验收。
