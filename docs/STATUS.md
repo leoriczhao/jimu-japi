@@ -226,7 +226,9 @@ worktree 的 provenance 命令；本次 clean 构建因此在该 worktree 内使
 3. P5（完成，2026-11-15）：TTL、device 世代/lost/reset 事件、`d3d.on` 模块级订阅、`status()/stats()` 诊断、
    LIFE-11 失败不泄漏与 DEV-03 二十次真实 reset 后句柄/属性/订阅稳定已验收（交互 147/147）；`device_lost` 事件在
    1.27a 窗口模式下不可观测，自动地图/VM 会话关闭与同进程换图仍缺，记入已知缺口。
-4. P6：完成 quickstart、API reference、迁移文档和全部 §15 门槛；在此之前状态保持“SDK 开发中”。
+4. P6（进行中，2026-11-15）：quickstart、API reference、迁移指南已落地在 `docs/guide/`（见 §6）；
+   §15 剩余门槛是 LIFE-12（同进程新会话）、自动地图/VM 会话关闭与 BLP2 实机证据；这三项未满足前，
+   状态继续保持“SDK 开发中”，不对外宣称 D3D SDK 完成。
 5. 之后再评估 JASS wrapper 自动生成和 SaveFunc/func_bind。
 
 ## 6. 文档职责
@@ -240,4 +242,7 @@ worktree 的 provenance 命令；本次 clean 构建因此在该 worktree 内使
 | `docs/planning/D3D-PROXY-DESIGN.md` | D3D proxy 底层加载、部署安全策略和历史实测记录 |
 | `docs/planning/D3D-LUA-SDK-DESIGN.md` | 用户级 D3D Lua SDK、对象模型、完整生命周期和最终验收合同 |
 | `docs/planning/JASS-LUA-BRIDGE.md` | UnitId + hashtable RPC 的设计说明 |
+| `docs/guide/D3D-LUA-QUICKSTART.md` | 五分钟上手：HUD、timer 更新、订阅、reset、显式关闭 |
+| `docs/guide/D3D-LUA-API.md` | `jass.d3d` 完整参考：模块函数、四类对象、事件表、asset URI、错误与生命周期 |
+| `docs/guide/D3D-LUA-MIGRATION.md` | 从 `jass.message.texture_*` 与裸 `UnitId`/hashtable RPC 迁移 |
 | `docs/re-builtin-japi/` | 逆向证据与实现依据，不承担项目状态维护 |

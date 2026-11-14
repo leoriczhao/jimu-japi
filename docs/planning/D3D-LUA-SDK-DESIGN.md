@@ -632,6 +632,12 @@ hash 均为 <code>CD3896606FE2F20861F34A1406457972F982D2A72ED8F4B9173606F4FCCF10
 - device reset 与错误处理示例；
 - 从 <code>jass.message.texture_*</code> 和裸 RPC 迁移说明。
 
+上述六项已于 2026-11-15 落在 <code>docs/guide/</code>：<code>D3D-LUA-QUICKSTART.md</code>（5 分钟上手、
+timer 更新、订阅、reset、shutdown）、<code>D3D-LUA-API.md</code>（模块函数、Font/Text/Texture/Subscription、
+事件表、asset URI/MPQ 导入、生命周期与销毁、device reset、错误文本）、
+<code>D3D-LUA-MIGRATION.md</code>（归一化坐标→客户区像素、VK→WARK、press/release→事件名、
+裸 UnitId/hashtable RPC→直接调用）。
+
 ## 14. 实施阶段
 
 | 阶段 | 内容 | 阶段完成条件 |
@@ -642,7 +648,7 @@ hash 均为 <code>CD3896606FE2F20861F34A1406457972F982D2A72ED8F4B9173606F4FCCF10
 | P3（完成） | 统一 render queue、D3DXFont、asset URI/MPQ/BLP | alpha/z、地图内 PNG/BLP1、游戏 BLP、共享 cache、reload、失败合同、clean provenance 与真实窗口均通过 |
 | P4（完成，2026-11-15） | Subscription 与统一输入事件 | 键盘、鼠标、enter/leave/click 全部走真实 Texture；真实鼠标按键由 `WM_*` + 异步按键状态提供 |
 | P5（完成，2026-11-15） | GC、TTL、session close、device lost/reset、错误诊断 | TTL 到期释放并同步 Lua 句柄、LIFE-11 失败不泄漏、DEV-03 二十次真实 resize/reset 后句柄/属性/订阅保持、`d3d.on` 生命周期事件与 `status()`/`stats()` 诊断通过；交互 147/147。自动地图/VM session close 与同进程换图仍缺，`device_lost` 在 1.27a 窗口模式不可观测（见 14.3） |
-| P6 | 安装/验证/卸载、迁移、API 文档、最终实机验收 | 第 15 节全部通过并记录证据 |
+| P6（进行中，2026-11-15） | 安装/验证/卸载、迁移、API 文档、最终实机验收 | 文档三项已交付：<code>docs/guide/D3D-LUA-QUICKSTART.md</code>、<code>D3D-LUA-API.md</code>、<code>D3D-LUA-MIGRATION.md</code>；第 15 节仍未全通过（LIFE-12 同进程新会话、自动地图/VM 会话关闭、BLP2 实机证据），因此不宣称 SDK 完成 |
 
 阶段不能跨越完成门槛。例如 P2 的对象能显示，不代表 P5 生命周期完成。
 

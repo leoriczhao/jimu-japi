@@ -121,8 +121,10 @@ map-inject/
 │   └── old-japi/               # 旧方案存档
 │
 ├── docs/                        ← 文档
+│   ├── STATUS.md               # 唯一权威状态
 │   ├── architecture/
 │   ├── planning/
+│   ├── guide/                  # 用户文档（D3D Lua SDK quickstart / API / 迁移）
 │   └── analysis/
 │
 └── reference/                   ← 逆向参考
