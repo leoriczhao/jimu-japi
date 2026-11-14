@@ -20,7 +20,7 @@ local util = require "lib.util"
 local M = {}
 
 local KEY_Q = 0x51
-local KEY_F2 = 0x71
+local KEY_F2 = 0x301 -- WARK_F2 (keyboard_code.h), not the Win32 virtual key
 local FLAG_LOCAL_CAST = (1 << 2) | (1 << 5)
 local SPELL_EVENT = 291 -- EVENT_UNIT_SPELL_EFFECT
 
@@ -112,27 +112,34 @@ local function hud_create()
         return false, "window size unavailable"
     end
     hud.font = assert(d3d.Font.new { face = "Arial", height = 18, weight = 700 })
+    -- War3's own top bar (menu, resources) and the selected-unit panel occupy
+    -- the first ~110 client pixels, so the HUD starts below them.
+    local top = 120
     hud.title = assert(d3d.Text.new {
         font = hud.font, text = "JAPI VERTICAL SLICE",
-        x = 24, y = 24, color = d3d.rgba(255, 230, 120, 255), z = 100,
+        x = 24, y = top, color = d3d.rgba(255, 230, 120, 255), z = 100,
     })
     hud.stats = assert(d3d.Text.new {
         font = hud.font, text = "",
-        x = 24, y = 48, color = d3d.rgba(220, 255, 220, 255), z = 100,
+        x = 24, y = top + 26, color = d3d.rgba(220, 255, 220, 255), z = 100,
     })
     hud.target = assert(d3d.Text.new {
         font = hud.font, text = "",
-        x = 24, y = 72, color = d3d.rgba(200, 220, 255, 255), z = 100,
+        x = 24, y = top + 52, color = d3d.rgba(200, 220, 255, 255), z = 100,
     })
     hud.hint = assert(d3d.Text.new {
-        font = hud.font, text = "Q = Blizzard at cursor | click = select | F2 = restart",
-        x = 24, y = height - 40, color = d3d.rgba(255, 255, 255, 210), z = 100,
+        font = hud.font, text = "Q = Blizzard at cursor | left click = select | F2 = restart",
+        x = 24, y = top + 82, color = d3d.rgba(255, 255, 255, 210), z = 100,
     })
+    -- HUD backing plate: a game:// BLP tinted near-black keeps the text legible
+    -- over any terrain, and exercises asset loading from the game MPQ.
     hud.panel = assert(d3d.Texture.new {
         source = "game://ReplaceableTextures\\CommandButtons\\BTNRifleman.blp",
-        x = width - 120, y = 20, width = 96, height = 96,
-        color = d3d.rgba(255, 255, 255, 255), z = 99,
+        x = 12, y = top - 12, width = 600, height = 126,
+        color = d3d.rgba(8, 8, 8, 190), z = 99,
     })
+    print(string.format("[slice] client size %dx%d, hud at %d..%d",
+        width, height, top - 12, top + 114))
     hud.ready = true
     hud.refresh()
     return true
@@ -196,7 +203,22 @@ end
 
 -- ── Setup ─────────────────────────────────────────────────────────
 
-local function setup()
+local world = { trigger = nil }
+
+-- Rebuild the playable world. scene.reset() clears every unit, so this is also
+-- the F2 restart path and must not leak the previous spell trigger.
+local function rebuild_world(verbose)
+    if world.trigger then
+        pcall(jass.DestroyTrigger, world.trigger)
+        world.trigger = nil
+    end
+    state.dummy = nil
+    state.spell_fired = false
+    state.spell_ability = 0
+    state.q_held = false
+    state.cast_ok = nil
+    state.cast_error = nil
+
     local hero = scene.reset(true)
     state.hero = hero
     ensure_cast_resources(hero)
@@ -205,7 +227,8 @@ local function setup()
     local y = jass.GetUnitY(hero)
     state.dummy = jass.CreateUnit(jass.Player(1), fourcc("hfoo"), x + 420.0, y, 270.0)
     if state.dummy then
-        jass.SetWidgetLife(state.dummy, 500.0)
+        -- Fill to the unit's own maximum (SetWidgetLife clamps at max life).
+        jass.SetWidgetLife(state.dummy, state_value(state.dummy, 1))
     end
 
     local trigger = jass.CreateTrigger()
@@ -214,13 +237,34 @@ local function setup()
         state.spell_fired = true
         state.spell_ability = jass.GetSpellAbilityId()
     end))
+    world.trigger = trigger
 
     jass.SelectUnit(hero, true)
-    jass.PanCameraToTimed(x, y, 0.0)
-    message.hook = on_message
+    -- PanCameraToTimed with a zero duration is not reliably instant on 1.27a;
+    -- SetCameraPosition is the instant call.
+    local camera_ok = pcall(jass.SetCameraPosition, x, y)
+    if not camera_ok then
+        pcall(jass.PanCameraTo, x, y)
+    end
+    if hud.ready then hud.refresh() end
+    if verbose then
+        print(string.format("[slice] hero at %.1f,%.1f camera at %.1f,%.1f",
+            x, y,
+            jass.GetCameraTargetPositionX() or 0, jass.GetCameraTargetPositionY() or 0))
+    end
+    return hero
+end
 
+local function setup()
     local hud_ok, hud_err = hud_create()
+    rebuild_world(true)
+    message.hook = on_message
     return hud_ok, hud_err
+end
+
+local function restart_now()
+    print("[slice] restart")
+    return rebuild_world(true)
 end
 
 -- ── Self-check ────────────────────────────────────────────────────
@@ -318,6 +362,31 @@ local function run_cast_checks()
         state.dummy_life = after
     end)
 
+    check("F2 restart rebuilds the world", function()
+        local old_dummy = state.dummy
+        local sent = on_message { type = "key_down", code = KEY_F2 }
+        assert(sent == false, "hook did not consume F2")
+        assert(state.restart_requested == true, "hook did not record the restart")
+        -- The watcher timer would do this on its next tick; call it directly so
+        -- the check is deterministic.
+        state.restart_requested = false
+        restart_now()
+        assert(state.dummy ~= nil and state.dummy ~= old_dummy,
+            "dummy was not recreated")
+        local max_life = state_value(state.dummy, 1)
+        local life = state_value(state.dummy, 0)
+        assert(life >= max_life - 1.0,
+            string.format("recreated dummy is not at full life: %.0f/%.0f", life, max_life))
+        assert(state.spell_fired == false, "spell state survived the restart")
+        assert(jass.IsUnitType(state.hero, jass.UNIT_TYPE_HERO),
+            "hero was not recreated as a hero")
+        assert(jass.GetHeroLevel(state.hero) == 10, "hero level lost on restart")
+        if hud.ready then
+            local text = hud.stats:get_text()
+            assert(text:find("Lv 10", 1, true), "HUD did not follow the restart: " .. text)
+        end
+    end)
+
     check("HUD refresh follows the damage", function()
         if not hud.ready then
             error("d3d unavailable, covered by the skip above", 0)
@@ -358,6 +427,21 @@ local function after(seconds, fn)
     end)
 end
 
+-- Watches the restart flag from the message hook and rebuilds the world. The
+-- hook itself must stay cheap, so the rebuild happens on the next timer tick.
+local function start_restart_watch()
+    local timer = jass.CreateTimer()
+    jass.TimerStart(timer, 0.25, true, function()
+        if not state.restart_requested then return end
+        state.restart_requested = false
+        local ok, err = pcall(restart_now)
+        if not ok then
+            print("[slice] restart failed: " .. tostring(err))
+        end
+    end)
+    state.watch_timer = timer
+end
+
 function M.run()
     -- The command-submit chain used by LocalPointOrder is only up a few
     -- frames into the game, so the slice starts after the first second.
@@ -369,6 +453,7 @@ function M.run()
         if not hud_ok then
             print("[slice] HUD unavailable: " .. tostring(hud_err))
         end
+        start_restart_watch()
     end)
 
     after(2.2, run_setup_checks)
