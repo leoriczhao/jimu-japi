@@ -1,7 +1,8 @@
 # D3D Lua SDK 与完整生命周期设计
 
-> 状态：P0-P3 已闭环；Font/Text/Texture、统一 render queue、D3DXFont/文字 alpha、asset URI/MPQ 与
-> 加载失败合同已实机通过。P4-P6、Subscription 与完整生命周期待实现，整体仍是“SDK 开发中”。
+> 状态：P0-P4 已闭环；Font/Text/Texture、统一 render queue、D3DXFont/文字 alpha、asset URI/MPQ、
+> 加载失败合同，以及 Subscription/统一输入（真实鼠标键盘）已实机通过。P5-P6 与完整生命周期待实现，
+> 整体仍是“SDK 开发中”。
 >
 > 本文是面向地图作者的 D3D Lua SDK 实现契约和验收标准。底层 proxy 的加载、转发、部署与历史验证仍见
 > [D3D-PROXY-DESIGN.md](D3D-PROXY-DESIGN.md)；项目当前完成度只以
@@ -28,8 +29,12 @@ worktree 构建、部署 DLL 与 sidecar hash 已一致；幂等安装/验证/�
 不调用 hashtable、<code>UnitId</code> 或手写 spec。P3 随后将 Text 改为 D3DXFont ARGB 绘制，将 Text/Texture
 按 <code>z</code> 与创建序放入同一队列，并实现 <code>asset://</code>/<code>game://</code>、MPQ 内存读取、
 BLP1/常用图片解码、共享 CPU cache、reload 与稳定失败合同。实机公共 SDK 功能 8 组通过；与底层 bridge
-合计后的完整日志为 130/130（108 普通 + 8 SDK 功能 + 13 bridge + 1 shutdown），不是 D3D API 数。
-P4 Subscription、P5 自动地图/VM 生命周期与完整 device reset、P6 文档/最终验收仍未完成。
+合计后的完整日志为 125 项 D3D 侧测试（8 SDK 功能 + 13 bridge + Subscription 真实输入 + shutdown），
+与普通基线合并为 141/141，不是 D3D API 数。P4 已把 Subscription 与统一输入事件接到真实贴图上：
+enter/leave/mouse_down/mouse_up/click/key_down/key_up、pointer capture、6px 点击阈值、`hover_only`/
+`propagate`/`keep_on_error`、只读 event 表。事件源不依赖 CGameUI 分发（游戏内 1.27a 只送键盘消息），
+鼠标按钮来自窗口 `WM_*` 消息与异步按键状态，两条源共用同一状态机去重。
+P5 自动地图/VM 生命周期与完整 device reset、P6 文档/最终验收仍未完成。
 
 当前用户已经可以只通过 <code>jass.d3d</code> 创建、修改和销毁字体、文字或 MPQ/游戏资源贴图，不再需要复制
 私有 RPC helper，也不依赖开发机绝对路径。与此同时，<code>jass.message.texture_*</code> 又维护一套不参与真实
@@ -629,7 +634,7 @@ hash 均为 <code>CD3896606FE2F20861F34A1406457972F982D2A72ED8F4B9173606F4FCCF10
 | P1（完成） | 版本化 C ABI、session、generation ResourceManager | ABI/handle/session 原生合同及 1000 轮资源计数归零通过；自动地图结束钩子仍属于 P5 |
 | P2（完成） | <code>jass.d3d</code> userdata 与 Font/Text/Texture 基础 API | 用户无需 RPC 即可创建、修改、销毁；公共 7 组实机通过 |
 | P3（完成） | 统一 render queue、D3DXFont、asset URI/MPQ/BLP | alpha/z、地图内 PNG/BLP1、游戏 BLP、共享 cache、reload、失败合同、clean provenance 与真实窗口均通过 |
-| P4 | Subscription 与统一输入事件 | 键盘、鼠标、enter/leave/click 全部走真实 Texture |
+| P4（完成，2026-11-15） | Subscription 与统一输入事件 | 键盘、鼠标、enter/leave/click 全部走真实 Texture；交互回归 141/141，真实鼠标按键由 `WM_*` + 异步按键状态提供 |
 | P5 | GC、TTL、session close、device lost/reset、错误诊断 | 生命周期矩阵和压力测试通过 |
 | P6 | 安装/验证/卸载、迁移、API 文档、最终实机验收 | 第 15 节全部通过并记录证据 |
 
@@ -740,7 +745,7 @@ PNG/alpha/z/鼠标/Shift 验收全部通过，累计 130/130；游戏目录 prox
 | API-01 | Lua 注册 | <code>require "jass.d3d"</code> 成功，返回的类和方法完整 |
 | API-02 | 公共边界 | SDK 功能测试中不存在 <code>UnitId</code>、<code>japi_ht</code> 或手写 spec |
 | COVER-01 | Handler manifest | 54 个兼容名字均有唯一 owner、准确签名、分类、实现状态和稳定测试 ID；未测项不能标为完成 |
-| COVER-02 | 统计语义 | 报告分别列累计测试数、D3D fixture 测试数和 handler 覆盖数，禁止把当前 130/130 表述为 D3D API 数 |
+| COVER-02 | 统计语义 | 报告分别列累计测试数、D3D fixture 测试数和 handler 覆盖数，禁止把当前 141/141 表述为 D3D API 数 |
 | COMPAT-01 | 注册冲突 | D3D 初始化不覆盖 canonical <code>ShowConsole</code>/<code>ShowFpsText</code>/<code>SetKeyboard</code>；重复名字默认拒绝并记录 owner |
 | COMPAT-02 | WARK 键码 | <code>SetKeyboard</code> 与 message API 共用唯一 WARK→VK 映射；修饰键、方向键、F 键、OEM、数字键盘和无效码均通过 |
 | COMPAT-03 | SrcRect JASS ABI | <code>SetTextureSrcRect(IHrect;)V</code> 与 <code>GetTextureSrcRect(I)Hrect;</code> 按内置 wrapper 往返，旧四浮点实现不占用同名入口 |

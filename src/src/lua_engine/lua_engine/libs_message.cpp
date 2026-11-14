@@ -674,6 +674,11 @@ namespace warcraft3::lua_engine::message {
 	// be fired on mouse_up (the mouse_up message carries no button code)
 	// ============================================================
 	static bool g_mouse_button_down[5] = { false, false, false, false, false };
+	// Physical left/middle/right button state, owned by emit_mouse_button().
+	static bool g_mouse_pressed[3] = { false, false, false };
+
+	static void emit_mouse_button(int button, bool down);
+	static void install_wndproc_hook();
 
 	static void queue_d3d_input(d3d::InputKind kind, int32_t code)
 	{
@@ -714,17 +719,31 @@ namespace warcraft3::lua_engine::message {
 			{
 				g_mouse_button_down[m->code] = true;
 			}
-			queue_d3d_input(d3d::InputKind::MouseDown,
-				static_cast<int32_t>(m->code));
+			// The button state belongs to emit_mouse_button(); a press that
+			// another input source already reported is not repeated here.
+			if (m->code < 3)
+			{
+				emit_mouse_button((int)m->code, true);
+			}
+			else
+			{
+				queue_d3d_input(d3d::InputKind::MouseDown,
+					static_cast<int32_t>(m->code));
+			}
 			dispatch_texture_events(ML, (int)m->code, true);
 			return mouse_event(ML, "mouse_down", m);
 		}
 		case 0x400500C9:
 			for (int i = 0; i < 5; ++i)
 			{
-				if (g_mouse_button_down[i])
+				if (!g_mouse_button_down[i]) continue;
+				g_mouse_button_down[i] = false;
+				if (i < 3)
 				{
-					g_mouse_button_down[i] = false;
+					emit_mouse_button(i, false);
+				}
+				else
+				{
 					queue_d3d_input(d3d::InputKind::MouseUp, i);
 					dispatch_texture_events(ML, i, false);
 				}
@@ -734,6 +753,102 @@ namespace warcraft3::lua_engine::message {
 			break;
 		}
 		return true;
+	}
+
+	// ============================================================
+	// Physical mouse buttons.
+	//
+	// War3 1.27a in windowed mode does not route mouse button messages
+	// through the CGameUI dispatch that jass.message hooks (keyboard does
+	// arrive there), so the message filter alone can never report real
+	// clicks. The game window still receives the raw WM_* button messages,
+	// and the async button state is always readable, so both paths funnel
+	// into emit_mouse_button(), which owns the button state: exactly one
+	// event per physical press no matter how many sources see it.
+	// ============================================================
+	static WNDPROC g_orig_wndprocs[8] = { 0 };
+	static HWND    g_hooked_windows[8] = { 0 };
+	static int     g_hooked_windows_count = 0;
+
+	static bool game_window_active()
+	{
+		HWND window = get_window();
+		if (!window) return false;
+		HWND focus = GetForegroundWindow();
+		return focus == window || (focus && IsChild(window, focus));
+	}
+
+	static void emit_mouse_button(int button, bool down)
+	{
+		if (button < 0 || button >= 3) return;
+		if (g_mouse_pressed[button] == down) return;
+		g_mouse_pressed[button] = down;
+		queue_d3d_input(down ? d3d::InputKind::MouseDown : d3d::InputKind::MouseUp, button);
+		if (ML) dispatch_texture_events(ML, -1, down);
+	}
+
+	void poll_input_devices()
+	{
+		if (g_hooked_windows_count == 0) install_wndproc_hook();
+		static const int kButtons[3] = { VK_LBUTTON, VK_RBUTTON, VK_MBUTTON };
+		const bool active = game_window_active();
+		for (int i = 0; i < 3; ++i)
+		{
+			const bool down = active && (GetAsyncKeyState(kButtons[i]) & 0x8000) != 0;
+			emit_mouse_button(i, down);
+		}
+	}
+
+	// Raw window messages carrying the button transition (works even while
+	// the window is being activated by the click, and for synthesized
+	// messages such as PostMessage from an external driver).
+	static LRESULT CALLBACK input_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
+	{
+		WNDPROC orig = nullptr;
+		for (int i = 0; i < g_hooked_windows_count; ++i)
+		{
+			if (g_hooked_windows[i] == hwnd) { orig = g_orig_wndprocs[i]; break; }
+		}
+		switch (msg)
+		{
+		case WM_LBUTTONDOWN: emit_mouse_button(0, true); break;
+		case WM_LBUTTONUP:   emit_mouse_button(0, false); break;
+		case WM_RBUTTONDOWN: emit_mouse_button(1, true); break;
+		case WM_RBUTTONUP:   emit_mouse_button(1, false); break;
+		case WM_MBUTTONDOWN: emit_mouse_button(2, true); break;
+		case WM_MBUTTONUP:   emit_mouse_button(2, false); break;
+		default:
+			break;
+		}
+		if (orig) return CallWindowProcA(orig, hwnd, msg, wparam, lparam);
+		return DefWindowProcA(hwnd, msg, wparam, lparam);
+	}
+
+	static void hook_window(HWND hwnd)
+	{
+		if (!hwnd || g_hooked_windows_count >= 8) return;
+		for (int i = 0; i < g_hooked_windows_count; ++i)
+		{
+			if (g_hooked_windows[i] == hwnd) return;
+		}
+		SetLastError(0);
+		WNDPROC orig = (WNDPROC)SetWindowLongPtrA(hwnd, GWLP_WNDPROC, (LONG_PTR)input_wndproc);
+		if (orig == nullptr && GetLastError() != 0) return;
+		g_hooked_windows[g_hooked_windows_count] = hwnd;
+		g_orig_wndprocs[g_hooked_windows_count] = orig;
+		++g_hooked_windows_count;
+	}
+
+	static void install_wndproc_hook()
+	{
+		HWND top = get_window();
+		if (!top) return;
+		hook_window(top);
+		for (HWND child = FindWindowExW(top, NULL, NULL, NULL); child;
+			child = FindWindowExW(top, child, NULL, NULL))
+		{
+			hook_window(child);
+		}
 	}
 
 	// ============================================================
@@ -747,6 +862,7 @@ namespace warcraft3::lua_engine::message {
 	{
 		if (g_filter_installed) return;
 		message_dispatch::add_filter((uintptr_t)filter);
+		install_wndproc_hook();
 		g_filter_installed = true;
 	}
 
@@ -754,6 +870,14 @@ namespace warcraft3::lua_engine::message {
 	{
 		if (!g_filter_installed) return;
 		message_dispatch::remove_filter((uintptr_t)filter);
+		for (int i = 0; i < g_hooked_windows_count; ++i)
+		{
+			if (g_orig_wndprocs[i] && IsWindow(g_hooked_windows[i]))
+			{
+				SetWindowLongPtrA(g_hooked_windows[i], GWLP_WNDPROC, (LONG_PTR)g_orig_wndprocs[i]);
+			}
+		}
+		g_hooked_windows_count = 0;
 		g_filter_installed = false;
 	}
 

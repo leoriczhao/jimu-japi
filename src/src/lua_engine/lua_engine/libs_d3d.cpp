@@ -1613,6 +1613,7 @@ int event_timer_tick(lua_State* L)
     g_event_dispatching = true;
     try {
         if (device_is_ready()) {
+            message::poll_input_devices();
             poll_hover(L);
             dispatch_pending_input(L);
         } else {
