@@ -5,6 +5,7 @@
 #   .\tools\pack.ps1                                    # empty-map base
 #   .\tools\pack.ps1 -DllPath "path\to\yd_japi.dll"    # custom DLL
 #   .\tools\pack.ps1 -BaseMap "other.w3m"               # custom map/archive/source dir
+#   .\tools\pack.ps1 -BaseMap "foreign" -SkipJassCheck  # vJass maps: skip pjass validation
 #   .\tools\pack.ps1 -OutFile "out\test.w3x"            # custom output
 #   .\tools\pack.ps1 -Demo                             # playable vertical slice instead of the suite
 param(
@@ -16,7 +17,8 @@ param(
     [switch]$InteractiveUi,
     [switch]$InteractiveD3D,
     [switch]$WithDebugger,
-    [switch]$Demo
+    [switch]$Demo,
+    [switch]$SkipJassCheck
 )
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -196,35 +198,98 @@ if (-not (Test-Path $JFile)) {
 Write-Host '  [2/5] Bundle Lua'
 Bundle-Lua $MapDir "$WorkDir\war3map.lua"
 
-# 3. war3map.j — patch: add deferred script loading after initializePlugin()
+# 3. war3map.j — inject the japi bootstrap (plugin maps and foreign maps)
 Write-Host '  [3/5] Patching war3map.j'
 $jContent = Get-Content $JFile -Raw -Encoding ASCII
-# Add SaveStr + UnitId("LoadScript") after initializePlugin() call.
-# If the base map carries the bridge probe functions, exercise JASS -> Lua
+$nl = [string][char]13 + [string][char]10
+
+# Lines that hand the shared hashtable over to the DLL and load war3map.lua.
+# When the base map carries the bridge probe functions, exercise JASS -> Lua
 # immediately after LoadScript (the Lua handlers register synchronously).
-$old = 'call initializePlugin(  )'
-$bridgeProbeCalls = ""
+$loadScriptLines = '    call SaveStr(japi_ht, japi__key, 0, "()V")' + $nl +
+    '    call UnitId("LoadScript")'
 if ($jContent -match 'function LuaBridgeProbeCall') {
-    $bridgeProbeCalls = @"
-    call LuaCallback1()
-    set udg_lua_bridge_result = LuaBridgeProbeCall(10, 32)
-    set udg_lua_error_result = LuaErrorProbeCall()
-    set udg_lua_handle_result = LuaHandleProbeCall()
-"@
+    $loadScriptLines += $nl +
+        '    call LuaCallback1()' + $nl +
+        '    set udg_lua_bridge_result = LuaBridgeProbeCall(10, 32)' + $nl +
+        '    set udg_lua_error_result = LuaErrorProbeCall()' + $nl +
+        '    set udg_lua_handle_result = LuaHandleProbeCall()'
 }
-$new = @"
-call initializePlugin(  )
-    call SaveStr(japi_ht, japi__key, 0, "()V")
-    call UnitId("LoadScript")
-$bridgeProbeCalls
-"@
-if ($jContent -notmatch [regex]::Escape('call UnitId("LoadScript")')) {
-    if ($jContent -notmatch [regex]::Escape($old)) {
-        throw "initializePlugin() call not found in base map war3map.j: $BaseMap"
+
+# Inject a self-contained bootstrap into a map that knows nothing about japi:
+# declare the bridge hashtable, load the DLL through StartCampaignAI, hand the
+# hashtable handle over and load war3map.lua, all from map main().
+function Add-JapiBootstrap {
+    param([string]$Content, [string]$LoadScriptBlock)
+
+    $bootstrap = '// japi bootstrap injected by tools/pack.ps1' + $nl +
+        'function JapiBootstrap takes nothing returns nothing' + $nl +
+        '    call StartCampaignAI(Player(PLAYER_NEUTRAL_AGGRESSIVE), "callback")' + $nl +
+        '    call UnitId(I2S(GetHandleId(japi_ht)))' + $nl +
+        $LoadScriptBlock + $nl +
+        'endfunction' + $nl + $nl
+
+    # A map that already carries japi/builtin-japi globals keeps them; only add
+    # the missing declarations so the injected code does not multiply-define.
+    $globalsDecl = ''
+    if ($Content -notmatch '(?m)^[ \t]*hashtable[ \t]+japi_ht\b') {
+        $globalsDecl += '    hashtable japi_ht = InitHashtable()' + $nl
     }
-    $jContent = $jContent.Replace($old, $new)
+    if ($Content -notmatch '(?m)^[ \t]*integer[ \t]+japi__key\b') {
+        $globalsDecl += '    integer japi__key = StringHash("jass")' + $nl
+    }
+
+    $mainMatch = [regex]::Match($Content, '(?m)^[ \t]*function[ \t]+main[ \t]+takes')
+    if (-not $mainMatch.Success) {
+        throw "war3map.j has no 'function main takes' to bootstrap: $BaseMap"
+    }
+    $endFunc = $Content.IndexOf('endfunction', $mainMatch.Index)
+    if ($endFunc -lt 0) { throw "war3map.j main() has no endfunction: $BaseMap" }
+    $Content = $Content.Substring(0, $endFunc) + '    call JapiBootstrap()' + $nl +
+        $Content.Substring($endFunc)
+
+    $mainStart = [regex]::Match($Content, '(?m)^[ \t]*function[ \t]+main[ \t]+takes').Index
+    $Content = $Content.Substring(0, $mainStart) + $bootstrap + $Content.Substring($mainStart)
+
+    if (-not $globalsDecl) { return $Content }
+    $endGlobals = [regex]::Match($Content, '(?m)^[ \t]*endglobals')
+    if ($endGlobals.Success) {
+        return $Content.Substring(0, $endGlobals.Index) + $globalsDecl + $Content.Substring($endGlobals.Index)
+    }
+    return 'globals' + $nl + $globalsDecl + 'endglobals' + $nl + $nl + $Content
+}
+
+if ($jContent -match [regex]::Escape('call UnitId("LoadScript")')) {
+    Write-Host '  Bootstrap: already present, left untouched'
+} elseif ($jContent -match [regex]::Escape('call initializePlugin(  )')) {
+    $jContent = $jContent.Replace('call initializePlugin(  )',
+        'call initializePlugin(  )' + $nl + $loadScriptLines)
+    Write-Host '  Bootstrap: plugin marker map'
+} else {
+    if ($jContent -match 'UnitId\s*\(') {
+        Write-Host '  WARNING: map already uses UnitId(); review the injected bootstrap for conflicts'
+    }
+    $jContent = Add-JapiBootstrap $jContent $loadScriptLines
+    Write-Host '  Bootstrap: injected into map main() (foreign map)'
 }
 Set-Content $JFile $jContent -Encoding ASCII -NoNewline
+
+# 3b. Parse the patched script before it ever reaches the game. JassHelper/vJass
+# maps can opt out with -SkipJassCheck.
+if (-not $SkipJassCheck) {
+    $commonJ = "$W3x2Lni\data\enUS-1.27.1\mpq\Scripts\Common.j"
+    $blizzardJ = "$W3x2Lni\data\enUS-1.27.1\mpq\Scripts\Blizzard.j"
+    $pjassExe = "$Root\tools\pjass.exe"
+    if ((Test-Path $pjassExe) -and (Test-Path $commonJ) -and (Test-Path $blizzardJ)) {
+        $jassOut = & $pjassExe $commonJ $blizzardJ $JFile 2>&1
+        $jassText = ($jassOut | Out-String)
+        if ($LASTEXITCODE -ne 0 -or $jassText -match '(?m)^\s*(Error|error)') {
+            Write-Host ($jassOut | Select-Object -Last 15 | Out-String)
+            throw "JASS syntax check failed: $JFile (pass -SkipJassCheck to bypass)"
+        }
+        Write-Host '  JASS syntax check OK'
+    }
+}
 
 # 4. Inject DLL and callback
 Write-Host '  [4/5] Inject DLL + callback'

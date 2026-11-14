@@ -24,6 +24,8 @@
 | D3D 底层 proxy/bridge | proxy、注册、部署、诊断、绘制和 code 回调链基本跑通；P0/P1 兼容、部署和原生 session 基座已闭环 | 普通 108/108 + 累计 D3D 130/130 + 真实视觉/鼠标/Shift 交互 | **底层链路基本跑通，不是整体可用** |
 | D3D Lua SDK 与生命周期 | P2/P3 已提供 Font/Text/Texture 强类型 userdata、统一跨类型队列、D3DXFont alpha、`asset://`/`game://` 内存资源、共享 CPU cache、显式销毁、GC/`__close`、reload 和显式 session shutdown；尚无 Subscription、TTL、完整 device/reset 状态诊断和自动地图/VM 会话钩子 | 公共 SDK 功能 8 组 + shutdown 1 组实机通过；原生 ABI 1000 轮通过 | **SDK 开发中，不可作为完整用户 SDK 交付** |
 | 空白测试场景 | 64×64 空图 + 单个 10 级英雄火枪手确定性复位 | 普通 116/116 + D3D 130/130（旧基线） + 真实窗口检查 | 可用；默认基座 |
+| 可玩垂直切片（`-Demo`） | 英雄 + 暴风雪（Q）+ 点击选中 + D3D HUD，只用 `jass.common`/`jass.message`/`jass.d3d`；自带 10 条断言 | 普通图 10/10、外来地图夹具 10/10 | **可用，作为地图作者开工样板** |
+| 外来地图接入（bootstrap 注入） | 对无 japi 痕迹的 `war3map.j` 自动注入 globals + `JapiBootstrap()` + `main()` 调用；repack 前用 pjass 校验 | `build\foreign-map` 夹具 `-Demo` 10/10 | **完成（JASS 地图）**；vJass 需 `-SkipJassCheck` |
 | JASS wrapper 自动生成（E4） | 未实现 | 无 | 可选后续 |
 | SaveFunc / func_bind | 仅 `open_code_run_logs` stub | 无完整验收 | 未完成/可选 |
 
@@ -123,6 +125,29 @@ device reset 状态诊断、自动地图/VM session close 和同进程新地图�
 .\tools\deploy.ps1
 ```
 
+可玩垂直切片（一个英雄 + 一个技能 + 真实输入 + D3D HUD，自带断言，结果 10/10）：
+
+```powershell
+.\tools\deploy.ps1 -Demo          # 自动跑完检查后关闭游戏
+.\tools\deploy.ps1 -Demo -NoKill  # 留在游戏里继续手玩
+```
+
+切片操作：Q 对鼠标位置放暴风雪，左键选中单位，F2 重启一局（由场景重建触发）。它只用
+`jass.common`、`jass.message`、`jass.d3d` 三组公开入口，不碰 hashtable、`UnitId` 或手写 spec，
+所以它同时是"地图作者能否直接开工"的样板。
+
+外来地图接入（地图 JASS 里完全没有 japi 痕迹时，打包器自动注入 bootstrap）：
+
+```powershell
+.\tools\make-foreign-map.ps1                       # 生成 build\foreign-map 夹具
+.\tools\deploy.ps1 -Demo -BaseMap build\foreign-map
+```
+
+注入内容：`japi_ht` / `japi__key` 全局、`JapiBootstrap()` 函数（StartCampaignAI 载入 DLL、
+交付哈希表句柄、`UnitId("LoadScript")`）以及 `main()` 末尾的调用。打包在 repack 前用
+`tools\pjass.exe` + 1.27.1 的 Common.j/Blizzard.j 校验补丁后的 `war3map.j`；vJass 地图可加
+`-SkipJassCheck` 跳过。
+
 LocalPoint 真实交互回归（War3 获得前台焦点后按 Q；默认保留一小时等待手测）：
 
 ```powershell
@@ -181,6 +206,7 @@ worktree 的 provenance 命令；本次 clean 构建因此在该 worktree 内使
 ## 5. 下一阶段顺序
 
 0. JASS↔Lua 基础桥接（2026-10-26 完成）：UnitId Lua handler、错误路由、整数/字符串/句柄 ABI、globals 写、handle 级别/GC、trigger-action sleep 已纳入普通回归 116/116；JASS 侧运行时声明 native 的路线不纳入支持面。
+0b. 开工样板（2026-10-26 完成）：`-Demo` 垂直切片 10/10，外来地图 bootstrap 注入 + pjass 校验通过；下一步是把这条切片扩成真实地图玩法，并补上「任意地图一行命令打包」的文档。
 1. P3（完成）：统一 render queue、D3DXFont/文字 alpha、`asset://`/`game://`、MPQ BLP1/PNG、共享 cache、加载失败合同与提交态 provenance 均已闭环。
 2. P4：实现 Subscription 与统一鼠标/键盘/enter/leave/click 事件，替代两套 texture 身份。
 3. P5：补齐 Lua VM/地图自动 session 清理、TTL、device lost/reset、同进程新会话、失败路径和压力/soak 验收。
