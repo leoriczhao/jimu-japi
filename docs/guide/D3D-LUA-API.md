@@ -159,8 +159,9 @@ local texture, err = d3d.Texture.new {
 - `D3D asset allocation failed: <uri>` / `D3D asset loader unavailable: <uri>`。
 
 导入素材：用你惯用的 MPQ 工具（本项目 `tools/pack.ps1` 走 w3x2lni）把文件放进地图，
-运行时用 `asset://` 引用相对路径。已实机验证 PNG、BLP1（含 1.27a 的索引调色板）与
-游戏内 BLP；BLP2 解码子集存在，但 1.27a 实机证据只覆盖 BLP1。
+运行时用 `asset://` 引用相对路径。已实机验证 PNG、BLP1（含 1.27a 的索引调色板）、
+游戏内 BLP，以及 BLP2 的 raw BGRA / 索引调色板 / DXT1 三种编码。BLP 只走内存解码
+（`asset://`/`game://`）；用文件路径换源时仍只支持 D3DX 可读格式（BMP/PNG/JPG/TGA/DDS）。
 
 ---
 
@@ -270,9 +271,11 @@ Subscription 也走 `__close`，可配合 `local sub <close> = texture:on(...)`�
   需要重开就重新进图，此时旧 VM、旧 session 和旧 HUD 会一起消失。
 - `jass.globals` 只对地图已分配过的数组元素可靠：`index>0` 且地图从未触碰过的元素写入无效、读回 `nil`。
 - `Texture:error()` 恒为 nil（保留接口）。
-- `file://` 禁用；单文件上限 64 MiB；BLP2 仅有解码子集，实机证据是 BLP1/PNG。
+- `file://` 禁用；单文件上限 64 MiB；BLP 只走内存解码路径（`asset://`/`game://`），实机证据覆盖 BLP1/PNG
+  与 BLP2 的 raw BGRA / 调色板 / DXT1（BLP2 的 JPEG 编码不支持，会报 `texture asset is invalid`）。
 - 输入事件依赖窗口前台；GameUI 分发在 1.27a 游戏内只送键盘消息，鼠标按键来自 Win32 窗口消息。
-- D3D 兼容 handler 面 27/54；不是"147 个 API 都可用"，147 是回归用例总数。
+- D3D 兼容 handler 面已被回归夹具全部触达（54/54），但 54 是兼容名字数、164 是回归用例总数，
+  都不是“164 个 API 都可用”；触达也不等于每个 handler 的全部参数边界都被覆盖。
 
 ---
 

@@ -81,7 +81,8 @@
   均无状态污染。实现已提交为 `8bba4ae`；从该提交的 detached clean worktree 构建、实际部署 DLL 与
   proxy sidecar hash 一致为 `CD3896606FE2F20861F34A1406457972F982D2A72ED8F4B9173606F4FCCF101C`。
 - 普通回归为 108/108；D3D 单实例脚本回归为 121/121，其中 D3D fixture 13 项，兼容面触达
-  27/54，仍有 27 个名字未被该 fixture 触达。
+  27/54，仍有 27 个名字未被该 fixture 触达（该缺口已于 2026-11-15 补齐到 54/54，见
+  [D3D-LUA-SDK-DESIGN.md](D3D-LUA-SDK-DESIGN.md) 15.8.1；本节其余数字保留 P0 历史记录）。
 - 本批提交态产物溯源已闭环；安全幂等卸载与地图/Lua session 清理仍未实现，所以卸载闭环和用户 SDK
   生命周期仍未完成。
 
@@ -187,7 +188,7 @@
 | 自动 API | Lua RPC | 字体、文字、贴图属性往返和像素尺寸通过；普通 108 项无回归 |
 | 视觉 | 真实 War3 窗口截图 | 黄色标题和棋盘贴图清晰可见、位置正确、无黑屏/闪退 |
 | 交互 | 真实鼠标进入/离开贴图 | 标题在 `VISUAL PASS` / `HOVER PASS` 间切换，命中仅在边界内为真 |
-| Handler 覆盖 | 机器可读 manifest + 测试映射 | 54 个兼容名字均有唯一 owner 和准确签名；累计测试数、fixture 数和 27/54 触达数分开报告 |
+| Handler 覆盖 | 机器可读 manifest + 测试映射，`verify_contract.ps1` 强制一致的触达集合 | 54 个兼容名字均有唯一 owner 和准确签名；累计测试数、fixture 数与触达数分开报告（2026-11-15 触达 54/54，见 [D3D-LUA-SDK-DESIGN.md](D3D-LUA-SDK-DESIGN.md) 15.8.1） |
 | 兼容 | ShowConsole/SetKeyboard/SrcRect 专项 | 不覆盖 canonical handler；WARK→VK 全键组正确；SrcRect JASS 签名与 getter/setter 往返 |
 | 渲染隔离 | state-block 故障注入 + 实机窗口 | 捕获/恢复成功且无状态污染；捕获失败则跳过 overlay |
 | 产物溯源 | commit/provenance/hash | dirty=false；干净构建、部署 DLL、sidecar hash 一致 |
@@ -292,8 +293,9 @@
 .\tools\deploy.ps1 -InteractiveD3D
 ```
 
-- Win32 Release 构建无编译或链接错误；contract 验证结果为
-  `surface=54, proxy=49, canonical=5, fixture=27/54, untested=27`。
+- Win32 Release 构建无编译或链接错误；当时的 contract 验证结果为
+  `surface=54, proxy=49, canonical=5, fixture=27/54, untested=27`（2026-11-15 重跑为
+  `fixture=54/54, untested=0`）。
 - 普通实机结果为 `108 passed, 0 failed, 108 total`；`ShowConsole` 的隐藏/恢复真实 frame 断言通过。
 - D3D 贴图 source rect 使用内置 Hrect ABI 完成 setter/getter 四边界往返。
 - 单一 War3 实例依次显示 `VISUAL PASS`、`HOVER PASS`、`EVENT PASS` 和
@@ -344,7 +346,7 @@
 
 该顺序属于 D3D 会话；构建、打包、测试统计和部署门禁框架由基础工作树负责，不在本文扩张实现范围：
 
-1. **已完成**：建立 54-name manifest，固化 27/54 触达与 27 个未触达名字；
+1. **已完成**：建立 54-name manifest，固化 27/54 触达与 27 个未触达名字（2026-11-15 触达补齐到 54/54）；
 2. **已完成**：D3D 不再注册 5 个 canonical 重名，不依赖覆盖语义；
 3. **已完成实现并通过构建**：提取共用 WARK→VK 转换，覆盖全部已定义键组；
 4. **已完成并实机通过**：恢复 SrcRect 的 `(IHrect;)V` setter 和 `(I)Hrect;` getter；

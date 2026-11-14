@@ -232,6 +232,61 @@ function M.run(done)
             "asset cache or handles did not return to baseline")
     end)
 
+    test("D3D SDK BLP2 memory decode (raw/palette/DXT1)", function()
+        -- The BLP2 fixtures only exist inside the map MPQ, so a pass proves the
+        -- in-memory palette / DXT / BGRA decoders rather than the d3dx file path.
+        local baseline = assert(d3d.stats())
+        local raw, raw_err = d3d.Texture.new {
+            source = "asset://d3d-sdk-blp2-raw.blp",
+            x = 620, y = 400, width = 96, height = 64,
+        }
+        assert(raw, raw_err)
+        local palette, palette_err = d3d.Texture.new {
+            source = "asset://d3d-sdk-blp2-palette.blp",
+            x = 620, y = 480, width = 64, height = 48,
+        }
+        assert(palette, palette_err)
+        local dxt1, dxt1_err = d3d.Texture.new {
+            source = "asset://d3d-sdk-blp2-dxt1.blp",
+            x = 700, y = 480, width = 64, height = 32,
+        }
+        assert(dxt1, dxt1_err)
+
+        local rw, rh = raw:pixel_size()
+        assert(rw == 48 and rh == 32,
+            string.format("raw BLP2 decoded %dx%d, expected 48x32", rw, rh))
+        local pw, ph = palette:pixel_size()
+        assert(pw == 64 and ph == 48,
+            string.format("palette BLP2 decoded %dx%d, expected 64x48", pw, ph))
+        local dw, dh = dxt1:pixel_size()
+        assert(dw == 64 and dh == 32,
+            string.format("DXT1 BLP2 decoded %dx%d, expected 64x32", dw, dh))
+        for _, texture in ipairs({ raw, palette, dxt1 }) do
+            assert(texture:state() == "ready", texture:state())
+            assert(texture:error() == nil, tostring(texture:error()))
+            assert(texture:reload())
+        end
+
+        local loaded = assert(d3d.stats())
+        assert(loaded.textures == baseline.textures + 3,
+            "BLP2 decode leaked a texture handle")
+        assert(loaded.asset_cache.entries == baseline.asset_cache.entries + 3,
+            "BLP2 fixtures did not get one cache entry each")
+
+        local bad, bad_err = d3d.Texture.new {
+            source = "asset://d3d-sdk-blp2-bad.blp",
+        }
+        assert(bad == nil
+            and bad_err == "texture asset is invalid: asset://d3d-sdk-blp2-bad.blp",
+            "unsupported BLP2 encoding accepted: " .. tostring(bad_err))
+
+        assert(dxt1:destroy() and palette:destroy() and raw:destroy())
+        local final = assert(d3d.stats())
+        assert(final.textures == baseline.textures
+            and final.asset_cache.entries == baseline.asset_cache.entries,
+            "BLP2 fixtures did not return to baseline")
+    end)
+
     test("D3D SDK P3 alpha and unified z visual fixture configured", function()
         visual_resources = {}
         visual_resources.font = assert(d3d.Font.new {

@@ -327,6 +327,93 @@ Write-Host '  [4/5] Inject DLL + callback'
 Copy-Item $DllPath "$WorkDir\japi.tga" -Force
 Copy-Item $CbSrc  "$WorkDir\callback" -Force
 
+
+# Deterministic BLP2 fixtures for the D3D SDK asset acceptance. They are written
+# into the map MPQ only: asset:// decoding goes through the in-memory palette /
+# DXT / BGRA paths, which is the only BLP route the DLL supports (the BMP probe
+# installed beside war3.exe only exercises the d3dx file path).
+function New-Blp2Fixture {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][ValidateSet('raw', 'palette', 'dxt1', 'bad')][string]$Kind,
+        [Parameter(Mandatory)][int]$Width,
+        [Parameter(Mandatory)][int]$Height
+    )
+
+    $headerSize = 148
+    $pixels = $Width * $Height
+    $payload = New-Object System.Collections.Generic.List[byte]
+
+    switch ($Kind) {
+        'raw' {
+            # encoding 3: straight BGRA, no palette and no d3dx involved.
+            for ($y = 0; $y -lt $Height; $y++) {
+                for ($x = 0; $x -lt $Width; $x++) {
+                    $even = (((([math]::Floor($x / 8)) + ([math]::Floor($y / 8))) % 2) -eq 0)
+                    if ($even) { $payload.AddRange([byte[]]@(40, 40, 220, 255)) }
+                    else { $payload.AddRange([byte[]]@(220, 40, 40, 255)) }
+                }
+            }
+            $dataSize = $payload.Count
+        }
+        'palette' {
+            # encoding 1, alpha_depth 8: BGRA palette, indices, then one alpha byte per pixel.
+            for ($i = 0; $i -lt 256; $i++) {
+                $payload.AddRange([byte[]]@($i, (255 - $i), (($i * 7) % 256), 255))
+            }
+            for ($y = 0; $y -lt $Height; $y++) {
+                for ($x = 0; $x -lt $Width; $x++) {
+                    $even = (((([math]::Floor($x / 8)) + ([math]::Floor($y / 8))) % 2) -eq 0)
+                    if ($even) { $payload.Add([byte]17) } else { $payload.Add([byte]203) }
+                }
+            }
+            for ($i = 0; $i -lt $pixels; $i++) { $payload.Add([byte]255) }
+            # sizes[0] covers indices plus the trailing alpha plane that
+            # alpha_depth 8 implies; inspect_blp2 checks both.
+            $dataSize = $pixels * 2
+        }
+        'dxt1' {
+            # encoding 2, alpha_encoding 0: DXT1 blocks, opaque white colour0.
+            $blocks = [int]([math]::Ceiling($Width / 4.0) * [math]::Ceiling($Height / 4.0))
+            $block = [byte[]]@(0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+            for ($i = 0; $i -lt $blocks; $i++) { $payload.AddRange($block) }
+            $dataSize = $payload.Count
+        }
+        'bad' {
+            # encoding 4 is outside the supported subset: validate() must reject
+            # it as UnsupportedFormat even though offsets and sizes look sane.
+            for ($i = 0; $i -lt ($pixels * 4); $i++) { $payload.Add([byte]0) }
+            $dataSize = $payload.Count
+        }
+    }
+
+    $encoding = switch ($Kind) { 'raw' { 3 } 'palette' { 1 } 'dxt1' { 2 } default { 4 } }
+    $alphaDepth = if ($Kind -eq 'palette') { 8 } else { 0 }
+    $paletteBytes = if ($Kind -eq 'palette') { 1024 } else { 0 }
+    $dataOffset = $headerSize + $paletteBytes
+
+    $stream = New-Object System.IO.MemoryStream
+    $writer = New-Object System.IO.BinaryWriter($stream)
+    $writer.Write([byte[]]@(0x42, 0x4C, 0x50, 0x32))  # 'BLP2'
+    $writer.Write([uint32]0)                          # type
+    $writer.Write([byte]$encoding)
+    $writer.Write([byte]$alphaDepth)
+    $writer.Write([byte]0)                            # alpha_encoding (DXT1 only)
+    $writer.Write([byte]0)                            # has_mips
+    $writer.Write([uint32]$Width)
+    $writer.Write([uint32]$Height)
+    for ($i = 0; $i -lt 16; $i++) {
+        $writer.Write([uint32]$(if ($i -eq 0) { $dataOffset } else { 0 }))
+    }
+    for ($i = 0; $i -lt 16; $i++) {
+        $writer.Write([uint32]$(if ($i -eq 0) { $dataSize } else { 0 }))
+    }
+    $writer.Write([byte[]]$payload.ToArray())
+    $writer.Flush()
+    [System.IO.File]::WriteAllBytes($Path, $stream.ToArray())
+    $writer.Close()
+}
+
 # Deterministic MPQ-only texture fixtures for the public D3D SDK acceptance.
 # They intentionally never exist beside war3.exe, proving asset:// uses Storm.
 if ($InteractiveD3D) {
@@ -335,6 +422,12 @@ if ($InteractiveD3D) {
         "$WorkDir\d3d-sdk-probe.png", [Convert]::FromBase64String($probePng))
     [System.IO.File]::WriteAllBytes(
         "$WorkDir\d3d-sdk-corrupt.png", [System.Text.Encoding]::ASCII.GetBytes('not-an-image'))
+
+    # BLP2 subsets: raw BGRA, paletted, DXT1, plus one unsupported encoding.
+    New-Blp2Fixture -Path "$WorkDir\d3d-sdk-blp2-raw.blp" -Kind raw -Width 48 -Height 32
+    New-Blp2Fixture -Path "$WorkDir\d3d-sdk-blp2-palette.blp" -Kind palette -Width 64 -Height 48
+    New-Blp2Fixture -Path "$WorkDir\d3d-sdk-blp2-dxt1.blp" -Kind dxt1 -Width 64 -Height 32
+    New-Blp2Fixture -Path "$WorkDir\d3d-sdk-blp2-bad.blp" -Kind bad -Width 16 -Height 16
 }
 
 # Update MPQ listfile so w3x2lni includes the new files
@@ -342,6 +435,8 @@ $listfile = "$WorkDir\(listfile)"
 $needed = @("callback", "japi.tga")
 if ($InteractiveD3D) {
     $needed += @("d3d-sdk-probe.png", "d3d-sdk-corrupt.png")
+    $needed += @("d3d-sdk-blp2-raw.blp", "d3d-sdk-blp2-palette.blp",
+        "d3d-sdk-blp2-dxt1.blp", "d3d-sdk-blp2-bad.blp")
 }
 $existing = if (Test-Path $listfile) { Get-Content $listfile -Raw } else { "" }
 foreach ($f in $needed) {

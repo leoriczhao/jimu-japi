@@ -1,9 +1,9 @@
 # D3D Lua SDK 与完整生命周期设计
 
-> 状态：P0-P5 已闭环；Font/Text/Texture、统一 render queue、D3DXFont/文字 alpha、asset URI/MPQ、
-> 加载失败合同、Subscription/统一输入（真实鼠标键盘），以及 TTL、device 世代/lost/reset 事件与生命周期订阅
-> 已实机通过。P6（quickstart/API 参考/迁移文档与 §15 全部门槛）待完成，自动地图/VM 会话钩子仍缺，
-> 整体仍是“SDK 开发中”。
+> 状态：P0-P5.1 已闭环；Font/Text/Texture、统一 render queue、D3DXFont/文字 alpha、asset URI/MPQ、
+> 加载失败合同、Subscription/统一输入（真实鼠标键盘）、TTL、device 世代/lost/reset 事件、生命周期订阅与
+> 地图级 VM 重置均已实机通过。P6 文档三项已交付，§15 剩余两项门槛（BLP2 实机证据、D3D handler 覆盖 27/54）
+> 已于 2026-11-15 补齐（handler 54/54，结论见 15.8）。唯一无法在 1.27a 窗口模式观测的是 device_lost 事件本身。
 >
 > 本文是面向地图作者的 D3D Lua SDK 实现契约和验收标准。底层 proxy 的加载、转发、部署与历史验证仍见
 > [D3D-PROXY-DESIGN.md](D3D-PROXY-DESIGN.md)；项目当前完成度只以
@@ -31,7 +31,7 @@ worktree 构建、部署 DLL 与 sidecar hash 已一致；幂等安装/验证/�
 按 <code>z</code> 与创建序放入同一队列，并实现 <code>asset://</code>/<code>game://</code>、MPQ 内存读取、
 BLP1/常用图片解码、共享 CPU cache、reload 与稳定失败合同。实机公共 SDK 功能 8 组通过；与底层 bridge
 合计后的完整日志为 125 项 D3D 侧测试（8 SDK 功能 + 13 bridge + Subscription 真实输入 + shutdown），
-与普通基线合并为 141/141，不是 D3D API 数（P5 之后为 147/147）。P4 已把 Subscription 与统一输入事件接到真实贴图上：
+与普通基线合并为 141/141，不是 D3D API 数（P5 之后为 147/147，15.8 补齐 handler 覆盖后为 164/164）。P4 已把 Subscription 与统一输入事件接到真实贴图上：
 enter/leave/mouse_down/mouse_up/click/key_down/key_up、pointer capture、6px 点击阈值、`hover_only`/
 `propagate`/`keep_on_error`、只读 event 表。事件源不依赖 CGameUI 分发（游戏内 1.27a 只送键盘消息），
 鼠标按钮来自窗口 `WM_*` 消息与异步按键状态，两条源共用同一状态机去重。
@@ -88,7 +88,7 @@ P5 补上 TTL、device 状态诊断（<code>device_generation</code>/<code>lost_
 | device lost/reset | 释放/尝试重载 | 句柄稳定、状态迁移、失败可见、事件不重复 |
 | 会话结束 | 显式 <code>d3d.shutdown()</code> 可幂等批量清理 SDK/bridge 混合资源 | Lua VM/地图自动关闭、同进程新会话和旧回调隔离 |
 | 渲染隔离 | 已修复一次状态泄漏 | 自动状态一致性计数 + 实机视觉回归 |
-| Handler 覆盖 | manifest 已固化 54 个名字和唯一 owner；fixture 触达 27/54，27 个未调用 | 继续为未测项补行为测试；未测项不能标为完成 |
+| Handler 覆盖 | manifest 已固化 54 个名字和唯一 owner；fixture 触达 54/54，0 个未调用（2026-11-15 补齐，见 15.8） | 保持每次改动重跑 <code>verify_contract.ps1</code>；覆盖数不等于每个 handler 的全部边界 |
 | 注册冲突 | D3D 已移除 5 个 canonical 重名注册，<code>ShowConsole</code> 真实显隐通过 | 后续边界必须明确命名/版本化，禁止依赖覆盖语义 |
 | 键码兼容 | <code>SetKeyboard</code> 与 message API 已共用唯一 <code>wark_to_vk</code> | 实现完成；发布前保留全键组静态/行为回归 |
 | SrcRect 兼容 | <code>(IHrect;)V</code> 与 <code>(I)Hrect;</code> 已按真实 handle ABI 实机往返 | 实现完成；保留兼容回归 |
@@ -649,7 +649,7 @@ timer 更新、订阅、reset、shutdown）、<code>D3D-LUA-API.md</code>（模�
 | P4（完成，2026-11-15） | Subscription 与统一输入事件 | 键盘、鼠标、enter/leave/click 全部走真实 Texture；真实鼠标按键由 `WM_*` + 异步按键状态提供 |
 | P5（完成，2026-11-15） | GC、TTL、session close、device lost/reset、错误诊断 | TTL 到期释放并同步 Lua 句柄、LIFE-11 失败不泄漏、DEV-03 二十次真实 resize/reset 后句柄/属性/订阅保持、`d3d.on` 生命周期事件与 `status()`/`stats()` 诊断通过；交互 147/147。自动地图/VM session close 见 P5.1 行；`device_lost` 在 1.27a 窗口模式不可观测（见 14.3） |
 | P5.1（完成，2026-11-15） | 地图级 VM 重置与自动会话收尾 | 换图时 `callback` 重入 `Initialize()` → `lua_loader::on_map_boot()` 丢弃 Lua 侧 bridge handler、清 message/D3D 分发状态 → `lua_close` 旧 `lua_State` 并复位加载标志 → 新图首次 `ExecuteFunc` 重建 VM 并加载新 `war3map.lua`；`__gc` → `context_gc` → `end_session`，session 与地图同生共死；`-TestReboot` 同进程换图 8/8 |
-| P6（进行中，2026-11-15） | 安装/验证/卸载、迁移、API 文档、最终实机验收 | 文档三项已交付：<code>docs/guide/D3D-LUA-QUICKSTART.md</code>、<code>D3D-LUA-API.md</code>、<code>D3D-LUA-MIGRATION.md</code>；第 15 节仍未全通过（BLP2 实机证据与 handler 覆盖 27/54；LIFE-09/LIFE-12 的自动部分已由 P5.1 补齐），因此不宣称 SDK 完成 |
+| P6（完成，2026-11-15） | 安装/验证/卸载、迁移、API 文档、最终实机验收 | 文档三项已交付：<code>docs/guide/D3D-LUA-QUICKSTART.md</code>、<code>D3D-LUA-API.md</code>、<code>D3D-LUA-MIGRATION.md</code>；§15 最后两项门槛（BLP2 实机证据、handler 覆盖 27/54）已补齐为 handler 54/54 + BLP2 raw/palette/DXT1 实机解码，结论与回归记录见 15.8；交互 164/164、普通 116/116、`-TestReboot` 8/8 同二进制复跑。保留限制：`device_lost` 在 1.27a 窗口模式不可观测、`ShowFpsText` 为弱断言 |
 
 阶段不能跨越完成门槛。例如 P2 的对象能显示，不代表 P5 生命周期完成。
 
@@ -735,8 +735,9 @@ URI 与资源合同如下：
 - 统一斜杠并折叠空段/<code>.</code>；拒绝空路径、NUL、绝对路径、盘符/冒号和 <code>..</code>。
 - <code>file://</code> 默认拒绝；错误只包含规范化或被拒绝的 URI，不泄漏系统路径。
 - 标准 BMP/PNG/JPG/TGA/DDS 从内存交给 D3DX；BLP1 JPEG/调色板与 alpha 子类型由内存解码器处理。
-- BLP2 palette、DXT1/DXT3/DXT5/raw 子集已有结构化实现和严格边界校验；目标 1.27a 的本轮真实资源验收只覆盖
-  BLP1，因此不把 BLP2 表述为实机完成。
+- BLP2 palette、DXT1/DXT3/DXT5/raw 子集由内存解码器实现并有严格边界校验。2026-11-15 起打包时注入
+  4 个 BLP2 夹具（raw/palette/DXT1/坏编码），实机 `D3D SDK BLP2 memory decode` 全部通过，证据见 15.8.2；
+  该证据只覆盖 `asset://` 内存路径，proxy 的路径贴图仍只支持 d3dx 格式。
 
 Proxy 以“规范化 URI + size + 内容 hash”为 key 保存弱引用共享 CPU 字节。Texture 保留重建设备资源所需的
 字节，device reset 时 handle 不变并从这些字节重建 GPU texture；最后一个引用销毁或 session 结束后 cache
@@ -762,9 +763,9 @@ P5 的 TTL 与 device 生命周期见 14.3。
 
 ## 15. 验收标准
 
-> 本节是最终交付门槛，只有在 P6 全部逐项记录证据后才能宣称 SDK 可用。P0–P5 已通过项的实测证据见 §14、
-> 14.3 与 [STATUS.md](../STATUS.md)；其中 LIFE-09/LIFE-12 的自动部分已由 P5.1 地图级 VM 重置覆盖，
-> 剩余门槛是 BLP2 实机证据与 D3D handler 覆盖（27/54）。
+> 本节是最终交付门槛。P0–P5 已通过项的实测证据见 §14、14.3 与 [STATUS.md](../STATUS.md)；
+> LIFE-09/LIFE-12 的自动部分由 P5.1 地图级 VM 重置覆盖。最后两项门槛（BLP2 实机证据与 D3D handler
+> 覆盖）已于 2026-11-15 闭合，逐项证据与保留限制见 15.8。
 
 ### 15.1 构建与静态合同
 
@@ -777,7 +778,7 @@ P5 的 TTL 与 device 生命周期见 14.3。
 | API-01 | Lua 注册 | <code>require "jass.d3d"</code> 成功，返回的类和方法完整 |
 | API-02 | 公共边界 | SDK 功能测试中不存在 <code>UnitId</code>、<code>japi_ht</code> 或手写 spec |
 | COVER-01 | Handler manifest | 54 个兼容名字均有唯一 owner、准确签名、分类、实现状态和稳定测试 ID；未测项不能标为完成 |
-| COVER-02 | 统计语义 | 报告分别列累计测试数、D3D fixture 测试数和 handler 覆盖数，禁止把当前 147/147 表述为 D3D API 数 |
+| COVER-02 | 统计语义 | 报告分别列累计测试数、D3D fixture 测试数和 handler 覆盖数，禁止把当前 164/164 表述为 D3D API 数 |
 | COMPAT-01 | 注册冲突 | D3D 初始化不覆盖 canonical <code>ShowConsole</code>/<code>ShowFpsText</code>/<code>SetKeyboard</code>；重复名字默认拒绝并记录 owner |
 | COMPAT-02 | WARK 键码 | <code>SetKeyboard</code> 与 message API 共用唯一 WARK→VK 映射；修饰键、方向键、F 键、OEM、数字键盘和无效码均通过 |
 | COMPAT-03 | SrcRect JASS ABI | <code>SetTextureSrcRect(IHrect;)V</code> 与 <code>GetTextureSrcRect(I)Hrect;</code> 按内置 wrapper 往返，旧四浮点实现不占用同名入口 |
@@ -862,6 +863,7 @@ P5 的 TTL 与 device 生命周期见 14.3。
 
 ~~~powershell
 .\src\build.bat
+.\src\src\d3d9\verify_contract.ps1
 .\tools\d3d-proxy.ps1 -Verify
 .\tools\deploy.ps1
 .\tools\deploy.ps1 -InteractiveD3D -NoKill
@@ -878,6 +880,89 @@ P5 的 TTL 与 device 生命周期见 14.3。
 
 不使用固定“测试总数达到 N”作为唯一完成标准；以上每个稳定 ID 都必须有通过记录，新增测试不能通过减少
 总数掩盖失败。
+
+### 15.8 门槛结论（2026-11-15）
+
+§15 的最后两项门槛已由同一份 <code>yd_japi.dll</code> 与 D3D proxy 的实机运行补齐，本节记录逐项证据、
+判定强度和仍然存在的限制。此后 §15 不再有"未测 handler"与"BLP2 没有实机证据"两项空缺。
+
+#### 15.8.1 D3D handler 覆盖 54/54
+
+- 合同与覆盖校验器：<code>src/src/d3d9/verify_contract.ps1</code>，实跑输出
+  <code>D3D contract PASS: surface=54, proxy=49, canonical=5, fixture=54/54, untested=0</code>（exit 0）。
+- 校验器从 <code>map/tests/test_d3d.lua</code> 抓 <code>call("Name"</code> 与 <code>jass.UnitId("Name")</code> 的名字集合，
+  与 <code>src/src/d3d9/handler_manifest.json</code> 中 <code>test_id</code> 非 null 的集合做**严格相等**比较，
+  同时核对三处注册点的注册名与签名。任何一侧增减都会 throw，因此覆盖数不能靠删测试或改注释伪造。
+- 本轮新增 17 项用例（<code>test_d3d.lua</code> 16 项：10 个 RPC 行为/注册测试、3 个事件回调断言、
+  3 个交互期探针；<code>test_d3d_sdk.lua</code> 1 项 BLP2 解码），补齐此前未触达的 27 个名字：
+
+| test_id | handler | 断言方式 |
+|---|---|---|
+| D3D-FONT-WIDTH / D3D-FONT-DESTROY | GetFontWidth、SetFontWidth / DestroyFont | 宽度 24 往返；销毁后 GetFontHeight 归 0 |
+| D3D-TEXT-MOVE / D3D-TEXT-TTL | SetTextX、SetTextY / GetTextTime、SetTextTime | 100/120 往返并复原；TTL -1 → 12.0（跑帧递减）→ 复原 -1 |
+| D3D-TEXTURE-TRANSFORM | GetTextureX/Y、SetTextureX/Y、SetTextureWidth/Height | 200/300/320/240 往返并复原 72/136/256/192 |
+| D3D-TEXTURE-STYLE | GetTextureColor/Level/Rotation 与 Set* | 默认 -1/9000/0；设 0x7F00FF00/9500/1.5 往返并复原 |
+| D3D-TEXTURE-SWAP | SetTexture | 缺失路径后 pixel width 归 0，切回探针 bmp 回到 128 |
+| D3D-TEXTURE-SHOW | SetTextureShow | 隐藏后 GetMouseInTexture 为 false，恢复后为 true（真实光标在贴图内） |
+| D3D-TEXTURE-DESTROY | DestroyTexture | 销毁后宽度归 0、命中判定为 false |
+| D3D-MOUSE-VECTOR | GetMouseVectorX/Y | 为 number 且在窗口范围内；光标进入贴图时落在贴图 client 矩形内 |
+| D3D-KEYBOARD | SetKeyboard | 合成 WM_KEYDOWN/UP 经真实 TextureAddEvent 触发 press/release，HT 槽 0x100/0x101 校验，随后移除注册回基线 |
+| D3D-CONSOLE | ShowConsole | 隐藏后 GetLittleMapX()==-2.0，恢复后回到隐藏前的值 |
+| D3D-FPS | ShowFpsText | 弱断言，见下 |
+
+- 断言强度必须分开表述，不能把"每个名字至少调通一次"当成行为完整：
+  - **强断言（往返/读回/状态变化）**：上表中除 D3D-FPS 外的全部项。
+  - **弱断言**：<code>ShowFpsText</code> 没有读回 handler，测试只验证 true/false 调用不崩溃且
+    <code>GetFps()</code> 仍在合理区间，FPS 文本的实际显隐以截图人工确认为准。
+- 交互期探针里保留一个显式哨兵（<code>D3D SetKeyboard synthetic key completed</code>）：如果合成键没有
+  到达贴图，它会失败而不是静默通过。
+
+#### 15.8.2 BLP2 实机证据
+
+- 打包时 <code>tools/pack.ps1</code> 的 <code>New-Blp2Fixture</code> 生成 4 个夹具并写入 MPQ listfile：
+  <code>d3d-sdk-blp2-raw.blp</code>（encoding 3 raw BGRA，48×32）、
+  <code>d3d-sdk-blp2-palette.blp</code>（encoding 1，alpha_depth 8，64×48）、
+  <code>d3d-sdk-blp2-dxt1.blp</code>（encoding 2，alpha_encoding 0，DXT1，64×32）、
+  <code>d3d-sdk-blp2-bad.blp</code>（encoding 4，用于稳定错误）。
+- 上机前先用与发布代码同一份 <code>texture_asset.cpp</code> 的离线校验器验证：
+  raw/palette/dxt1 均为 <code>Ok</code>，bad 为 <code>UnsupportedFormat</code>。
+- 实机用例 <code>D3D SDK BLP2 memory decode (raw/palette/DXT1)</code> PASS：三个 <code>asset://</code>
+  贴图的 <code>pixel_size()</code> 分别为 48×32 / 64×48 / 64×32，<code>state()=="ready"</code>、
+  <code>error()==nil</code>、<code>reload()</code> 成功；<code>stats()</code> 的 <code>textures</code> 与
+  <code>asset_cache.entries</code> 各 +3，销毁后回到基线；坏编码返回稳定错误
+  <code>texture asset is invalid: asset://d3d-sdk-blp2-bad.blp</code>，不计入资源与 cache。
+- 边界：夹具只存在于 MPQ 内，因此这条证据覆盖的是内存解码路径（<code>d3d9_texture_asset</code>）；
+  proxy 的路径贴图仍只支持 d3dx 能读的格式，BLP2 通过 <code>CreateTexture</code>/<code>SetTexture</code>
+  的路径形式不会加载。
+
+#### 15.8.3 回归证据与可重复命令
+
+~~~powershell
+# handler 合同与覆盖
+.\src\src\d3d9\verify_contract.ps1
+# 交互模式（真实鼠标/键盘/Shift/Q/24 次 resize）
+.\tools\pack.ps1 -InteractiveD3D
+.\tools\deploy.ps1 -InteractiveD3D -Hold
+.\tools\drive-interactive-d3d.ps1 -ResizeCount 24
+New-Item -ItemType File .\build\war3.kill
+# 普通回归 / 地图级 VM 重置
+.\tools\deploy.ps1
+.\tools\deploy.ps1 -TestReboot
+~~~
+
+- 交互模式：<code>Results: 164 passed, 0 failed, 164 total</code>（<code>ALL TESTS PASSED</code>，日志归档
+  <code>build/p4-164.log</code>），其中真实设备生命周期项为 <code>resize=20 (target 20) lost=0 reset=20</code>。
+- 普通回归：<code>116 passed, 0 failed, 116 total</code>。
+- 地图级 VM 重置：<code>8 passed, 0 failed, 8 total</code>。
+- 三者使用与 §15.1 相同的 DLL；BLP2 夹具只在 <code>-InteractiveD3D</code> 打包时注入，普通包不额外携带资源。
+
+#### 15.8.4 仍然存在的限制
+
+- <code>device_lost</code> 在 1.27a 窗口模式下不可观测（lost 与 reset 同帧完成）。DEV-03 只能以
+  resize→reset 计数证明资源恢复；<code>d3d.on("device_lost")</code> 的实现保留，但标注为"无实机证据"。
+- <code>ShowFpsText</code> 是弱断言（见 15.8.1）。
+- handler 覆盖口径是"每个名字至少一次真实调用 + 该 test_id 有行为断言"，不等于每个 handler 的
+  全部参数边界；新增 handler 必须同时补 fixture 与 manifest 的 <code>test_id</code>，否则校验器失败。
 
 ## 16. 最终完成定义
 
@@ -898,3 +983,7 @@ D3D Lua SDK 只有同时满足以下条件才可在 <code>STATUS.md</code> 标�
 13. 发布 DLL 可追溯到明确 commit 的干净构建，且构建、部署和 sidecar hash 一致。
 
 任何一项未满足时，只能写“底层链路基本跑通”或“SDK 开发中”，不得写“D3D 可用”。
+
+2026-11-15 状态：第 1–12 项已满足，证据见 §15（含 §15.8 的门槛结论）；第 13 项要求本批测试与文档改动
+先进入提交，再用 detached clean worktree 重建并回读构建、部署与 sidecar hash。因此在完成该提交与 clean 构建之前，
+<code>STATUS.md</code> 的记录是“P0–P6 闭环，可作为 SDK 发布候选”，不写“D3D 可用”。
