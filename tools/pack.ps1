@@ -194,12 +194,24 @@ Bundle-Lua $MapDir "$WorkDir\war3map.lua"
 # 3. war3map.j — patch: add deferred script loading after initializePlugin()
 Write-Host '  [3/5] Patching war3map.j'
 $jContent = Get-Content $JFile -Raw -Encoding ASCII
-# Add SaveStr + UnitId("LoadScript") after initializePlugin() call
+# Add SaveStr + UnitId("LoadScript") after initializePlugin() call.
+# If the base map carries the bridge probe functions, exercise JASS -> Lua
+# immediately after LoadScript (the Lua handlers register synchronously).
 $old = 'call initializePlugin(  )'
+$bridgeProbeCalls = ""
+if ($jContent -match 'function LuaBridgeProbeCall') {
+    $bridgeProbeCalls = @"
+    call LuaCallback1()
+    set udg_lua_bridge_result = LuaBridgeProbeCall(10, 32)
+    set udg_lua_error_result = LuaErrorProbeCall()
+    set udg_lua_handle_result = LuaHandleProbeCall()
+"@
+}
 $new = @"
 call initializePlugin(  )
     call SaveStr(japi_ht, japi__key, 0, "()V")
     call UnitId("LoadScript")
+$bridgeProbeCalls
 "@
 if ($jContent -notmatch [regex]::Escape('call UnitId("LoadScript")')) {
     if ($jContent -notmatch [regex]::Escape($old)) {

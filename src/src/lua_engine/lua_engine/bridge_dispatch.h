@@ -25,6 +25,10 @@ namespace warcraft3::lua_engine::bridge {
     // Called from lua_loader.cpp for built-in functions like EXExecuteScript.
     void register_cpp_handler(const char* name, const char* spec, cpp_handler_fn fn);
 
+    // True when a handler (Lua or C++) already owns this name. jass.japi uses
+    // this to avoid silently shadowing built-in EX*/message/D3D handlers.
+    bool has_handler(const char* name);
+
     // Invoke an already-registered C++ handler directly, without touching the
     // shared JASS hashtable. Used by the input filter to query the D3D proxy's
     // real texture hit-test while dispatching TextureAddEvent callbacks.

@@ -2,6 +2,7 @@
 -- japi.dll test suite
 -- ============================================================
 local jass    = require "jass.common"
+local globals = require "jass.globals"
 local message = require "jass.message"
 local runtime = require "jass.runtime"
 local japi    = require "jass.japi"
@@ -499,6 +500,101 @@ test("jass.code + TriggerAddAction round-trip", function()
     jass.TriggerExecute(trig)
     jass.DestroyTrigger(trig)
     assert(fired, "callback was not called!")
+end)
+
+-- ============================================================
+-- 9. JASS <-> Lua bridge preflight
+-- The probes themselves run from war3map.j's main() after LoadScript, using
+-- UnitId("...") + hashtable slots and a real JASS trigger-action sleep/resume.
+-- ============================================================
+print("\n-- bridge preflight --")
+
+test("JASS -> Lua UnitId callback", function()
+    assert(_G.__JAPI_LUA_CALLBACK1 == 1,
+        "LuaCallbackBridge ran " .. tostring(_G.__JAPI_LUA_CALLBACK1) .. " times")
+end)
+
+test("JASS -> Lua UnitId args/return", function()
+    assert(globals.udg_lua_bridge_result == 42,
+        "bridge result " .. tostring(globals.udg_lua_bridge_result))
+end)
+
+test("JASS -> Lua bridge handle round-trip", function()
+    local expected = jass.GetHandleId(jass.Player(0))
+    assert(globals.udg_lua_handle_result == expected,
+        string.format("handle expected=%s actual=%s", tostring(expected),
+            tostring(globals.udg_lua_handle_result)))
+end)
+
+test("JASS -> Lua error goes to runtime.error_handle", function()
+    local found = false
+    for _, msg in ipairs(_G.__JAPI_ERROR_MESSAGES or {}) do
+        if tostring(msg):match("expected bridge probe error") then
+            found = true
+            break
+        end
+    end
+    assert(found, "error_handle did not receive the bridge probe error")
+end)
+
+test("Lua sleep resumes in a JASS trigger action", function()
+    local p = _G.__JAPI_PREFLIGHT
+    assert(p, "preflight state missing")
+    assert(p.done, string.format(
+        "preflight did not finish (stage=%s ticks=%s error=%s)",
+        tostring(p.stage), tostring(p.ticks), tostring(p.error)))
+    assert(p.stage == 2,
+        "sleep stage=" .. tostring(p.stage) .. " error=" .. tostring(p.error))
+    assert(p.suspended, "watcher never observed the suspended state")
+    assert(p.error == nil, tostring(p.error))
+end)
+
+test("jass.globals scalar and array writes", function()
+    globals.udg_lua_test_value = 12345
+    assert(globals.udg_lua_test_value == 12345,
+        "scalar read " .. tostring(globals.udg_lua_test_value))
+    globals.udg_lua_test_array[0] = 7
+    assert(globals.udg_lua_test_array[0] == 7,
+        "array read " .. tostring(globals.udg_lua_test_array[0]))
+end)
+
+test("handle_level 0/1/2 round-trip", function()
+    local old = runtime.handle_level
+    local ok, err = pcall(function()
+        runtime.handle_level = 0
+        local raw = jass.GetLocalPlayer()
+        assert(type(raw) == "number" and raw > 0, "level 0 type " .. type(raw))
+        assert(jass.GetPlayerId(raw) == 0, "level 0 GetPlayerId failed")
+
+        runtime.handle_level = 1
+        local light = jass.GetLocalPlayer()
+        assert(type(light) == "userdata", "level 1 type " .. type(light))
+        assert(handle_val(light) > 0, "level 1 handle value is zero")
+
+        runtime.handle_level = 2
+        local ud = jass.GetLocalPlayer()
+        assert(type(ud) == "userdata" and handle_val(ud) > 0,
+            "level 2 handle is invalid")
+    end)
+    runtime.handle_level = old
+    assert(ok, err)
+end)
+
+test("userdata handle is collected after GC", function()
+    local old = runtime.handle_level
+    runtime.handle_level = 2
+    -- Keep the only strong reference inside a helper frame so it is gone when
+    -- collectgarbage runs; otherwise the caller's stack slot can retain it.
+    local function weak_local_player()
+        local h = jass.GetLocalPlayer()
+        assert(type(h) == "userdata", "level 2 did not return userdata")
+        return setmetatable({h}, {__mode = "v"})
+    end
+    local weak = weak_local_player()
+    collectgarbage("collect")
+    collectgarbage("collect")
+    runtime.handle_level = old
+    assert(weak[1] == nil, "handle userdata survived without a strong reference")
 end)
 
 -- ============================================================

@@ -158,6 +158,16 @@ namespace warcraft3::lua_engine::bridge {
 
     // ── Handler dispatch ───────────────────────────────────────────
 
+    // Lua handlers receive handles in whatever shape runtime.handle_level
+    // currently uses (integer, lightuserdata or userdata). Accept numbers on
+    // the way back too, so a handler may return either a userdata or a raw id.
+    static uint32_t read_lua_handle(lua_State* L, int index) {
+        if (lua_isnumber(L, index)) {
+            return (uint32_t)lua_tointeger(L, index);
+        }
+        return jassbind::read_handle(L, index);
+    }
+
     static void dispatch_handler(const char* name, const handler_entry& h) {
         parsed_spec spec = parse_spec(h.spec.c_str());
 
@@ -244,8 +254,9 @@ namespace warcraft3::lua_engine::bridge {
                     lua_pushinteger(L, ht_load_int(g_ht_handle, g_ht_key, slot));
                     break;
                 case 'H':
-                    lua_pushinteger(L, ht_load_handle(g_ht_handle, g_ht_key, slot,
-                                                       spec.params[i].handle_type));
+                    jassbind::push_handle(L,
+                        (jass::jhandle_t)ht_load_handle(g_ht_handle, g_ht_key, slot,
+                                                        spec.params[i].handle_type));
                     break;
                 case 'R': {
                     uint32_t rv = ht_load_real(g_ht_handle, g_ht_key, slot);
@@ -280,7 +291,7 @@ namespace warcraft3::lua_engine::bridge {
                 }
                 case 'H':
                     ht_save_handle(g_ht_handle, g_ht_key, 0,
-                        (uint32_t)lua_tointeger(L, -1), spec.return_handle_type);
+                        read_lua_handle(L, -1), spec.return_handle_type);
                     break;
                 case 'R': {
                     jass::jreal_t rv = jassbind::read_real(L, -1);
@@ -461,6 +472,10 @@ namespace warcraft3::lua_engine::bridge {
         entry.cpp_fn = fn;
         g_handlers[name] = entry;
         DBG_LOG("[bridge] registered C++ handler: %s %s", name, spec);
+    }
+
+    bool has_handler(const char* name) {
+        return name && g_handlers.find(name) != g_handlers.end();
     }
 
     static bool invoke_cpp_handler_safely(cpp_handler_fn fn,

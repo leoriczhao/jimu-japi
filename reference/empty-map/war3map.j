@@ -7,9 +7,18 @@
 globals
     hashtable japi_ht = null
     integer japi__key = 0
+
+    // Bridge/preflight regression probes (read by the Lua suite).
+    integer udg_lua_bridge_result = 0
+    integer udg_lua_error_result = 0
+    integer udg_lua_handle_result = 0
+    integer udg_lua_test_value = 0
+    integer array udg_lua_test_array
 endglobals
 
 function InitGlobals takes nothing returns nothing
+    // Force allocation of the array used by the Lua globals regression.
+    set udg_lua_test_array[0] = 0
 endfunction
 //===========================================================================
 // JAPI bridge
@@ -48,7 +57,7 @@ function EXExecuteScript takes string str returns string
 endfunction
 
 function LuaCallback1 takes nothing returns nothing
-    call UnitId("LuaCallback1")
+    call UnitId("LuaCallbackBridge")
 endfunction
 
 function LuaCallback2 takes nothing returns nothing
@@ -62,6 +71,32 @@ endfunction
 function LuaCallback4 takes nothing returns nothing
     call UnitId("LuaCallback4")
 endfunction
+
+// Synchronous JASS -> Lua calls through the UnitId + hashtable bridge.
+// The Lua handlers are registered by tests.bridge_preflight at LoadScript time.
+function LuaBridgeProbeCall takes integer a, integer b returns integer
+    call SaveStr(japi_ht, japi__key, 0, "(II)I")
+    call SaveInteger(japi_ht, japi__key, 1, a)
+    call SaveInteger(japi_ht, japi__key, 2, b)
+    call UnitId("LuaBridgeProbe")
+    return LoadInteger(japi_ht, japi__key, 0)
+endfunction
+
+function LuaErrorProbeCall takes nothing returns integer
+    call SaveStr(japi_ht, japi__key, 0, "()I")
+    call UnitId("LuaErrorProbe")
+    return LoadInteger(japi_ht, japi__key, 0)
+endfunction
+
+// Handle ABI round-trip: the Lua handler receives the player handle as a
+// userdata (handle_level=2) and returns the same handle.
+function LuaHandleProbeCall takes nothing returns integer
+    call SaveStr(japi_ht, japi__key, 0, "(Hplayer;)Hplayer;")
+    call SaveInteger(japi_ht, japi__key, 1, GetHandleId(Player(0)))
+    call UnitId("LuaHandleEcho")
+    return LoadInteger(japi_ht, japi__key, 0)
+endfunction
+
 
 //===========================================================================
 // Map initialization

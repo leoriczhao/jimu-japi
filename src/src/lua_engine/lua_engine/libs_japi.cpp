@@ -6,6 +6,7 @@
 #include <string>
 #include <warcraft3/jass/hook.h>
 #include "lua_to_nativefunction.h"
+#include "bridge_dispatch.h"
 
 namespace base::lua {
 	template <>
@@ -78,12 +79,24 @@ namespace warcraft3::lua_engine::japi {
 			return luaL_error(L, "japi: '%s' is already registered", name);
 		}
 		lua_pop(L, 1);
+
+		// The same name is also reachable as UnitId("Name") + hashtable RPC,
+		// the builtin-japi pattern used by precompiled war3map.j wrappers.
+		// Do not let a Lua handler silently shadow a built-in C++ handler.
+		if (bridge::has_handler(name)) {
+			return luaL_error(L, "japi: '%s' conflicts with an existing bridge handler", name);
+		}
+
 		lua_pushstring(L, name);
 		self = (japi*)lua_newuserdata(L, sizeof(japi));
 		int luaobj = runtime::callback_push(L, 4);
 		new (self)japi(L, luaobj, name, def);
 		luaL_setmetatable(L, japi::name());
 		lua_rawset(L, -3);
+
+		// The native table entry above serves Lua-side japi.Name() calls; this
+		// one serves precompiled JASS wrappers that call UnitId("Name").
+		bridge::register_handler(L, name, def, 4);
 		return 0;
 	}
 
