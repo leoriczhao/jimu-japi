@@ -8,6 +8,7 @@ tools/config.local.ps1
 
 # Logs
 *.log
+tools/w3x2lni/log/
 
 # DLL output
 *.dll
@@ -19,8 +20,9 @@ tools/config.local.ps1
 *.user
 *.suo
 
-# Claude Code
+# Agent tooling
 .claude/
+.qoder/
 
 # OS
 Thumbs.db
