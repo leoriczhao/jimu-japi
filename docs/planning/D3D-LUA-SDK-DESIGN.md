@@ -647,8 +647,9 @@ timer 更新、订阅、reset、shutdown）、<code>D3D-LUA-API.md</code>（模�
 | P2（完成） | <code>jass.d3d</code> userdata 与 Font/Text/Texture 基础 API | 用户无需 RPC 即可创建、修改、销毁；公共 7 组实机通过 |
 | P3（完成） | 统一 render queue、D3DXFont、asset URI/MPQ/BLP | alpha/z、地图内 PNG/BLP1、游戏 BLP、共享 cache、reload、失败合同、clean provenance 与真实窗口均通过 |
 | P4（完成，2026-11-15） | Subscription 与统一输入事件 | 键盘、鼠标、enter/leave/click 全部走真实 Texture；真实鼠标按键由 `WM_*` + 异步按键状态提供 |
-| P5（完成，2026-11-15） | GC、TTL、session close、device lost/reset、错误诊断 | TTL 到期释放并同步 Lua 句柄、LIFE-11 失败不泄漏、DEV-03 二十次真实 resize/reset 后句柄/属性/订阅保持、`d3d.on` 生命周期事件与 `status()`/`stats()` 诊断通过；交互 147/147。自动地图/VM session close 与同进程换图仍缺，`device_lost` 在 1.27a 窗口模式不可观测（见 14.3） |
-| P6（进行中，2026-11-15） | 安装/验证/卸载、迁移、API 文档、最终实机验收 | 文档三项已交付：<code>docs/guide/D3D-LUA-QUICKSTART.md</code>、<code>D3D-LUA-API.md</code>、<code>D3D-LUA-MIGRATION.md</code>；第 15 节仍未全通过（LIFE-12 同进程新会话、自动地图/VM 会话关闭、BLP2 实机证据），因此不宣称 SDK 完成 |
+| P5（完成，2026-11-15） | GC、TTL、session close、device lost/reset、错误诊断 | TTL 到期释放并同步 Lua 句柄、LIFE-11 失败不泄漏、DEV-03 二十次真实 resize/reset 后句柄/属性/订阅保持、`d3d.on` 生命周期事件与 `status()`/`stats()` 诊断通过；交互 147/147。自动地图/VM session close 见 P5.1 行；`device_lost` 在 1.27a 窗口模式不可观测（见 14.3） |
+| P5.1（完成，2026-11-15） | 地图级 VM 重置与自动会话收尾 | 换图时 `callback` 重入 `Initialize()` → `lua_loader::on_map_boot()` 丢弃 Lua 侧 bridge handler、清 message/D3D 分发状态 → `lua_close` 旧 `lua_State` 并复位加载标志 → 新图首次 `ExecuteFunc` 重建 VM 并加载新 `war3map.lua`；`__gc` → `context_gc` → `end_session`，session 与地图同生共死；`-TestReboot` 同进程换图 8/8 |
+| P6（进行中，2026-11-15） | 安装/验证/卸载、迁移、API 文档、最终实机验收 | 文档三项已交付：<code>docs/guide/D3D-LUA-QUICKSTART.md</code>、<code>D3D-LUA-API.md</code>、<code>D3D-LUA-MIGRATION.md</code>；第 15 节仍未全通过（BLP2 实机证据与 handler 覆盖 27/54；LIFE-09/LIFE-12 的自动部分已由 P5.1 补齐），因此不宣称 SDK 完成 |
 
 阶段不能跨越完成门槛。例如 P2 的对象能显示，不代表 P5 生命周期完成。
 
@@ -670,8 +671,11 @@ Font <code>__close</code> 和显式 shutdown。P3 新增 <code>text_alpha</code>
   <code>D3DSdkResourceCountsV1.device_generation</code> 合同由原生测试覆盖。
 - DEV-03：reset 前后 <code>survivor</code> Font/Text/Texture 的句柄存活、文本内容、位置、字体高度、rect 宽度和
   lifecycle 订阅均保持不变（reset 只重建 default-pool 资源，逻辑 handle 稳定）。
-- LIFE-12（同进程新会话）：本项目不支持游戏内换图，只能由原生合同测试的显式 <code>end_session</code> +
-  旧 handle 失效证明；自动地图/VM 关闭钩子仍缺，属于 P6 之前的已知缺口。
+- LIFE-12（同进程新会话）：由 P5.1 的地图级 VM 重置覆盖。换图时 <code>callback</code> 重入
+  <code>Initialize()</code>，<code>lua_loader::on_map_boot()</code> 丢弃旧 Lua handler、清分布状态后
+  <code>lua_close</code> 旧 <code>lua_State</code>；新图首次 <code>ExecuteFunc</code> 重建 VM 并加载新
+  <code>war3map.lua</code>，<code>-TestReboot</code> 在同一进程内验证 8/8：旧 session 资源归零、旧 handle 失效、
+  旧 Lua handler 不再被调用、新 VM 拿到递增的 <code>session_id</code> 并能收到 <code>resize</code> 事件。
 
 P1 源码提交 <code>b3f4da8</code> 已从 detached clean worktree 完整构建。clean proxy SHA-256 为
 <code>8D7089B68B9028A05C1DB1DAFB70D95B7974049A707EAF91C358633772225035</code>，clean
@@ -693,7 +697,7 @@ sidecar 回读为同一 hash；部署显式使用该 clean <code>yd_japi.dll</co
 P2 已提供 API-02 的公共边界证据，并完成 API-01 中 Font/Text/Texture 部分；FONT-01、TEXT-01、TEX-02
 的属性往返已通过，但 Font 变更视觉、文字 alpha、asset 加载和统一 z 属于 P3。LIFE-01 的三类资源幂等销毁、
 LIFE-04、LIFE-07 以及 LIFE-09 的显式无事件资源清理已通过；LIFE-02 尚未穷举每个业务方法，LIFE-08 目前只
-实测 Font，LIFE-09/LIFE-12 仍缺自动地图/VM 与同进程新会话。EVENT-04 的旋转几何命中基元已通过，
+实测 Font；LIFE-09/LIFE-12 的自动部分在 P5.1 补齐（同进程换图回归 8/8）。EVENT-04 的旋转几何命中基元已通过，
 但在 P4 Subscription 分发完成前不能把 EVENT-04 标为完整事件验收。
 
 ### 14.2 P3 渲染子项验收边界
@@ -759,7 +763,8 @@ P5 的 TTL 与 device 生命周期见 14.3。
 ## 15. 验收标准
 
 > 本节是最终交付门槛，只有在 P6 全部逐项记录证据后才能宣称 SDK 可用。P0–P5 已通过项的实测证据见 §14、
-> 14.3 与 [STATUS.md](../STATUS.md)；其中 LIFE-12 与自动地图/VM 会话关闭仍是未完成项。
+> 14.3 与 [STATUS.md](../STATUS.md)；其中 LIFE-09/LIFE-12 的自动部分已由 P5.1 地图级 VM 重置覆盖，
+> 剩余门槛是 BLP2 实机证据与 D3D handler 覆盖（27/54）。
 
 ### 15.1 构建与静态合同
 

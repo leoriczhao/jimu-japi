@@ -18,6 +18,7 @@ param(
     [switch]$InteractiveD3D,
     [switch]$WithDebugger,
     [switch]$Demo,
+    [switch]$TestReboot,
     [switch]$SkipJassCheck
 )
 
@@ -87,7 +88,7 @@ function Get-ModuleName {
 }
 
 function Bundle-Lua {
-    param([string]$MapDir, [string]$OutPath)
+    param([string]$MapDir, [string]$OutPath, [string]$Entry = "war3map")
 
     # Collect all .lua files
     $allFiles = Get-ChildItem -Path $MapDir -Filter "*.lua" -Recurse -File
@@ -100,9 +101,10 @@ function Bundle-Lua {
         $moduleMap[$name] = $content
     }
 
-    # Entry point
-    $entry = $moduleMap["war3map"]
-    if (-not $entry) { throw "war3map.lua not found in $MapDir" }
+    # Entry point. NOTE: PowerShell variables are case-insensitive, so this must
+    # not be called $entry — that would overwrite the $Entry parameter.
+    $entryCode = $moduleMap[$Entry]
+    if (-not $entryCode) { throw "$Entry.lua not found in $MapDir" }
 
     # Inline require() calls recursively
     # Pattern: local xxx = require "module.name"  or  require "module.name"
@@ -132,21 +134,25 @@ function Bundle-Lua {
         return $result
     }
 
+    $isMainEntry = $Entry -eq "war3map"
     $visited = [System.Collections.Generic.HashSet[string]]::new()
-    $visited.Add("war3map") | Out-Null
-    $bundled = Inline-Requires $entry $moduleMap $visited
+    $visited.Add($Entry) | Out-Null
+    $bundled = Inline-Requires $entryCode $moduleMap $visited
     $bundled = "local __modcache = {}`r`n" + $bundled
-    if ($InteractivePoint) {
+    if ($isMainEntry -and $InteractivePoint) {
         $bundled = "_G.__JAPI_TEST_INTERACTIVE_POINT = true`r`n" + $bundled
     }
-    if ($InteractiveUi) {
+    if ($isMainEntry -and $InteractiveUi) {
         $bundled = "_G.__JAPI_TEST_INTERACTIVE_UI = true`r`n" + $bundled
     }
-    if ($InteractiveD3D) {
+    if ($isMainEntry -and $InteractiveD3D) {
         $bundled = "_G.__JAPI_TEST_INTERACTIVE_D3D = true`r`n" + $bundled
     }
-    if ($Demo) {
+    if ($isMainEntry -and $Demo) {
         $bundled = "_G.__JAPI_DEMO = true`r`n" + $bundled
+    }
+    if ($isMainEntry -and $TestReboot) {
+        $bundled = "_G.__JAPI_REBOOT_PARENT = true`r`n" + $bundled
     }
 
     # Write UTF-8 without BOM (luaL_loadbuffer cannot skip a BOM, and ASCII
@@ -154,7 +160,7 @@ function Bundle-Lua {
     $absOut = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutPath)
     [System.IO.File]::WriteAllText($absOut, $bundled, (New-Object System.Text.UTF8Encoding($false)))
     $count = $moduleMap.Count
-    Write-Host "  Bundled $count Lua files into war3map.lua"
+    Write-Host "  Bundled $count Lua files into $(Split-Path -Leaf $OutPath)"
 }
 
 # ── Main pipeline ───────────────────────────────────────────────
@@ -197,6 +203,14 @@ if (-not (Test-Path $JFile)) {
 # 2. Bundle Lua sources
 Write-Host '  [2/5] Bundle Lua'
 Bundle-Lua $MapDir "$WorkDir\war3map.lua"
+if ($TestReboot) {
+    # Second script, loaded by the DLL after it resets the VM so the reboot
+    # regression can assert the new state from inside the fresh Lua state.
+    Write-Host '  [2b] Bundle reboot child script'
+    $rebootScriptDir = "$WorkDir\script"
+    if (-not (Test-Path $rebootScriptDir)) { New-Item -ItemType Directory $rebootScriptDir -Force | Out-Null }
+    Bundle-Lua $MapDir "$rebootScriptDir\reboot_child.lua" -Entry "tests.reboot_child"
+}
 
 # 3. war3map.j — inject the japi bootstrap (plugin maps and foreign maps)
 Write-Host '  [3/5] Patching war3map.j'
@@ -214,6 +228,23 @@ if ($jContent -match 'function LuaBridgeProbeCall') {
         '    set udg_lua_bridge_result = LuaBridgeProbeCall(10, 32)' + $nl +
         '    set udg_lua_error_result = LuaErrorProbeCall()' + $nl +
         '    set udg_lua_handle_result = LuaHandleProbeCall()'
+}
+
+if ($TestReboot) {
+    # The VM reset must be driven by pure JASS: closing Lua from inside a Lua
+    # frame would tear down a live lua_pcall. A one-shot timer keeps it off the
+    # war3map.lua call stack.
+    $loadScriptLines += $nl +
+        '    call TimerStart(CreateTimer(), 6.00, false, function JapiRebootProbe)'
+    $rebootProbeFunc = 'function JapiRebootProbe takes nothing returns nothing' + $nl +
+        '    call UnitId("SimulateMapBoot")' + $nl +
+        'endfunction' + $nl + $nl
+    $rebootMain = [regex]::Match($jContent, '(?m)^[ \t]*function[ \t]+main[ \t]+takes')
+    if (-not $rebootMain.Success) {
+        throw "war3map.j has no 'function main takes' for -TestReboot: $BaseMap"
+    }
+    $jContent = $jContent.Substring(0, $rebootMain.Index) + $rebootProbeFunc +
+        $jContent.Substring($rebootMain.Index)
 }
 
 # Inject a self-contained bootstrap into a map that knows nothing about japi:
@@ -326,6 +357,9 @@ if (-not (Test-Path $scriptDir)) { New-Item -ItemType Directory $scriptDir -Forc
 Copy-Item "$WorkDir\war3map.lua" "$scriptDir\war3map.lua" -Force
 if ($existing -notmatch "script\\\\war3map\.lua") {
     Add-Content $listfile "`nscript\war3map.lua" -Encoding ASCII
+}
+if ($TestReboot -and (Get-Content $listfile -Raw) -notmatch 'reboot_child') {
+    Add-Content $listfile "`nscript\reboot_child.lua" -Encoding ASCII
 }
 
 # 4b. Debugger resources (optional, -WithDebugger)

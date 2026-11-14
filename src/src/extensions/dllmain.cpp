@@ -190,32 +190,47 @@ static void sweep_stale_pid_dlls()
 
 extern "C" __declspec(dllexport) void __cdecl Initialize()
 {
-    if (g_initialized) return;
+    // The map's JASS bootstrap calls Initialize() through the callback exploit on
+    // EVERY map boot, so a second call means "the engine is re-initialising". Use
+    // it exactly like builtin-japi's game-reset callback: close the old Lua VM
+    // (which also ends the D3D session through its finalizer) and rebuild the
+    // hooks that hang off the per-map JASS structures.
+    const bool reboot = g_initialized;
     g_initialized = true;
 
-    // Debug logging is initialized here, NOT in DllMain — AllocConsole/CreateThread/
-    // CreateFile under the loader lock risk deadlocking the game during LoadLibrary.
-    DBG_INIT();
-
-    SYNC_LOG("Initialize() START");
-
-    sweep_stale_pid_dlls();
+    if (!reboot) {
+        // Debug logging is initialized here, NOT in DllMain — AllocConsole/CreateThread/
+        // CreateFile under the loader lock risk deadlocking the game during LoadLibrary.
+        DBG_INIT();
+        SYNC_LOG("Initialize() START");
+        sweep_stale_pid_dlls();
+    } else {
+        SYNC_LOG("Initialize() again: map boot, resetting the Lua VM");
+        warcraft3::lua_engine::lua_loader::on_map_boot(false);
+    }
 
     // Step 1: Install ExecuteFunc hook; the Lua VM is created lazily on the
-    // first ExecuteFunc call (builtin-japi style — nothing heavy in callback context)
+    // first ExecuteFunc call (builtin-japi style — nothing heavy in callback context).
+    // The native table is rebuilt by the game on every map, so this runs again.
     warcraft3::lua_engine::lua_loader::install_lazy_hook();
     SYNC_LOG("Step 1: lazy ExecuteFunc hook DONE");
 
-    // Step 2: Register EX* natives
+    // Step 2: Register EX* natives. jass::japi_add only appends to the add list,
+    // so re-running is idempotent; the damage hook inside targets game code and
+    // is guarded internally.
     warcraft3::japi::initialize_ex_natives();
     warcraft3::lua_engine::message::register_bridge_natives();
     SYNC_LOG("Step 2: initialize_ex_natives + message bridge natives DONE");
 
     // The proxy must already be loaded as d3d9.dll before the process creates
-    // its render device. Registration is optional so non-D3D maps still work.
-    initialize_d3d_api();
+    // its render device. Registration is optional so non-D3D maps still work;
+    // the proxy is a process-wide singleton, so register its API only once.
+    static bool d3d_api_ready = false;
+    if (!d3d_api_ready) d3d_api_ready = initialize_d3d_api();
 
-    // Step 3: Register bridge handlers + flush natives
+    // Step 3: Register bridge handlers + flush natives. flush_add_only() writes
+    // the EX* natives into the CURRENT JASS native table, which is a fresh table
+    // after a map boot, so this must run every time.
     warcraft3::lua_engine::bridge::register_cpp_handler(
         "open_code_run_logs", "(B)V",
         warcraft3::japi::open_code_run_logs_handler);
@@ -224,23 +239,34 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
 
     // Step 4: Hook UnitId with an inline hook (builtin-japi's jass.dll mechanism).
     // Fall back to linked-list editing (callback's CreateJassNativeHook) if the
-    // inline install fails.
+    // inline install fails. The inline hook patches game code, which survives a
+    // map boot: patching it twice would make the trampoline call itself.
     {
+        static uintptr_t unitid_inline_hooked = 0;  // original UnitId address
         uintptr_t fake = warcraft3::lua_engine::bridge::get_fake_unitid();
         uintptr_t unitid = 0;
         auto* node = warcraft3::get_native_function_hashtable()->find("UnitId");
         if (node) unitid = node->func_address_;
 
-        uintptr_t tramp = unitid ? warcraft3::jass::inline_hook_install(unitid, fake) : 0;
-        if (tramp) {
-            warcraft3::lua_engine::bridge::set_real_unitid(tramp);
-            SYNC_LOG("Step 4: UnitId inline-hooked");
-        } else {
+        if (unitid_inline_hooked) {
+            SYNC_LOG("Step 4: UnitId inline hook already installed, keeping it");
+        } else if (unitid && unitid != fake) {
+            uintptr_t tramp = warcraft3::jass::inline_hook_install(unitid, fake);
+            if (tramp) {
+                warcraft3::lua_engine::bridge::set_real_unitid(tramp);
+                unitid_inline_hooked = unitid;
+                SYNC_LOG("Step 4: UnitId inline-hooked");
+            }
+        }
+
+        if (!unitid_inline_hooked) {
             uintptr_t addr = find_linked_list_func_addr("UnitId");
             if (addr) {
                 uint32_t orig = *(uint32_t*)addr;
-                warcraft3::lua_engine::bridge::set_real_unitid(orig);
-                *(uint32_t*)addr = (uint32_t)fake;
+                if (orig != (uint32_t)fake) {
+                    warcraft3::lua_engine::bridge::set_real_unitid(orig);
+                    *(uint32_t*)addr = (uint32_t)fake;
+                }
                 char buf[128];
                 snprintf(buf, sizeof(buf), "Step 4: UnitId hooked via linked list (fallback), orig=0x%08X", orig);
                 SYNC_LOG(buf);
@@ -261,6 +287,21 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
             return 0;
         });
     SYNC_LOG("Step 5: LoadScript handler registered");
+
+    // Step 6: In-process map-boot hook for the reboot regression: a pure JASS
+    // action (no Lua frame) may force the builtin-japi style VM reset without
+    // restarting the game. The JASS VM survives, so the shared hashtable
+    // handshake and every JASS handle stay valid.
+    warcraft3::lua_engine::bridge::register_cpp_handler(
+        "SimulateMapBoot", "()V",
+        [](const uint32_t*, size_t) -> uint32_t {
+            SYNC_LOG("SimulateMapBoot: resetting the Lua VM");
+            warcraft3::lua_engine::lua_loader::on_map_boot(true);
+            warcraft3::lua_engine::lua_loader::load_script_file("script\\reboot_child.lua");
+            SYNC_LOG("SimulateMapBoot: done");
+            return 0;
+        });
+    SYNC_LOG("Step 6: SimulateMapBoot handler registered");
 
     SYNC_LOG("Initialize() DONE");
 }

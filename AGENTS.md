@@ -95,6 +95,8 @@ map-inject/
 │   ├── callback                # exploit JASS 代码（通过 StartCampaignAI 加载）
 │   ├── pack.ps1                # MPQ 打包脚本（Lua 合并 + DLL 注入，不动 war3map.j）
 │   ├── deploy.ps1              # 打包 + 部署 + 启动 War3 + 等结果
+│   ├── make-foreign-map.ps1    # 生成无 japi 痕迹的外来地图夹具
+│   ├── drive-interactive-d3d.ps1  # 按 [WAIT] 标记自动驱动交互 D3D 回归
 │   ├── pjass.exe               # JASS 语法检查
 │   └── w3x2lni/                # 地图格式转换
 │

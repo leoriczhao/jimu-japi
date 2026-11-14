@@ -20,4 +20,9 @@ bool has_active_subscriptions();
 
 int open(lua_State* L);
 
+// Map-boot VM reset hooks: called before / after lua_close() so the SDK
+// timer, pending input and subscriptions never outlive their Lua state.
+void prepare_vm_reset(bool jass_engine_alive);
+void reset_vm_state();
+
 }  // namespace warcraft3::lua_engine::d3d

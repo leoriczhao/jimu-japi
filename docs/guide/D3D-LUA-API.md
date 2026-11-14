@@ -229,7 +229,10 @@ Subscription 也走 `__close`，可配合 `local sub <close> = texture:on(...)`�
    不会静默命中新对象。
 5. **shutdown**：`d3d.shutdown()` 清空同一 session 的 SDK 资源与旧 bridge 资源，
    之后构造返回 `nil, err`（`D3D SDK ... unavailable`），旧句柄全部失效。
-6. **context GC**：Lua 上下文回收时自动 cancel 全部订阅并 `end_session`。
+6. **换图自动重置**：重新进图/重开一局时，注入层会关闭旧 Lua VM 并重建，然后加载新地图的
+   `war3map.lua`；VM 关闭会走 context GC（`end_session`），所以旧 session 的对象全部失效，新脚本拿到
+   新的 `session_id`。不要跨地图缓存 userdata。
+7. **context GC**：Lua 上下文回收时自动 cancel 全部订阅并 `end_session`。
 
 ---
 
@@ -263,8 +266,9 @@ Subscription 也走 `__close`，可配合 `local sub <close> = texture:on(...)`�
 ## 10. 当前限制
 
 - `device_lost` 事件不可观测（见 §8）。
-- 自动地图/VM 会话关闭钩子未实现：游戏内换图/重开仍依赖 context GC 或显式 shutdown；
-  同进程换图不支持。
+- 地图级重置只在**重新载入地图**时发生（重新进图/重开一局）；单局游戏内没有“重启本图”的入口，
+  需要重开就重新进图，此时旧 VM、旧 session 和旧 HUD 会一起消失。
+- `jass.globals` 只对地图已分配过的数组元素可靠：`index>0` 且地图从未触碰过的元素写入无效、读回 `nil`。
 - `Texture:error()` 恒为 nil（保留接口）。
 - `file://` 禁用；单文件上限 64 MiB；BLP2 仅有解码子集，实机证据是 BLP1/PNG。
 - 输入事件依赖窗口前台；GameUI 分发在 1.27a 游戏内只送键盘消息，鼠标按键来自 Win32 窗口消息。

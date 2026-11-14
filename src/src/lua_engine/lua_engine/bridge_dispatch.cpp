@@ -474,6 +474,29 @@ namespace warcraft3::lua_engine::bridge {
         DBG_LOG("[bridge] registered C++ handler: %s %s", name, spec);
     }
 
+    // The Lua VM is going away: drop every handler that owns a registry
+    // reference (C++ handlers stay, they are bound to the DLL, not the VM).
+    // keep_handshake=true keeps the shared hashtable handle/key: used when the
+    // JASS VM survives (in-process reboot test), where nothing re-sends it.
+    void reset_lua_state(bool keep_handshake) {
+        size_t dropped = 0;
+        for (auto it = g_handlers.begin(); it != g_handlers.end();) {
+            if (it->second.lua_ref != 0) {
+                it = g_handlers.erase(it);
+                ++dropped;
+            }
+            else {
+                ++it;
+            }
+        }
+        if (!keep_handshake) {
+            g_ht_handle = 0;
+            g_ht_key = 0;
+        }
+        DBG_LOG("[bridge] VM reset: dropped %u Lua handler(s), %u C++ handler(s) kept",
+                (unsigned)dropped, (unsigned)g_handlers.size());
+    }
+
     bool has_handler(const char* name) {
         return name && g_handlers.find(name) != g_handlers.end();
     }

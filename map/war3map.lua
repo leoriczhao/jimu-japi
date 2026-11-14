@@ -17,11 +17,24 @@ local util    = require "lib.util"
 local scene   = require "lib.scene"
 local demo    = require "game.demo"
 local bridge_preflight = require "tests.bridge_preflight"
+local reboot_parent = require "tests.reboot_parent"
 local test_mod = require "tests.test_suite"
 
 -- Packed with -Demo, the map runs the playable vertical slice instead of the
 -- regression suite. Both modes share the scene, debugger and entry timing.
 local demo_mode = _G.__JAPI_DEMO == true
+
+-- Packed with -TestReboot: this VM only stages the state the reset must clear
+-- (D3D session + subscription + a Lua bridge handler) and then idles until the
+-- injected JASS timer resets it. Nothing below runs here: no scene timer, no
+-- debugger, no suite.
+if _G.__JAPI_REBOOT_PARENT then
+    local ok, err = pcall(reboot_parent.run)
+    if not ok then
+        print("[REBOOT] parent failed: " .. tostring(err))
+    end
+    return
+end
 
 -- Establish a deterministic empty scene after JASS main() has completed:
 -- flat map, no melee base, and exactly one rifleman.

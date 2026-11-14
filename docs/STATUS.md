@@ -9,6 +9,7 @@
 - LocalPoint 交互回归：`109 passed, 0 failed, 109 total`（真实前台 Q 键，2026-07-30，旧 108 基线；本次未重跑）
 - UI 交互回归：`110 passed, 0 failed, 110 total`（真实鼠标悬停 + 命令卡显隐，2026-07-30，旧 108 基线；本次未重跑）
 - D3D 实机回归：`147 passed, 0 failed, 147 total`（2026-11-15；普通基线 116 项 + D3D 31 项：公共 SDK 功能 8 组 + 底层 bridge 13 组 + P4 Subscription 真实输入 1 组 + P5 生命周期 7 项 + shutdown 1 组；兼容面仍为 27/54 触达，不是 147 个 API）
+- 地图级 VM 重启回归：`8 passed, 0 failed, 8 total`（2026-11-15；同一进程内换图后旧 Lua VM 关闭、新图脚本重载、旧 session 资源归零）
 - 默认测试场景：64×64 平坦空图，无基地、野怪、树木或预放物件；最终仅保留 1 个 10 级英雄火枪手 `Hrif`（2026-07-31）
 - 验收入口：先运行 `src\build.bat`，再按第 4 节选择普通或交互模式
 
@@ -16,13 +17,13 @@
 
 | 功能域 | 实现状态 | 验证状态 | 结论 |
 |---|---:|---:|---|
-| callback 注入、DLL 加载、Lua VM 启动 | 完成 | War3 1.27a 端到端 | 可用 |
+| callback 注入、DLL 加载、Lua VM 启动与地图级重置 | 完成 | War3 1.27a 端到端 + 同进程换图 8/8 | 可用 |
 | Lua 引擎模块 | 12/12（含开发中的 `jass.d3d`） | 自动回归 + 实机 | 非 D3D 模块可用；`jass.d3d` 见下行限制 |
 | 核心 runtime 能力 | 7/7 功能目标 | 自动回归 + 实机 | 可用 |
 | Lua DAP 调试器 | P0-P5 完成 | attach、断点、单步、栈、变量、求值实测 | 可用，需 `-WithDebugger` |
 | 非 D3D bridge native | 67/67 注册 | 普通 116/116 + 两套真实交互回归（旧 108 基线） | 已实现并验收 |
 | D3D 底层 proxy/bridge | proxy、注册、部署、诊断、绘制、code 回调链与 device 状态/世代已跑通；P0/P1 兼容、部署和原生 session 基座已闭环 | 普通 116/116 + 累计 D3D 147/147 + 真实视觉/鼠标/Shift 交互 | **底层链路基本跑通，不是整体可用** |
-| D3D Lua SDK 与生命周期 | P2–P5 已提供 Font/Text/Texture 强类型 userdata、统一跨类型队列、D3DXFont alpha、`asset://`/`game://` 内存资源、共享 CPU cache、显式销毁、GC/`__close`、reload、显式 session shutdown，Subscription（enter/leave/mouse_down/mouse_up/click/key_down/key_up、pointer capture、6px 点击阈值、`hover_only`/`propagate`/`keep_on_error`、只读 event 表），以及 P5 生命周期：Text `ttl` 到期释放、`d3d.on("resize"/"device_lost"/"device_reset")` 模块级订阅、`device_generation` 世代号、`d3d.status()` 的 `state`/`device_generation` 诊断和失败不泄漏合同；真实鼠标键盘由窗口 `WM_*` 消息 + 异步按键状态驱动，因为 1.27a 游戏内 CGameUI 分发只送键盘消息；剩余缺口是自动地图/VM 会话钩子和同进程换图 | 公共 SDK 功能 8 组 + Subscription 真实输入 + 生命周期 7 项 + shutdown 1 组实机通过（交互 D3D 147/147，其中真实窗口 20 次 resize 触发 20 次 device reset，句柄/属性/订阅全部保持）；原生 ABI 1000 轮通过 | **SDK 开发中，不可作为完整用户 SDK 交付** |
+| D3D Lua SDK 与生命周期 | P2–P5 已提供 Font/Text/Texture 强类型 userdata、统一跨类型队列、D3DXFont alpha、`asset://`/`game://` 内存资源、共享 CPU cache、显式销毁、GC/`__close`、reload、显式 session shutdown，Subscription（enter/leave/mouse_down/mouse_up/click/key_down/key_up、pointer capture、6px 点击阈值、`hover_only`/`propagate`/`keep_on_error`、只读 event 表），以及 P5 生命周期：Text `ttl` 到期释放、`d3d.on("resize"/"device_lost"/"device_reset")` 模块级订阅、`device_generation` 世代号、`d3d.status()` 的 `state`/`device_generation` 诊断和失败不泄漏合同；真实鼠标键盘由窗口 `WM_*` 消息 + 异步按键状态驱动，因为 1.27a 游戏内 CGameUI 分发只送键盘消息；地图级 VM 重置已闭环：换图时 `lua_close` 旧 VM、重载新图脚本，session 随 VM 关闭自动 `end_session`（`-TestReboot` 8/8） | 公共 SDK 功能 8 组 + Subscription 真实输入 + 生命周期 7 项 + shutdown 1 组实机通过（交互 D3D 147/147，其中真实窗口 20 次 resize 触发 20 次 device reset，句柄/属性/订阅全部保持）；原生 ABI 1000 轮通过 | **SDK 开发中，不可作为完整用户 SDK 交付** |
 | 空白测试场景 | 64×64 空图 + 单个 10 级英雄火枪手确定性复位 | 普通 116/116 + D3D 147/147 + 真实窗口检查 | 可用；默认基座 |
 | 可玩垂直切片（`-Demo`） | 英雄 + 暴风雪（Q）+ 点击选中 + D3D HUD，只用 `jass.common`/`jass.message`/`jass.d3d`；自带 11 条断言 | 普通图 11/11、外来地图夹具 11/11 | **可用，作为地图作者开工样板** |
 | 外来地图接入（bootstrap 注入） | 对无 japi 痕迹的 `war3map.j` 自动注入 globals + `JapiBootstrap()` + `main()` 调用；repack 前用 pjass 校验 | `build\foreign-map` 夹具 `-Demo` 11/11 | **完成（JASS 地图）**；vJass 需 `-SkipJassCheck` |
@@ -102,7 +103,11 @@ P5 已补 TTL（`Text` 的 `ttl` 由原生帧时间递减，到期释放并让 L
 `d3d.on("resize"|"device_lost"|"device_reset", cb)`；实机 20 次窗口尺寸变化产生 20 个 `resize` 事件与 20 次
 device reset（generation 1→21），过程中 Font/Text/Texture 句柄、文本内容、位置、尺寸和订阅全部保持。
 `device_lost` 在 1.27a 窗口模式下不可观测（lost 与 reset 在同一帧完成，0.05s 轮询只能看到 reset），因此该事件
-通道保留但不由实机证明；自动地图/VM session close 和同进程新地图验收仍未完成。完整设计与验收标准见
+通道保留但不由实机证明。
+地图级 VM 重置已闭环：换图时 `callback` 会再次调用 `Initialize()`，`lua_loader::on_map_boot()` 先丢弃 Lua 侧
+bridge handler、清 message/D3D 分发状态，再 `lua_close` 旧 `lua_State` 并复位加载标志；新图首次
+`ExecuteFunc` 时重建 VM 并加载新 `war3map.lua`。`lua_close` 触发 `__gc` → `context_gc` → `end_session`，
+所以 D3D session 与地图同生共死。完整设计与验收标准见
 [D3D-LUA-SDK-DESIGN.md](planning/D3D-LUA-SDK-DESIGN.md)。
 
 ## 3. 重点验收与当前缺口
@@ -110,21 +115,21 @@ device reset（generation 1→21），过程中 Font/Text/Texture 句柄、文�
 | 项目 | 当前证据 | 状态 / 完成条件 |
 |---|---|---|
 | `EXGetEventDamageData` / `EXSetEventDamage` | 真实 `EVENT_UNIT_DAMAGED` 中读取来源/目标/类型，20 点伤害改写为 7，并以 `GetEventDamage`、生命差和原生 7 点对照命中闭环验证；2 项自动测试通过 | **完成** |
-| JASS↔Lua 基础桥接 | `jass.japi` 注册同时进入 native 表和 UnitId 分发；JASS `main` 实测 `()V` 回调、`(II)I`=42、`(Hplayer;)Hplayer;` 句柄往返和错误进 `runtime.error_handle`；`jass.globals` 标量/数组写、handle level 0/1/2、level 2 GC、trigger-action sleep 均通过；普通回归 `116/116` | **完成（UnitId / trigger action 路线）**；JASS 侧 `native Foo` + 运行时注册在 callback 模式不可用；sleep 不适用于裸 timer callback/纯 Lua 协程 |
+| JASS↔Lua 基础桥接 | `jass.japi` 注册同时进入 native 表和 UnitId 分发；JASS `main` 实测 `()V` 回调、`(II)I`=42、`(Hplayer;)Hplayer;` 句柄往返和错误进 `runtime.error_handle`；`jass.globals` 标量/数组写、handle level 0/1/2、level 2 GC、trigger-action sleep 均通过；普通回归 `116/116` | **完成（UnitId / trigger action 路线）**；JASS 侧 `native Foo` + 运行时注册在 callback 模式不可用；sleep 不适用于裸 timer callback/纯 Lua 协程；已知限制：`jass.globals` 对地图从未分配过的数组元素 `index>0` 写入无效（`class_array.cpp` 的 `gv.array_vaild`），读回 `nil` |
 | `LocalPointOrder` | bridge ABI 调用安全；真实前台 Q 键进入 `message.hook`（code 81），共享 submit 提交 `blizzard` 点命令并返回 `true`；`EVENT_UNIT_SPELL_EFFECT` 触发且技能 id 为 `AHbz`；清理诊断代码并重编译后交互套件为 `109/0/109` | **完成**；普通右键移动走 smart-click 包，不是该 API 的 point-order 契约，详见逆向记录 08 §7.3 |
 | `GetTargetObject` | `-InteractiveUi` 固定镜头创建敌方城镇大厅；真实鼠标点击/悬停后返回 handle `1050778`，与夹具 handle `1050778` 精确一致 | **完成** |
 | `SetUnitAbilityButtonShow` | 大法师 `AHbz` 命令卡槽从显示 `(0,2)` 变为隐藏 `nil,nil`，10 秒后自动恢复 `(0,2)`；真实窗口截图同时确认紫色暴风雪图标消失，交互套件为 `110/0/110` | **完成** |
-| D3D proxy 加载/注册/部署 | PE 导出包含未修饰的 `Direct3DCreate9`、`InitializeD3DAPI`、`GetD3DSdkApi`，且 proxy 不导入自身 `d3d9.dll`；`yd_japi` 在进程内完成 handler 注册；`d3d-proxy.ps1` 以 sidecar SHA-256 保护安装、验证和卸载；实测状态位达到 `0x7F` | **运行链基本跑通**；提交态产物溯源与 proxy 部署生命周期已闭环，自动地图/VM 会话边界未闭环 |
+| D3D proxy 加载/注册/部署 | PE 导出包含未修饰的 `Direct3DCreate9`、`InitializeD3DAPI`、`GetD3DSdkApi`，且 proxy 不导入自身 `d3d9.dll`；`yd_japi` 在进程内完成 handler 注册；`d3d-proxy.ps1` 以 sidecar SHA-256 保护安装、验证和卸载；实测状态位达到 `0x7F` | **运行链基本跑通**；提交态产物溯源与 proxy 部署生命周期已闭环，地图级 VM 重置已闭环（同进程换图 8/8） |
 | D3D bridge 字体/文字/贴图与命中 | 字体和文字属性、JASS string ABI、贴图尺寸/像素尺寸、trigger 开关均通过；真实 War3 窗口显示标题和高对比棋盘，鼠标移入/移出命中正确 | **已选底层子链通过；不是完整 bridge 或用户 SDK** |
 | D3D bridge `TextureAddEvent` / `TextureRemoveEvent` | `SetHeroLevels(C)V` 捕获 code；事件保留独立按下/弹起 JASS timer；回调中 `GetExpiredTimer()` 对应父键的 `0xFE–0x101` 上下文全部命中；真实鼠标位于贴图内时按下/弹起 Shift，并在回调内移除事件；该底层 fixture 为 13 组 | **底层 JASS 回调链与 P4 Lua Subscription 均已实机跑通** |
 | D3D handler 合同与覆盖 | manifest 固化 54 个名字、49 个 proxy owner、5 个 canonical owner；验证器通过；底层 fixture 触达 27/54，未触达 27 个；`147/147` 是累计测试总数 | **结构合同完成，行为覆盖未完成**；未测项不得视为已完成 |
 | D3D P0 兼容性 | D3D 不再注册 5 个 canonical 重名；`ShowConsole` 真实显隐通过；`SetKeyboard` 共用 WARK→VK；SrcRect Hrect getter/setter 实机往返通过 | **本批修复完成**；后续新增实现必须使用明确命名/版本化边界，不依赖覆盖 |
 | D3D 渲染隔离与产物溯源 | state-block 修复提交为 `8bba4ae`；P3 源码提交 `5dbcfd4` 从 detached clean worktree 以 Win32 Release 完整构建并实际部署。clean proxy、游戏目录 proxy 与 sidecar hash 均为 `CE3775261DDAE7DF1A6B6820E78EC47F8D7D9506E9368F4DD74084F0102BD13E`；clean `yd_japi.dll` hash 为 `8E5D7B18E18DC0667C33EF8C2025C39FA09CB45A6F7EE50AB592EED7D44E5AF4`；同一 clean build 通过 ABI/1000 轮、handler、普通 108/108、D3D 130/130 与真实视觉/鼠标/Shift | **P3 提交态产物闭环完成**；主工作区的非 D3D 修改未进入 detached commit |
-| D3D 卸载与会话清理 | 独立工具已在隔离目录验证幂等安装/验证/卸载、未知文件保护，并在真实游戏目录完成卸载→再次卸载→未安装验证→普通 108/108→从干净提交产物重装→hash 验证；原生 ABI 的显式 `end_session` 已验证三类资源批量归零和同进程旧 handle 失效，但仍无真实地图切换/VM 关闭钩子 | **部署生命周期与显式 native session 完成，自动会话生命周期未完成**；不能据此宣称 SDK 可用 |
-| D3D Lua SDK | `require "jass.d3d"` 返回 Font/Text/Texture 类；P2 对象层与 P3 统一渲染、alpha、asset URI/MPQ、共享 cache、reload 和失败合同均通过公共 fixture、原生合同与真实窗口；fixture 源码不调用裸 RPC；P4 Subscription 与真实鼠标/键盘/enter/leave/click、P5 TTL/device 世代/生命周期订阅已于交互回归通过（147/147） | **SDK 仍在开发**；P6 文档与最终门槛仍未完成 |
+| D3D 卸载与会话清理 | 独立工具已在隔离目录验证幂等安装/验证/卸载、未知文件保护，并在真实游戏目录完成卸载→再次卸载→未安装验证→普通 108/108→从干净提交产物重装→hash 验证；原生 ABI 的显式 `end_session` 已验证三类资源批量归零和同进程旧 handle 失效；地图级 VM 重置后由 `lua_close` 收尾，`-TestReboot` 在同进程内换图验证 8/8（旧 session 资源归零、旧 handle 失效、新 VM 收到事件） | **部署生命周期、显式 native session 与自动会话生命周期完成**；SDK 可用性仍受 handler 覆盖与 BLP2 证据限制 |
+| D3D Lua SDK | `require "jass.d3d"` 返回 Font/Text/Texture 类；P2 对象层与 P3 统一渲染、alpha、asset URI/MPQ、共享 cache、reload 和失败合同均通过公共 fixture、原生合同与真实窗口；fixture 源码不调用裸 RPC；P4 Subscription 与真实鼠标/键盘/enter/leave/click、P5 TTL/device 世代/生命周期订阅已于交互回归通过（147/147） | **SDK 仍在开发**；P6 三份用户文档已交付，剩 §15 最终门槛与 handler 覆盖 |
 | 默认空白地图 | `reference/empty-map/` 的对象层为 0 个 doodad、0 个预放单位（仅保留起始点）；无 Melee 初始化；`Hrif` 继承英雄类型并在运行时设为 10 级；真实窗口确认中央仅 1 个英雄火枪手；普通 `116/116`（2026-10-26）、D3D `147/147`（2026-11-15） | **完成并设为默认** |
 | D3D P3 渲染与资源 | Text 使用动态加载的 D3DXFont 绘制 ARGB；Text/Texture 按 `z`、创建序进入同一队列；真实窗口验证 alpha/z。`asset://` PNG、BLP1 与 `game://` BLP 均从 MPQ/资源搜索链以字节缓冲加载；缺失、损坏、穿越和禁用 `file://` 返回稳定错误，失败不增加 handle/cache，失败的换源保留原对象。提交 `5dbcfd4` 的 detached clean build、ABI/handler、普通 108/108、D3D 130/130 和安装 hash 均通过 | **P3 完成**；BLP2 解码子集已有实现，但目标 1.27a 实机证据仅覆盖 BLP1，不把它表述为 BLP2 实机完成 |
-| D3D 后续主线 | P4 已完成（Subscription + 统一输入，含真实鼠标键盘验收）；P5 已完成（TTL、device 世代/lost/reset 事件、`d3d.on`、`status()/stats()` 诊断、LIFE-11 失败不泄漏与 DEV-03 二十次 reset 后句柄稳定，交互 147/147）；P6 文档与最终验收未开始 | **P6 未完成，属于当前主线而非可选项**；自动地图/VM 会话钩子仍是已知缺口 |
+| D3D 后续主线 | P4 已完成（Subscription + 统一输入，含真实鼠标键盘验收）；P5 已完成（TTL、device 世代/lost/reset 事件、`d3d.on`、`status()/stats()` 诊断、LIFE-11 失败不泄漏与 DEV-03 二十次 reset 后句柄稳定，交互 147/147）；地图级 VM 重置已完成（换图关闭并重建 Lua VM，`-TestReboot` 8/8）；P6 三份用户文档已交付 | **P6 剩 §15 最终门槛：BLP2 实机证据与 handler 覆盖 27/54** |
 
 ## 4. 验证入口
 
@@ -157,6 +162,16 @@ device reset（generation 1→21），过程中 Font/Text/Texture 句柄、文�
 `tools\pjass.exe` + 1.27.1 的 Common.j/Blizzard.j 校验补丁后的 `war3map.j`；vJass 地图可加
 `-SkipJassCheck` 跳过。
 
+地图级 VM 重置回归（同一进程内换图：父图建资源 → 6 秒后 `UnitId("SimulateMapBoot")` → 旧 VM 关闭 → 子脚本接管；结果 8/8）：
+
+```powershell
+.\tools\deploy.ps1 -TestReboot
+```
+
+`-TestReboot` 额外把 `map/tests/reboot_child.lua` 打进 `script\reboot_child.lua`，并在 `war3map.j` 里插入
+`JapiRebootProbe`（`call UnitId("SimulateMapBoot")`，6 秒后触发）。断言：旧 VM 确实跑过、`jass.globals` 通道仍可用、
+新 session 存活且 id 变化、旧 session 资源归零、旧 Lua handler 被丢弃、新 VM 能建销资源并收到 `resize` 事件。
+
 LocalPoint 真实交互回归（War3 获得前台焦点后按 Q；默认保留一小时等待手测）：
 
 ```powershell
@@ -183,6 +198,18 @@ D3D proxy 实机回归（鼠标移入棋盘后按一次 Shift，再移到棋盘�
 ```
 
 需要保留最终画面人工检查时额外传入 `-NoKill`。
+
+交互模式需要真实输入，无人值守会停在等待提示。自动驱动：
+
+```powershell
+.\tools\deploy.ps1 -InteractiveD3D -Hold      # 后台起会话，等待测试结果
+.\tools\drive-interactive-d3d.ps1             # 按夹具 [WAIT] 标记自动操作
+New-Item -ItemType File build\war3.kill        # 让 -Hold 收尾并关闭游戏
+```
+
+`drive-interactive-d3d.ps1` 用 `EnumWindows` 按 pid + 类名 `Warcraft III` 找窗口（`MainWindowHandle` 会挑错窗口），
+把窗口提到 `HWND_TOPMOST` 后用合成鼠标/键盘依次驱动三道闸门：悬停棋盘 + Shift + 点击 + 按住拖出、外部松开并
+按 Q、24 次窗口 resize；结束时还原 `HWND_NOTOPMOST` 并打印 `Results:` 行。
 
 该入口先运行只调用 `jass.d3d` 的公共 SDK fixture，再运行底层兼容 fixture。成功条件包括三类 userdata 的属性、
 依赖、销毁、GC/`__close`、地图 MPQ PNG/BLP1 与游戏 BLP、共享 cache/失败合同、显式混合资源 shutdown，以及
@@ -225,11 +252,14 @@ worktree 的 provenance 命令；本次 clean 构建因此在该 worktree 内使
 2. P4（完成，2026-11-15）：Subscription 与统一鼠标/键盘/enter/leave/click 事件已替代两套 texture 身份；真实输入由窗口 `WM_*` + 异步按键状态提供（游戏内 1.27a 的 CGameUI 分发只送键盘消息），交互回归 141/141 通过。
 3. P5（完成，2026-11-15）：TTL、device 世代/lost/reset 事件、`d3d.on` 模块级订阅、`status()/stats()` 诊断、
    LIFE-11 失败不泄漏与 DEV-03 二十次真实 reset 后句柄/属性/订阅稳定已验收（交互 147/147）；`device_lost` 事件在
-   1.27a 窗口模式下不可观测，自动地图/VM 会话关闭与同进程换图仍缺，记入已知缺口。
-4. P6（进行中，2026-11-15）：quickstart、API reference、迁移指南已落地在 `docs/guide/`（见 §6）；
-   §15 剩余门槛是 LIFE-12（同进程新会话）、自动地图/VM 会话关闭与 BLP2 实机证据；这三项未满足前，
-   状态继续保持“SDK 开发中”，不对外宣称 D3D SDK 完成。
-5. 之后再评估 JASS wrapper 自动生成和 SaveFunc/func_bind。
+   1.27a 窗口模式下不可观测，记入已知缺口。
+4. 地图级 VM 重置（完成，2026-11-15）：换图时 `callback` 重入 `Initialize()` → 丢弃 Lua handler、清 message/D3D
+   分发状态 → `lua_close` 旧 VM → 新图首次 `ExecuteFunc` 重建 VM 并加载新 `war3map.lua`；session 随 VM 关闭自动
+   `end_session`，同进程换图回归 8/8；对应 LIFE-09/LIFE-12 的自动部分。
+5. P6（进行中，2026-11-15）：quickstart、API reference、迁移指南已落地在 `docs/guide/`（见 §6）；
+   §15 剩余门槛是 BLP2 实机证据与 D3D handler 覆盖（27/54），`device_lost` 在 1.27a 窗口模式下不可观测；
+   这些未满足前，状态继续保持“SDK 开发中”，不对外宣称 D3D SDK 完成。
+6. 之后再评估 JASS wrapper 自动生成和 SaveFunc/func_bind。
 
 ## 6. 文档职责
 

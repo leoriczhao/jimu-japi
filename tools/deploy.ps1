@@ -11,6 +11,7 @@
 #   .\tools\deploy.ps1 -InteractiveUi                   # verify hover target and ability button UI
 #   .\tools\deploy.ps1 -InteractiveD3D                  # deploy proxy + run visual D3D probe
 #   .\tools\deploy.ps1 -Demo                            # deploy proxy + run the playable vertical slice
+#   .\tools\deploy.ps1 -TestReboot                      # deploy proxy + verify the Lua VM resets on map boot
 param(
     [string]$DllPath = "",
     [string]$D3DProxyPath = "",
@@ -24,7 +25,8 @@ param(
     [switch]$InteractiveUi,
     [switch]$InteractiveD3D,
     [switch]$WithDebugger,
-    [switch]$Demo
+    [switch]$Demo,
+    [switch]$TestReboot
 )
 
 $Root     = Split-Path -Parent $PSScriptRoot
@@ -39,6 +41,9 @@ $D3DProbeTarget = "$War3Dir\japi_d3d_visual_probe.bmp"
 if (-not $LogFile) { $LogFile = "C:\ProgramData\japi_debug.txt" }
 if (($InteractivePoint -or $InteractiveUi -or $InteractiveD3D) -and -not $PSBoundParameters.ContainsKey("Timeout")) {
     $Timeout = 3660
+}
+if ($TestReboot -and -not $PSBoundParameters.ContainsKey("Timeout")) {
+    $Timeout = 180
 }
 
 # Resolve DllPath if provided
@@ -55,7 +60,7 @@ if (-not $D3DProxyPath) {
 
 # Validate
 if (-not (Test-Path $War3Exe)) { throw "War3 not found: $War3Exe" }
-if (($InteractiveD3D -or $Demo) -and -not (Test-Path $D3DProxyPath)) {
+if (($InteractiveD3D -or $Demo -or $TestReboot) -and -not (Test-Path $D3DProxyPath)) {
     throw "D3D proxy not found: $D3DProxyPath`n  Build first: src\build.bat"
 }
 
@@ -133,6 +138,7 @@ if ($InteractiveUi) { $packArgs["InteractiveUi"] = $true }
 if ($InteractiveD3D) { $packArgs["InteractiveD3D"] = $true }
 if ($WithDebugger) { $packArgs["WithDebugger"] = $true }
 if ($Demo) { $packArgs["Demo"] = $true }
+if ($TestReboot) { $packArgs["TestReboot"] = $true }
 $packResult = & $PackScript @packArgs 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host $packResult
@@ -148,7 +154,7 @@ if (-not (Test-Path $destDir)) { New-Item -ItemType Directory $destDir -Force | 
 Copy-Item $OutFile $destMap -Force -ErrorAction Stop
 Write-Host "  Deployed to $destMap"
 
-if ($InteractiveD3D -or $Demo) {
+if ($InteractiveD3D -or $Demo -or $TestReboot) {
     Assert-D3DProxyContract $D3DProxyPath
     Install-OwnedArtifact $D3DProxyPath $D3DTarget "$War3Dir\.japi_d3d_proxy.sha256" "D3D proxy"
     # The renderer loads d3dx9 by name, so the DLL may live next to war3.exe or
@@ -183,7 +189,7 @@ $altLogFile = "C:\ProgramData\japi_debug_$($war3.Id).txt"
 # launch — a stale log can contain an old Results line and must never match.
 $logCandidates = @($altLogFile, $LogFile)
 
-if ($InteractiveD3D) {
+if ($InteractiveD3D -or $TestReboot) {
     $proxyLoaded = $false
     for ($i = 0; $i -lt 40 -and -not $war3.HasExited; $i++) {
         try {

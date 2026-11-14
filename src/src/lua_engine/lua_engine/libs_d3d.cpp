@@ -2182,6 +2182,38 @@ bool has_active_subscriptions()
     return !g_subscriptions.empty();
 }
 
+// ── VM / map lifecycle (called by lua_loader around lua_close) ───────
+
+void prepare_vm_reset(bool jass_engine_alive)
+{
+    // The 0.02 s SDK tick timer holds a trampoline that re-enters the old
+    // lua_State, so it must not outlive the VM. The underlying JASS timer can
+    // only be destroyed while the JASS VM that owns the handle still exists.
+    if (jass_engine_alive && g_event_timer) {
+        jass::call("PauseTimer", g_event_timer);
+        jass::call("DestroyTimer", g_event_timer);
+        jass::handle_unref(g_event_timer);
+    }
+    g_event_timer = 0;
+    g_event_code = 0;
+    message::release_input_dispatch();
+}
+
+void reset_vm_state()
+{
+    // Runs after lua_close(): ContextUserdata's finalizer already cancelled
+    // every subscription and ended the native session, so only the bookkeeping
+    // that is read from outside Lua needs clearing here.
+    g_subscriptions.clear();
+    g_pending_input.clear();
+    g_hover_stack.clear();
+    g_pointer_capture.clear();
+    g_event_timer = 0;
+    g_event_code = 0;
+    g_event_dispatching = false;
+    DBG_LOG("[D3D SDK] VM reset: SDK state cleared");
+}
+
 int open(lua_State* L)
 {
     static const luaL_Reg font_meta[] = {

@@ -895,6 +895,21 @@ namespace warcraft3::lua_engine::message {
 		}
 	}
 
+	// The Lua VM is gone (map boot): forget the main thread and every registry
+	// reference. The message filter and WndProc hook stay installed — they pass
+	// everything through while ML == 0, and the next VM re-registers its hooks.
+	void reset_vm_state()
+	{
+		ML = 0;
+		g_lua_message_hook_registered = false;
+		g_textures.clear();
+		g_texture_events.clear();
+		g_d3d_texture_events.clear();
+		for (int i = 0; i < 5; ++i) g_mouse_button_down[i] = false;
+		for (int i = 0; i < 3; ++i) g_mouse_pressed[i] = false;
+		DBG_LOG("[japi-message] VM reset: message state cleared");
+	}
+
 	static int lget(lua_State* L)
 	{
 		const char* name = lua_tostring(L, 2);

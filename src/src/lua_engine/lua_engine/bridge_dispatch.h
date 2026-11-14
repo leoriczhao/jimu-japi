@@ -25,6 +25,11 @@ namespace warcraft3::lua_engine::bridge {
     // Called from lua_loader.cpp for built-in functions like EXExecuteScript.
     void register_cpp_handler(const char* name, const char* spec, cpp_handler_fn fn);
 
+    // Drop every handler that owns a Lua registry reference (the VM is
+    // being closed) and forget the shared hashtable handshake. C++ handlers
+    // survive: they are bound to the DLL, not to a Lua state.
+    void reset_lua_state(bool keep_handshake);
+
     // True when a handler (Lua or C++) already owns this name. jass.japi uses
     // this to avoid silently shadowing built-in EX*/message/D3D handlers.
     bool has_handler(const char* name);
