@@ -9,6 +9,7 @@
 #   .\tools\deploy.ps1 -InteractivePoint                # require a real Q key for LocalPointOrder
 #   .\tools\deploy.ps1 -InteractiveUi                   # verify hover target and ability button UI
 #   .\tools\deploy.ps1 -InteractiveD3D                  # deploy proxy + run visual D3D probe
+#   .\tools\deploy.ps1 -Demo                            # deploy proxy + run the playable vertical slice
 param(
     [string]$DllPath = "",
     [string]$D3DProxyPath = "",
@@ -20,7 +21,8 @@ param(
     [switch]$InteractivePoint,
     [switch]$InteractiveUi,
     [switch]$InteractiveD3D,
-    [switch]$WithDebugger
+    [switch]$WithDebugger,
+    [switch]$Demo
 )
 
 $Root     = Split-Path -Parent $PSScriptRoot
@@ -51,7 +53,7 @@ if (-not $D3DProxyPath) {
 
 # Validate
 if (-not (Test-Path $War3Exe)) { throw "War3 not found: $War3Exe" }
-if ($InteractiveD3D -and -not (Test-Path $D3DProxyPath)) {
+if (($InteractiveD3D -or $Demo) -and -not (Test-Path $D3DProxyPath)) {
     throw "D3D proxy not found: $D3DProxyPath`n  Build first: src\build.bat"
 }
 
@@ -128,6 +130,7 @@ if ($InteractivePoint) { $packArgs["InteractivePoint"] = $true }
 if ($InteractiveUi) { $packArgs["InteractiveUi"] = $true }
 if ($InteractiveD3D) { $packArgs["InteractiveD3D"] = $true }
 if ($WithDebugger) { $packArgs["WithDebugger"] = $true }
+if ($Demo) { $packArgs["Demo"] = $true }
 $packResult = & $PackScript @packArgs 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host $packResult
@@ -143,15 +146,25 @@ if (-not (Test-Path $destDir)) { New-Item -ItemType Directory $destDir -Force | 
 Copy-Item $OutFile $destMap -Force -ErrorAction Stop
 Write-Host "  Deployed to $destMap"
 
-if ($InteractiveD3D) {
+if ($InteractiveD3D -or $Demo) {
     Assert-D3DProxyContract $D3DProxyPath
+    Install-OwnedArtifact $D3DProxyPath $D3DTarget "$War3Dir\.japi_d3d_proxy.sha256" "D3D proxy"
+    # The renderer loads d3dx9 by name, so the DLL may live next to war3.exe or
+    # in the 32-bit system directory (the usual DX redist location).
+    $d3dxCandidates = @(
+        "$War3Dir\D3DX9_42.dll",
+        "$env:WINDIR\SysWOW64\D3DX9_42.dll",
+        "$env:WINDIR\System32\D3DX9_42.dll"
+    )
+    if (-not ($d3dxCandidates | Where-Object { Test-Path $_ })) {
+        throw "D3DX9_42.dll is required for D3D text; checked: $($d3dxCandidates -join ', ')"
+    }
+}
+
+if ($InteractiveD3D) {
     $probeSource = "$Root\build\d3d\japi_d3d_visual_probe.bmp"
     New-D3DProbeBmp $probeSource
-    Install-OwnedArtifact $D3DProxyPath $D3DTarget "$War3Dir\.japi_d3d_proxy.sha256" "D3D proxy"
     Install-OwnedArtifact $probeSource $D3DProbeTarget "$War3Dir\.japi_d3d_probe.sha256" "D3D visual probe"
-    if (-not (Test-Path "$War3Dir\D3DX9_42.dll")) {
-        throw "D3DX9_42.dll is required for the visual texture probe: $War3Dir\D3DX9_42.dll"
-    }
 }
 
 # ── Step 3: Launch War3 ────────────────────────────────────────

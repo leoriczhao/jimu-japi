@@ -6,6 +6,7 @@
 #   .\tools\pack.ps1 -DllPath "path\to\yd_japi.dll"    # custom DLL
 #   .\tools\pack.ps1 -BaseMap "other.w3m"               # custom map/archive/source dir
 #   .\tools\pack.ps1 -OutFile "out\test.w3x"            # custom output
+#   .\tools\pack.ps1 -Demo                             # playable vertical slice instead of the suite
 param(
     [string]$DllPath  = "",
     [string]$BaseMap  = "",
@@ -14,7 +15,8 @@ param(
     [switch]$InteractivePoint,
     [switch]$InteractiveUi,
     [switch]$InteractiveD3D,
-    [switch]$WithDebugger
+    [switch]$WithDebugger,
+    [switch]$Demo
 )
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -140,6 +142,9 @@ function Bundle-Lua {
     }
     if ($InteractiveD3D) {
         $bundled = "_G.__JAPI_TEST_INTERACTIVE_D3D = true`r`n" + $bundled
+    }
+    if ($Demo) {
+        $bundled = "_G.__JAPI_DEMO = true`r`n" + $bundled
     }
 
     # Write UTF-8 without BOM (luaL_loadbuffer cannot skip a BOM, and ASCII
