@@ -17,6 +17,8 @@
 #include "jassbind.h"
 #include "bridge_dispatch.h"
 #include "debug_log.h"
+#include "libs_d3d.h"
+#include "libs_message.h"
 #include <vector>
 #include <map>
 #include <cstring>
@@ -84,6 +86,18 @@ namespace warcraft3::lua_engine::message {
 	{
 		static HWND war3_window =  FindWar3Window();
 		return war3_window;
+	}
+
+	bool get_client_cursor(float* out_x, float* out_y)
+	{
+		if (!out_x || !out_y) return false;
+		HWND window = get_window();
+		if (!window) return false;
+		POINT point = { 0 };
+		if (!GetCursorPos(&point) || !ScreenToClient(window, &point)) return false;
+		*out_x = static_cast<float>(point.x);
+		*out_y = static_cast<float>(point.y);
+		return true;
 	}
 
 	struct AbilityData
@@ -659,7 +673,14 @@ namespace warcraft3::lua_engine::message {
 	// Pressed mouse buttons, tracked so texture release events can
 	// be fired on mouse_up (the mouse_up message carries no button code)
 	// ============================================================
-	static bool g_mouse_button_down[3] = { false, false, false };
+	static bool g_mouse_button_down[5] = { false, false, false, false, false };
+
+	static void queue_d3d_input(d3d::InputKind kind, int32_t code)
+	{
+		float x = 0.0f;
+		float y = 0.0f;
+		if (get_client_cursor(&x, &y)) d3d::queue_input_event(kind, code, x, y);
+	}
 
 	static bool __fastcall filter(uintptr_t /*cgameui*/, uintptr_t /*edx*/, message_t* msg)
 	{
@@ -674,9 +695,13 @@ namespace warcraft3::lua_engine::message {
 			return ability_mouse_event(ML, (ability_mouse_message_t*)msg);
 			break;
 		case 0x40060064:
+			queue_d3d_input(d3d::InputKind::KeyDown,
+				static_cast<int32_t>(((keyboard_message_t*)msg)->keycode));
 			dispatch_texture_events(ML, (int)((keyboard_message_t*)msg)->keycode, true);
 			return keyboard_event(ML, "key_down", (keyboard_message_t*)msg);
 		case 0x40060066:
+			queue_d3d_input(d3d::InputKind::KeyUp,
+				static_cast<int32_t>(((keyboard_message_t*)msg)->keycode));
 			dispatch_texture_events(ML, (int)((keyboard_message_t*)msg)->keycode, false);
 			return keyboard_event(ML, "key_up", (keyboard_message_t*)msg);
 			break;
@@ -685,19 +710,22 @@ namespace warcraft3::lua_engine::message {
 		case 0x1A0068:
 		{
 			mouse_message_t* m = (mouse_message_t*)msg;
-			if (m->code < 3)
+			if (m->code < 5)
 			{
 				g_mouse_button_down[m->code] = true;
 			}
+			queue_d3d_input(d3d::InputKind::MouseDown,
+				static_cast<int32_t>(m->code));
 			dispatch_texture_events(ML, (int)m->code, true);
 			return mouse_event(ML, "mouse_down", m);
 		}
 		case 0x400500C9:
-			for (int i = 0; i < 3; ++i)
+			for (int i = 0; i < 5; ++i)
 			{
 				if (g_mouse_button_down[i])
 				{
 					g_mouse_button_down[i] = false;
+					queue_d3d_input(d3d::InputKind::MouseUp, i);
 					dispatch_texture_events(ML, i, false);
 				}
 			}
@@ -729,6 +757,20 @@ namespace warcraft3::lua_engine::message {
 		g_filter_installed = false;
 	}
 
+	void ensure_input_dispatch(lua_State* L)
+	{
+		ML = get_mainthread(L);
+		install();
+	}
+
+	void release_input_dispatch()
+	{
+		if (!g_lua_message_hook_registered && g_texture_events.empty()
+			&& g_d3d_texture_events.empty() && !d3d::has_active_subscriptions()) {
+			uninstall();
+		}
+	}
+
 	static int lget(lua_State* L)
 	{
 		const char* name = lua_tostring(L, 2);
@@ -758,7 +800,8 @@ namespace warcraft3::lua_engine::message {
 				lua_pushnil(L);
 				lua_setfield(L, LUA_REGISTRYINDEX, "_JASS_MESSAGE_HANDLE");
 				g_lua_message_hook_registered = false;
-				if (g_texture_events.empty() && g_d3d_texture_events.empty()) {
+				if (g_texture_events.empty() && g_d3d_texture_events.empty()
+					&& !d3d::has_active_subscriptions()) {
 					uninstall();
 				}
 			}
@@ -1276,7 +1319,7 @@ namespace warcraft3::lua_engine::message {
 		jass::handle_unref(press_timer);
 		jass::handle_unref(release_timer);
 		if (!g_lua_message_hook_registered && g_texture_events.empty() &&
-			g_d3d_texture_events.empty()) {
+			g_d3d_texture_events.empty() && !d3d::has_active_subscriptions()) {
 			uninstall();
 		}
 		return 0;

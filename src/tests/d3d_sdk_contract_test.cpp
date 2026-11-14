@@ -49,11 +49,13 @@ int main()
         | D3D_SDK_CAP_CORE_PROPERTIES
         | D3D_SDK_CAP_TEXT_ALPHA
         | D3D_SDK_CAP_UNIFIED_RENDER_QUEUE
-        | D3D_SDK_CAP_ASSET_MEMORY;
+        | D3D_SDK_CAP_ASSET_MEMORY
+        | D3D_SDK_CAP_INPUT_HIT_STACK;
     CHECK((api.capabilities & required_caps) == required_caps,
         "required P3 rendering capabilities are missing");
     CHECK(api.create_texture_from_memory && api.set_texture_source_memory,
         "asset-memory ABI functions are missing");
+    CHECK(api.get_texture_hit_stack, "input hit-stack ABI function is missing");
 
     uint32_t session1 = 0;
     CHECK(api.begin_session(&session1) == D3D_SDK_OK && session1 != 0,
@@ -213,6 +215,31 @@ int main()
         == D3D_SDK_OK && uint_value == 1, "texture geometric contains failed");
     CHECK(api.texture_contains(session1, texture1, 90.0f, 10.0f, &uint_value)
         == D3D_SDK_OK && uint_value == 0, "rotated texture used its unrotated AABB");
+    uint32_t texture2 = 0;
+    CHECK(api.create_texture(session1, "", 25.0f, 0.0f, 50.0f, 20.0f,
+        0xFFFFFFFFu, 45, &texture2) == D3D_SDK_OK && texture2 != 0,
+        "overlapping texture creation failed");
+    uint32_t hit_required = 0;
+    CHECK(api.get_texture_hit_stack(session1, 50.0f, 10.0f,
+        nullptr, 0, &hit_required) == D3D_SDK_OK && hit_required == 2,
+        "hit-stack size query failed");
+    uint32_t short_hits[1] = {};
+    CHECK(api.get_texture_hit_stack(session1, 50.0f, 10.0f,
+        short_hits, 1, &hit_required) == D3D_SDK_BUFFER_TOO_SMALL && hit_required == 2,
+        "undersized hit-stack buffer was not rejected");
+    uint32_t hits[2] = {};
+    CHECK(api.get_texture_hit_stack(session1, 50.0f, 10.0f,
+        hits, 2, &hit_required) == D3D_SDK_OK && hit_required == 2
+        && hits[0] == texture2 && hits[1] == texture1,
+        "hit stack did not follow top-most-first render order");
+    CHECK(api.set_texture_visible(session1, texture2, 0) == D3D_SDK_OK,
+        "overlapping texture visibility update failed");
+    CHECK(api.get_texture_hit_stack(session1, 50.0f, 10.0f,
+        hits, 2, &hit_required) == D3D_SDK_OK && hit_required == 1
+        && hits[0] == texture1,
+        "hidden texture remained in the hit stack");
+    CHECK(api.destroy_texture(session1, texture2) == D3D_SDK_OK,
+        "overlapping texture destruction failed");
     CHECK(api.set_texture_rect(session1, texture1, 0.0f, 0.0f, -1.0f, 20.0f)
         == D3D_SDK_INVALID_ARGUMENT, "negative texture dimensions were accepted");
     CHECK(api.set_texture_rotation(session1, texture1,
@@ -288,6 +315,6 @@ int main()
         "repeat session close did not return a stable result");
 
     FreeLibrary(proxy);
-    std::puts("D3D SDK contract PASS: ABI v1, sessions, generation handles, dependencies, alpha/z/assets capabilities, failure counters, stress=1000");
+    std::puts("D3D SDK contract PASS: ABI v1, sessions, generation handles, dependencies, alpha/z/assets/input capabilities, failure counters, stress=1000");
     return 0;
 }

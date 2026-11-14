@@ -1,15 +1,25 @@
 #include "../../d3d9/sdk_api.h"
+#include "callback.h"
+#include "common.h"
+#include "debug_log.h"
+#include "libs_d3d.h"
+#include "libs_message.h"
 #include "storm.h"
 
 #include <lua.hpp>
+#include <warcraft3/keyboard_code.h>
 #include <windows.h>
 
-#include <cstdint>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <limits>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -20,8 +30,9 @@ namespace {
 constexpr const char* kFontMeta = "jass.d3d.Font";
 constexpr const char* kTextMeta = "jass.d3d.Text";
 constexpr const char* kTextureMeta = "jass.d3d.Texture";
+constexpr const char* kSubscriptionMeta = "jass.d3d.Subscription";
 constexpr const char* kContextMeta = "jass.d3d.Context";
-constexpr const char* kVersion = "0.2.0-dev";
+constexpr const char* kVersion = "0.3.0-dev";
 constexpr int32_t kMinInt32 = (-2147483647 - 1);
 constexpr int32_t kMaxInt32 = 2147483647;
 
@@ -36,6 +47,47 @@ struct ContextUserdata {
     bool owner = false;
 };
 
+enum class SubscriptionEvent : uint32_t {
+    Enter,
+    Leave,
+    MouseDown,
+    MouseUp,
+    Click,
+    KeyDown,
+    KeyUp,
+};
+
+struct SubscriptionUserdata {
+    uint32_t session = 0;
+    uint32_t id = 0;
+    bool active = false;
+};
+
+struct SubscriptionEntry {
+    uint32_t id = 0;
+    uint32_t session = 0;
+    uint32_t texture = 0;
+    SubscriptionEvent event = SubscriptionEvent::Enter;
+    int32_t filter_code = -1;
+    bool propagate = false;
+    bool hover_only = true;
+    bool keep_on_error = false;
+};
+
+struct PendingInputEvent {
+    InputKind kind = InputKind::KeyDown;
+    int32_t code = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+    double timestamp = 0.0;
+};
+
+struct PointerCapture {
+    uint32_t texture = 0;
+    float down_x = 0.0f;
+    float down_y = 0.0f;
+};
+
 D3DSdkApiV1 g_api{};
 bool g_api_checked = false;
 bool g_api_ready = false;
@@ -43,6 +95,23 @@ bool g_shutdown = false;
 uint32_t g_session = 0;
 std::string g_init_error;
 char g_context_registry_key = 0;
+char g_subscription_registry_key = 0;
+std::map<uint32_t, SubscriptionEntry> g_subscriptions;
+std::deque<PendingInputEvent> g_pending_input;
+std::vector<uint32_t> g_hover_stack;
+std::map<int32_t, PointerCapture> g_pointer_capture;
+uint32_t g_next_subscription_id = 1;
+uint32_t g_event_timer = 0;
+uint32_t g_event_code = 0;
+bool g_event_dispatching = false;
+constexpr size_t kMaxPendingInput = 256;
+constexpr float kClickMoveThreshold = 6.0f;
+
+void cancel_texture_subscriptions(lua_State* L, uint32_t session, uint32_t texture);
+void cancel_all_subscriptions(lua_State* L);
+void dispatch_leave_before_disable(lua_State* L, uint32_t texture);
+void texture_local_coordinates(
+    uint32_t texture, float x, float y, float* out_x, float* out_y);
 
 std::string native_error(const char* fallback = "D3D SDK operation failed")
 {
@@ -82,7 +151,8 @@ bool initialize_api()
         | D3D_SDK_CAP_RESOURCE_COUNTS
         | D3D_SDK_CAP_SHARED_LEGACY_REGISTRY
         | D3D_SDK_CAP_CORE_PROPERTIES
-        | D3D_SDK_CAP_ASSET_MEMORY;
+        | D3D_SDK_CAP_ASSET_MEMORY
+        | D3D_SDK_CAP_INPUT_HIT_STACK;
     if ((g_api.capabilities & required) != required) {
         g_init_error = "D3D proxy is missing required core SDK capabilities";
         return false;
@@ -108,7 +178,8 @@ bool initialize_api()
         || !g_api.get_texture_visible || !g_api.set_texture_visible
         || !g_api.get_texture_hit_test || !g_api.set_texture_hit_test
         || !g_api.get_texture_pixel_size || !g_api.texture_contains
-        || !g_api.create_texture_from_memory || !g_api.set_texture_source_memory) {
+        || !g_api.create_texture_from_memory || !g_api.set_texture_source_memory
+        || !g_api.get_texture_hit_stack) {
         g_init_error = "D3D proxy core SDK function table is incomplete";
         return false;
     }
@@ -507,9 +578,35 @@ int text_gc(lua_State* L)
 int text_is_destroyed(lua_State* L) { return resource_is_destroyed(L, D3D_SDK_RESOURCE_TEXT); }
 int text_tostring(lua_State* L) { return resource_tostring(L, D3D_SDK_RESOURCE_TEXT); }
 
-int texture_destroy(lua_State* L) { return resource_destroy(L, D3D_SDK_RESOURCE_TEXTURE); }
-int texture_gc(lua_State* L) { return resource_gc(L, D3D_SDK_RESOURCE_TEXTURE); }
-int texture_is_destroyed(lua_State* L) { return resource_is_destroyed(L, D3D_SDK_RESOURCE_TEXTURE); }
+int texture_destroy(lua_State* L)
+{
+    auto* self = check_resource(L, 1, D3D_SDK_RESOURCE_TEXTURE, false);
+    if (resource_alive(self)) dispatch_leave_before_disable(L, self->handle);
+    cancel_texture_subscriptions(L, self->session, self->handle);
+    const uint32_t result = destroy_native(self);
+    if (result != D3D_SDK_OK) return push_result_error(L, "resource destruction failed");
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int texture_gc(lua_State* L)
+{
+    auto* self = static_cast<ResourceUserdata*>(luaL_testudata(L, 1, kTextureMeta));
+    if (self) {
+        cancel_texture_subscriptions(L, self->session, self->handle);
+        destroy_native(self);
+    }
+    return 0;
+}
+
+int texture_is_destroyed(lua_State* L)
+{
+    auto* self = check_resource(L, 1, D3D_SDK_RESOURCE_TEXTURE, false);
+    const bool destroyed = !resource_alive(self);
+    if (destroyed) cancel_texture_subscriptions(L, self->session, self->handle);
+    lua_pushboolean(L, destroyed);
+    return 1;
+}
 int texture_tostring(lua_State* L) { return resource_tostring(L, D3D_SDK_RESOURCE_TEXTURE); }
 
 int font_new(lua_State* L)
@@ -942,10 +1039,48 @@ LUA_UINT_METHODS(texture_color, get_texture_color, set_texture_color,
     D3D_SDK_RESOURCE_TEXTURE, lua_pushinteger(L, static_cast<lua_Integer>(value)), check_color(L, 2))
 LUA_INT_METHODS(texture_level, get_texture_level, set_texture_level,
     D3D_SDK_RESOURCE_TEXTURE, kMinInt32, kMaxInt32)
-LUA_UINT_METHODS(texture_visible, get_texture_visible, set_texture_visible,
-    D3D_SDK_RESOURCE_TEXTURE, lua_pushboolean(L, value != 0), lua_toboolean(L, 2) ? 1u : 0u)
-LUA_UINT_METHODS(texture_hit_test, get_texture_hit_test, set_texture_hit_test,
-    D3D_SDK_RESOURCE_TEXTURE, lua_pushboolean(L, value != 0), lua_toboolean(L, 2) ? 1u : 0u)
+
+int texture_visible_get(lua_State* L)
+{
+    auto* self = check_resource(L, 1, D3D_SDK_RESOURCE_TEXTURE);
+    uint32_t value = 0;
+    if (g_api.get_texture_visible(self->session, self->handle, &value) != D3D_SDK_OK)
+        return raise_result_error(L);
+    lua_pushboolean(L, value != 0);
+    return 1;
+}
+
+int texture_visible_set(lua_State* L)
+{
+    auto* self = check_resource(L, 1, D3D_SDK_RESOURCE_TEXTURE);
+    const bool value = lua_toboolean(L, 2) != 0;
+    if (g_api.set_texture_visible(self->session, self->handle, value ? 1u : 0u)
+        != D3D_SDK_OK) return raise_result_error(L);
+    if (!value) dispatch_leave_before_disable(L, self->handle);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int texture_hit_test_get(lua_State* L)
+{
+    auto* self = check_resource(L, 1, D3D_SDK_RESOURCE_TEXTURE);
+    uint32_t value = 0;
+    if (g_api.get_texture_hit_test(self->session, self->handle, &value) != D3D_SDK_OK)
+        return raise_result_error(L);
+    lua_pushboolean(L, value != 0);
+    return 1;
+}
+
+int texture_hit_test_set(lua_State* L)
+{
+    auto* self = check_resource(L, 1, D3D_SDK_RESOURCE_TEXTURE);
+    const bool value = lua_toboolean(L, 2) != 0;
+    if (g_api.set_texture_hit_test(self->session, self->handle, value ? 1u : 0u)
+        != D3D_SDK_OK) return raise_result_error(L);
+    if (!value) dispatch_leave_before_disable(L, self->handle);
+    lua_pushboolean(L, 1);
+    return 1;
+}
 
 int texture_get_rotation(lua_State* L)
 {
@@ -990,6 +1125,655 @@ int texture_contains(lua_State* L)
     return 1;
 }
 
+const char* subscription_event_name(SubscriptionEvent event)
+{
+    switch (event) {
+    case SubscriptionEvent::Enter: return "enter";
+    case SubscriptionEvent::Leave: return "leave";
+    case SubscriptionEvent::MouseDown: return "mouse_down";
+    case SubscriptionEvent::MouseUp: return "mouse_up";
+    case SubscriptionEvent::Click: return "click";
+    case SubscriptionEvent::KeyDown: return "key_down";
+    case SubscriptionEvent::KeyUp: return "key_up";
+    }
+    return "unknown";
+}
+
+bool parse_subscription_event(const char* name, SubscriptionEvent* event)
+{
+    if (!name || !event) return false;
+    if (std::strcmp(name, "enter") == 0) *event = SubscriptionEvent::Enter;
+    else if (std::strcmp(name, "leave") == 0) *event = SubscriptionEvent::Leave;
+    else if (std::strcmp(name, "mouse_down") == 0) *event = SubscriptionEvent::MouseDown;
+    else if (std::strcmp(name, "mouse_up") == 0) *event = SubscriptionEvent::MouseUp;
+    else if (std::strcmp(name, "click") == 0) *event = SubscriptionEvent::Click;
+    else if (std::strcmp(name, "key_down") == 0) *event = SubscriptionEvent::KeyDown;
+    else if (std::strcmp(name, "key_up") == 0) *event = SubscriptionEvent::KeyUp;
+    else return false;
+    return true;
+}
+
+bool is_mouse_event(SubscriptionEvent event)
+{
+    return event == SubscriptionEvent::MouseDown
+        || event == SubscriptionEvent::MouseUp
+        || event == SubscriptionEvent::Click;
+}
+
+bool is_key_event(SubscriptionEvent event)
+{
+    return event == SubscriptionEvent::KeyDown || event == SubscriptionEvent::KeyUp;
+}
+
+double event_timestamp()
+{
+    return static_cast<double>(GetTickCount64()) / 1000.0;
+}
+
+int readonly_event_newindex(lua_State* L)
+{
+    return luaL_error(L, "D3D event tables are read-only");
+}
+
+int readonly_event_next(lua_State* L)
+{
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_settop(L, 2);
+    lua_pushvalue(L, 2);
+    return lua_next(L, 1) ? 2 : 0;
+}
+
+int readonly_event_pairs(lua_State* L)
+{
+    lua_pushcfunction(L, readonly_event_next);
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_pushnil(L);
+    return 3;
+}
+
+void push_readonly_event(lua_State* L, const SubscriptionEntry& entry,
+    SubscriptionEvent event, int32_t code, float x, float y, double timestamp,
+    int target_index)
+{
+    target_index = lua_absindex(L, target_index);
+    float local_x = x;
+    float local_y = y;
+    texture_local_coordinates(entry.texture, x, y, &local_x, &local_y);
+
+    lua_newtable(L);
+    const int values_index = lua_gettop(L);
+    lua_pushstring(L, subscription_event_name(event)); lua_setfield(L, values_index, "type");
+    lua_pushvalue(L, target_index); lua_setfield(L, values_index, "target");
+    lua_pushnumber(L, x); lua_setfield(L, values_index, "x");
+    lua_pushnumber(L, y); lua_setfield(L, values_index, "y");
+    lua_pushnumber(L, local_x); lua_setfield(L, values_index, "local_x");
+    lua_pushnumber(L, local_y); lua_setfield(L, values_index, "local_y");
+    lua_pushnumber(L, timestamp); lua_setfield(L, values_index, "timestamp");
+    if (is_mouse_event(event)) {
+        lua_pushinteger(L, code); lua_setfield(L, values_index, "button");
+    } else if (is_key_event(event)) {
+        lua_pushinteger(L, code); lua_setfield(L, values_index, "key");
+    }
+
+    lua_newtable(L);
+    const int event_index = lua_gettop(L);
+    lua_newtable(L);
+    lua_pushvalue(L, values_index); lua_setfield(L, -2, "__index");
+    lua_pushcfunction(L, readonly_event_newindex); lua_setfield(L, -2, "__newindex");
+    lua_pushvalue(L, values_index);
+    lua_pushcclosure(L, readonly_event_pairs, 1); lua_setfield(L, -2, "__pairs");
+    lua_pushliteral(L, "read-only D3D event"); lua_setfield(L, -2, "__metatable");
+    lua_setmetatable(L, event_index);
+    lua_remove(L, values_index);
+}
+
+void push_subscription_registry(lua_State* L)
+{
+    lua_pushlightuserdata(L, &g_subscription_registry_key);
+    lua_rawget(L, LUA_REGISTRYINDEX);
+    if (lua_istable(L, -1)) return;
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_newtable(L);
+    lua_pushliteral(L, "v");
+    lua_setfield(L, -2, "__mode");
+    lua_setmetatable(L, -2);
+    lua_pushlightuserdata(L, &g_subscription_registry_key);
+    lua_pushvalue(L, -2);
+    lua_rawset(L, LUA_REGISTRYINDEX);
+}
+
+bool push_subscription_userdata(lua_State* L, uint32_t id)
+{
+    push_subscription_registry(L);
+    lua_rawgeti(L, -1, static_cast<lua_Integer>(id));
+    lua_remove(L, -2);
+    if (!luaL_testudata(L, -1, kSubscriptionMeta)) {
+        lua_pop(L, 1);
+        return false;
+    }
+    return true;
+}
+
+void register_subscription_userdata(lua_State* L, uint32_t id, int index)
+{
+    index = lua_absindex(L, index);
+    push_subscription_registry(L);
+    lua_pushvalue(L, index);
+    lua_rawseti(L, -2, static_cast<lua_Integer>(id));
+    lua_pop(L, 1);
+}
+
+void clear_subscription_userdata(lua_State* L, int index)
+{
+    index = lua_absindex(L, index);
+    auto* self = static_cast<SubscriptionUserdata*>(
+        luaL_testudata(L, index, kSubscriptionMeta));
+    if (self) self->active = false;
+    lua_pushnil(L);
+    lua_setiuservalue(L, index, 1);
+    lua_pushnil(L);
+    lua_setiuservalue(L, index, 2);
+}
+
+void stop_event_timer()
+{
+    if (g_event_timer) {
+        jass::call("PauseTimer", g_event_timer);
+        jass::call("DestroyTimer", g_event_timer);
+        jass::handle_unref(g_event_timer);
+        g_event_timer = 0;
+    }
+    message::release_input_dispatch();
+}
+
+void cancel_subscription_by_id(lua_State* L, uint32_t id, int known_userdata = 0)
+{
+    g_subscriptions.erase(id);
+    if (known_userdata != 0) clear_subscription_userdata(L, known_userdata);
+    if (push_subscription_userdata(L, id)) {
+        clear_subscription_userdata(L, -1);
+        lua_pop(L, 1);
+    }
+    push_subscription_registry(L);
+    lua_pushnil(L);
+    lua_rawseti(L, -2, static_cast<lua_Integer>(id));
+    lua_pop(L, 1);
+    if (g_subscriptions.empty()) {
+        g_pending_input.clear();
+        g_hover_stack.clear();
+        g_pointer_capture.clear();
+        stop_event_timer();
+    }
+}
+
+void cancel_texture_subscriptions(lua_State* L, uint32_t session, uint32_t texture)
+{
+    std::vector<uint32_t> ids;
+    for (const auto& [id, entry] : g_subscriptions) {
+        if (entry.session == session && entry.texture == texture) ids.push_back(id);
+    }
+    for (uint32_t id : ids) cancel_subscription_by_id(L, id);
+    g_hover_stack.erase(std::remove(g_hover_stack.begin(), g_hover_stack.end(), texture),
+        g_hover_stack.end());
+    for (auto it = g_pointer_capture.begin(); it != g_pointer_capture.end();) {
+        if (it->second.texture == texture) it = g_pointer_capture.erase(it);
+        else ++it;
+    }
+}
+
+void cancel_all_subscriptions(lua_State* L)
+{
+    std::vector<uint32_t> ids;
+    ids.reserve(g_subscriptions.size());
+    for (const auto& [id, entry] : g_subscriptions) ids.push_back(id);
+    for (uint32_t id : ids) cancel_subscription_by_id(L, id);
+    g_subscriptions.clear();
+    g_pending_input.clear();
+    g_hover_stack.clear();
+    g_pointer_capture.clear();
+    stop_event_timer();
+}
+
+bool get_texture_hit_stack(float x, float y, std::vector<uint32_t>* out)
+{
+    if (!out || !g_api_ready || !g_api.get_texture_hit_stack || g_session == 0) return false;
+    uint32_t required = 0;
+    uint32_t result = g_api.get_texture_hit_stack(
+        g_session, x, y, nullptr, 0, &required);
+    if (result != D3D_SDK_OK) return false;
+    out->assign(required, 0);
+    if (required == 0) return true;
+    result = g_api.get_texture_hit_stack(
+        g_session, x, y, out->data(), required, &required);
+    if (result != D3D_SDK_OK) {
+        out->clear();
+        return false;
+    }
+    out->resize(required);
+    return true;
+}
+
+void texture_local_coordinates(
+    uint32_t texture, float x, float y, float* out_x, float* out_y)
+{
+    float tx = 0.0f, ty = 0.0f, width = 0.0f, height = 0.0f;
+    float rotation = 0.0f;
+    if (g_api.get_texture_rect(g_session, texture, &tx, &ty, &width, &height)
+            != D3D_SDK_OK
+        || g_api.get_texture_rotation(g_session, texture, &rotation) != D3D_SDK_OK) {
+        *out_x = x;
+        *out_y = y;
+        return;
+    }
+    const float center_x = tx + width * 0.5f;
+    const float center_y = ty + height * 0.5f;
+    const float radians = -rotation * 3.14159265358979323846f / 180.0f;
+    const float dx = x - center_x;
+    const float dy = y - center_y;
+    *out_x = dx * std::cos(radians) - dy * std::sin(radians) + width * 0.5f;
+    *out_y = dx * std::sin(radians) + dy * std::cos(radians) + height * 0.5f;
+}
+
+bool subscription_matches(
+    const SubscriptionEntry& entry, SubscriptionEvent event,
+    int32_t code, int hover_filter)
+{
+    if (entry.session != g_session || entry.event != event) return false;
+    if ((is_mouse_event(event) || is_key_event(event))
+        && entry.filter_code >= 0 && entry.filter_code != code) return false;
+    if (is_key_event(event) && hover_filter >= 0
+        && entry.hover_only != (hover_filter != 0)) return false;
+    return true;
+}
+
+bool fire_subscription(
+    lua_State* L, uint32_t id, SubscriptionEvent event,
+    int32_t code, float x, float y, double timestamp)
+{
+    const auto found = g_subscriptions.find(id);
+    if (found == g_subscriptions.end()) return false;
+    const SubscriptionEntry entry = found->second;
+    const int base = lua_gettop(L);
+    if (!push_subscription_userdata(L, id)) {
+        cancel_subscription_by_id(L, id);
+        return false;
+    }
+    const int subscription_index = lua_gettop(L);
+    if (lua_getiuservalue(L, subscription_index, 1) != LUA_TFUNCTION) {
+        lua_settop(L, base);
+        cancel_subscription_by_id(L, id);
+        return false;
+    }
+    if (lua_getiuservalue(L, subscription_index, 2) != LUA_TUSERDATA) {
+        lua_settop(L, base);
+        cancel_subscription_by_id(L, id);
+        return false;
+    }
+    const int target_index = lua_gettop(L);
+    push_readonly_event(L, entry, event, code, x, y, timestamp, target_index);
+    lua_remove(L, target_index);
+    lua_remove(L, subscription_index);
+    const int call_result = safe_call_not_sleep(L, 1, 0, true);
+    lua_settop(L, base);
+    if (call_result != LUA_OK && !entry.keep_on_error) {
+        DBG_LOG("[D3D SDK] subscription %u cancelled after callback error", id);
+        cancel_subscription_by_id(L, id);
+    }
+    return call_result == LUA_OK;
+}
+
+struct DispatchResult {
+    bool matched = false;
+    bool propagate = false;
+};
+
+DispatchResult dispatch_to_texture(
+    lua_State* L, uint32_t texture, SubscriptionEvent event,
+    int32_t code, float x, float y, double timestamp, int hover_filter = -1)
+{
+    std::vector<uint32_t> ids;
+    for (const auto& [id, entry] : g_subscriptions) {
+        if (entry.texture == texture
+            && subscription_matches(entry, event, code, hover_filter)) ids.push_back(id);
+    }
+    DispatchResult result;
+    for (uint32_t id : ids) {
+        const auto found = g_subscriptions.find(id);
+        if (found == g_subscriptions.end()) continue;
+        result.matched = true;
+        result.propagate = result.propagate || found->second.propagate;
+        fire_subscription(L, id, event, code, x, y, timestamp);
+        if (g_shutdown) break;
+    }
+    return result;
+}
+
+void dispatch_hit_stack(
+    lua_State* L, const std::vector<uint32_t>& hits, SubscriptionEvent event,
+    int32_t code, float x, float y, double timestamp, int hover_filter = -1)
+{
+    for (uint32_t texture : hits) {
+        const DispatchResult result = dispatch_to_texture(
+            L, texture, event, code, x, y, timestamp, hover_filter);
+        if (!result.matched || !result.propagate || g_shutdown) break;
+    }
+}
+
+bool has_texture_subscription(uint32_t texture)
+{
+    for (const auto& [id, entry] : g_subscriptions) {
+        if (entry.session == g_session && entry.texture == texture) return true;
+    }
+    return false;
+}
+
+bool texture_propagates_hover(uint32_t texture)
+{
+    for (const auto& [id, entry] : g_subscriptions) {
+        if (entry.session == g_session && entry.texture == texture && entry.propagate)
+            return true;
+    }
+    return false;
+}
+
+std::vector<uint32_t> make_hover_stack(const std::vector<uint32_t>& hits)
+{
+    std::vector<uint32_t> hovered;
+    for (uint32_t texture : hits) {
+        if (has_texture_subscription(texture)) hovered.push_back(texture);
+        if (!texture_propagates_hover(texture)) break;
+    }
+    return hovered;
+}
+
+bool vector_contains(const std::vector<uint32_t>& values, uint32_t value)
+{
+    return std::find(values.begin(), values.end(), value) != values.end();
+}
+
+void poll_hover(lua_State* L)
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    if (!message::get_client_cursor(&x, &y)) return;
+    std::vector<uint32_t> hits;
+    if (!get_texture_hit_stack(x, y, &hits)) return;
+    const std::vector<uint32_t> hovered = make_hover_stack(hits);
+    const double timestamp = event_timestamp();
+    const std::vector<uint32_t> previous = g_hover_stack;
+    g_hover_stack = hovered;
+    for (uint32_t texture : previous) {
+        if (!vector_contains(hovered, texture)) {
+            dispatch_to_texture(L, texture, SubscriptionEvent::Leave,
+                -1, x, y, timestamp);
+        }
+    }
+    for (uint32_t texture : hovered) {
+        if (!vector_contains(previous, texture)) {
+            dispatch_to_texture(L, texture, SubscriptionEvent::Enter,
+                -1, x, y, timestamp);
+        }
+    }
+}
+
+void dispatch_leave_before_disable(lua_State* L, uint32_t texture)
+{
+    if (!vector_contains(g_hover_stack, texture)) return;
+    g_hover_stack.erase(std::remove(g_hover_stack.begin(), g_hover_stack.end(), texture),
+        g_hover_stack.end());
+    float x = 0.0f;
+    float y = 0.0f;
+    message::get_client_cursor(&x, &y);
+    dispatch_to_texture(L, texture, SubscriptionEvent::Leave,
+        -1, x, y, event_timestamp());
+}
+
+void dispatch_key_event(lua_State* L, const PendingInputEvent& input)
+{
+    const SubscriptionEvent event = input.kind == InputKind::KeyDown
+        ? SubscriptionEvent::KeyDown : SubscriptionEvent::KeyUp;
+    std::vector<uint32_t> global_ids;
+    for (const auto& [id, entry] : g_subscriptions) {
+        if (!entry.hover_only && subscription_matches(entry, event, input.code, 0))
+            global_ids.push_back(id);
+    }
+    for (uint32_t id : global_ids) {
+        fire_subscription(L, id, event, input.code,
+            input.x, input.y, input.timestamp);
+        if (g_shutdown) return;
+    }
+    std::vector<uint32_t> hits;
+    if (get_texture_hit_stack(input.x, input.y, &hits)) {
+        dispatch_hit_stack(L, hits, event, input.code,
+            input.x, input.y, input.timestamp, 1);
+    }
+}
+
+void dispatch_mouse_event(lua_State* L, const PendingInputEvent& input)
+{
+    std::vector<uint32_t> hits;
+    get_texture_hit_stack(input.x, input.y, &hits);
+    if (input.kind == InputKind::MouseDown) {
+        if (!hits.empty()) {
+            g_pointer_capture[input.code] = {hits.front(), input.x, input.y};
+        }
+        dispatch_hit_stack(L, hits, SubscriptionEvent::MouseDown,
+            input.code, input.x, input.y, input.timestamp);
+        return;
+    }
+
+    const auto captured = g_pointer_capture.find(input.code);
+    if (captured == g_pointer_capture.end()) {
+        dispatch_hit_stack(L, hits, SubscriptionEvent::MouseUp,
+            input.code, input.x, input.y, input.timestamp);
+        return;
+    }
+    const PointerCapture capture = captured->second;
+    g_pointer_capture.erase(captured);
+    dispatch_to_texture(L, capture.texture, SubscriptionEvent::MouseUp,
+        input.code, input.x, input.y, input.timestamp);
+    const float dx = input.x - capture.down_x;
+    const float dy = input.y - capture.down_y;
+    if ((dx * dx + dy * dy) <= kClickMoveThreshold * kClickMoveThreshold
+        && vector_contains(hits, capture.texture)) {
+        dispatch_to_texture(L, capture.texture, SubscriptionEvent::Click,
+            input.code, input.x, input.y, input.timestamp);
+    }
+}
+
+void dispatch_pending_input(lua_State* L)
+{
+    std::deque<PendingInputEvent> pending;
+    pending.swap(g_pending_input);
+    for (const auto& input : pending) {
+        if (g_shutdown || g_subscriptions.empty()) break;
+        if (input.kind == InputKind::KeyDown || input.kind == InputKind::KeyUp)
+            dispatch_key_event(L, input);
+        else
+            dispatch_mouse_event(L, input);
+    }
+}
+
+bool device_is_ready()
+{
+    if (!g_api_ready || !g_api.get_resource_counts || g_session == 0) return false;
+    D3DSdkResourceCountsV1 counts{};
+    counts.struct_size = sizeof(counts);
+    return g_api.get_resource_counts(g_session, &counts) == D3D_SDK_OK
+        && counts.device_ready != 0;
+}
+
+int event_timer_tick(lua_State* L)
+{
+    if (g_event_dispatching || g_shutdown || g_subscriptions.empty()) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    g_event_dispatching = true;
+    try {
+        if (device_is_ready()) {
+            poll_hover(L);
+            dispatch_pending_input(L);
+        } else {
+            // Raw input captured while the D3D device is lost must not be
+            // replayed against a later reset generation.
+            g_pending_input.clear();
+            g_pointer_capture.clear();
+        }
+    } catch (...) {
+        DBG_LOG("[D3D SDK] input dispatch dropped an internal exception");
+    }
+    g_event_dispatching = false;
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+bool start_event_timer(lua_State* L)
+{
+    message::ensure_input_dispatch(L);
+    if (g_event_timer) return true;
+    if (!g_event_code) {
+        lua_pushcfunction(L, event_timer_tick);
+        g_event_code = cfunction_to_code(L, static_cast<uint32_t>(lua_gettop(L)));
+        lua_pop(L, 1);
+        if (!g_event_code) return false;
+    }
+    const uint32_t timer = static_cast<uint32_t>(jass::call("CreateTimer"));
+    const jass::func_value* timer_start = jass::jass_func("TimerStart");
+    if (!timer || !timer_start) {
+        if (timer) jass::call("DestroyTimer", timer);
+        return false;
+    }
+    jass::handle_ref(timer);
+    jass::call_param params(4);
+    params.push<uintptr_t>(0, timer);
+    params.push_real(1, jass::to_real(0.02f));
+    params.push<bool>(2, true);
+    params.push<uintptr_t>(3, g_event_code);
+    timer_start->call(params);
+    g_event_timer = timer;
+    return true;
+}
+
+uint32_t allocate_subscription_id()
+{
+    for (uint64_t attempt = 0;
+         attempt < (std::numeric_limits<uint32_t>::max)(); ++attempt) {
+        uint32_t id = g_next_subscription_id++;
+        if (g_next_subscription_id == 0) g_next_subscription_id = 1;
+        if (id != 0 && g_subscriptions.find(id) == g_subscriptions.end()) return id;
+    }
+    return 0;
+}
+
+int texture_on(lua_State* L)
+{
+    auto* texture = check_resource(L, 1, D3D_SDK_RESOURCE_TEXTURE);
+    SubscriptionEvent event;
+    const char* event_name = luaL_checkstring(L, 2);
+    if (!parse_subscription_event(event_name, &event)) {
+        return luaL_argerror(L, 2, "unsupported D3D Texture event");
+    }
+    luaL_checktype(L, 3, LUA_TFUNCTION);
+    if (!lua_isnoneornil(L, 4)) luaL_checktype(L, 4, LUA_TTABLE);
+
+    SubscriptionEntry entry;
+    entry.id = allocate_subscription_id();
+    if (!entry.id) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "D3D subscription capacity exceeded");
+        return 2;
+    }
+    entry.session = texture->session;
+    entry.texture = texture->handle;
+    entry.event = event;
+    if (lua_istable(L, 4)) {
+        lua_getfield(L, 4, is_mouse_event(event) ? "button" : "key");
+        if (!lua_isnil(L, -1)) entry.filter_code = check_int32(L, -1);
+        lua_pop(L, 1);
+        entry.propagate = boolean_field(L, 4, "propagate", false);
+        entry.hover_only = boolean_field(L, 4, "hover_only", true);
+        entry.keep_on_error = boolean_field(L, 4, "keep_on_error", false);
+    }
+    if (is_mouse_event(event) && (entry.filter_code < -1 || entry.filter_code > 4)) {
+        return luaL_argerror(L, 4, "mouse button must be LEFT, RIGHT, MIDDLE, X1 or X2");
+    }
+    if (is_key_event(event) && (entry.filter_code < -1 || entry.filter_code > WARK_F12)) {
+        return luaL_argerror(L, 4, "keyboard code is outside the public WARK range");
+    }
+
+    auto* subscription = static_cast<SubscriptionUserdata*>(
+        lua_newuserdatauv(L, sizeof(SubscriptionUserdata), 2));
+    new (subscription) SubscriptionUserdata();
+    subscription->session = entry.session;
+    subscription->id = entry.id;
+    subscription->active = true;
+    luaL_setmetatable(L, kSubscriptionMeta);
+    const int subscription_index = lua_gettop(L);
+    lua_pushvalue(L, 3);
+    lua_setiuservalue(L, subscription_index, 1);
+    lua_pushvalue(L, 1);
+    lua_setiuservalue(L, subscription_index, 2);
+    register_subscription_userdata(L, entry.id, subscription_index);
+    try {
+        g_subscriptions.emplace(entry.id, entry);
+    } catch (...) {
+        clear_subscription_userdata(L, subscription_index);
+        lua_pop(L, 1);
+        lua_pushnil(L);
+        lua_pushliteral(L, "D3D subscription allocation failed");
+        return 2;
+    }
+    if (!start_event_timer(L)) {
+        cancel_subscription_by_id(L, entry.id, subscription_index);
+        lua_pop(L, 1);
+        lua_pushnil(L);
+        lua_pushliteral(L, "D3D input dispatcher could not start");
+        return 2;
+    }
+    return 1;
+}
+
+int subscription_cancel(lua_State* L)
+{
+    auto* self = static_cast<SubscriptionUserdata*>(
+        luaL_checkudata(L, 1, kSubscriptionMeta));
+    cancel_subscription_by_id(L, self->id, 1);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int subscription_gc(lua_State* L)
+{
+    auto* self = static_cast<SubscriptionUserdata*>(
+        luaL_testudata(L, 1, kSubscriptionMeta));
+    if (self) cancel_subscription_by_id(L, self->id, 1);
+    return 0;
+}
+
+int subscription_is_active(lua_State* L)
+{
+    auto* self = static_cast<SubscriptionUserdata*>(
+        luaL_checkudata(L, 1, kSubscriptionMeta));
+    const bool active = self->active && self->session == g_session
+        && g_subscriptions.find(self->id) != g_subscriptions.end();
+    if (!active) self->active = false;
+    lua_pushboolean(L, active);
+    return 1;
+}
+
+int subscription_tostring(lua_State* L)
+{
+    auto* self = static_cast<SubscriptionUserdata*>(
+        luaL_checkudata(L, 1, kSubscriptionMeta));
+    char buffer[96];
+    std::snprintf(buffer, sizeof(buffer), "jass.d3d.Subscription(id=%u, %s)",
+        self->id, self->active && g_subscriptions.count(self->id) ? "active" : "cancelled");
+    lua_pushstring(L, buffer);
+    return 1;
+}
+
 int module_is_available(lua_State* L)
 {
     lua_pushboolean(L, initialize_api() && !g_shutdown);
@@ -1024,6 +1808,9 @@ int module_capabilities(lua_State* L)
     set("unified_render_queue",
         (g_api.capabilities & D3D_SDK_CAP_UNIFIED_RENDER_QUEUE) != 0);
     set("asset_memory", (g_api.capabilities & D3D_SDK_CAP_ASSET_MEMORY) != 0);
+    set("input_hit_stack", (g_api.capabilities & D3D_SDK_CAP_INPUT_HIT_STACK) != 0);
+    set("subscriptions", g_api_ready
+        && (g_api.capabilities & D3D_SDK_CAP_INPUT_HIT_STACK) != 0);
     return 1;
 }
 
@@ -1039,6 +1826,8 @@ int module_stats(lua_State* L)
     lua_pushinteger(L, counts.font_count); lua_setfield(L, -2, "fonts");
     lua_pushinteger(L, counts.text_count); lua_setfield(L, -2, "texts");
     lua_pushinteger(L, counts.texture_count); lua_setfield(L, -2, "textures");
+    lua_pushinteger(L, static_cast<lua_Integer>(g_subscriptions.size()));
+    lua_setfield(L, -2, "subscriptions");
     lua_pushboolean(L, counts.device_ready != 0); lua_setfield(L, -2, "device_ready");
     lua_newtable(L);
     lua_pushinteger(L, counts.asset_cache_entries); lua_setfield(L, -2, "entries");
@@ -1055,6 +1844,8 @@ int module_status(lua_State* L)
     lua_pushboolean(L, available); lua_setfield(L, -2, "available");
     lua_pushboolean(L, g_shutdown); lua_setfield(L, -2, "shutdown");
     lua_pushinteger(L, g_session); lua_setfield(L, -2, "session_id");
+    lua_pushinteger(L, static_cast<lua_Integer>(g_pending_input.size()));
+    lua_setfield(L, -2, "pending_callbacks");
     lua_pushlstring(L, g_init_error.data(), g_init_error.size()); lua_setfield(L, -2, "error");
     if (available) {
         D3DSdkResourceCountsV1 counts{};
@@ -1098,6 +1889,7 @@ int module_rgba(lua_State* L)
 
 int module_shutdown(lua_State* L)
 {
+    cancel_all_subscriptions(L);
     if (g_shutdown || !g_api_ready || g_session == 0) {
         g_shutdown = true;
         g_init_error = "D3D session has been shut down";
@@ -1117,6 +1909,7 @@ int module_shutdown(lua_State* L)
 int context_gc(lua_State* L)
 {
     auto* context = static_cast<ContextUserdata*>(luaL_testudata(L, 1, kContextMeta));
+    cancel_all_subscriptions(L);
     if (context && context->owner && g_api_ready && g_session != 0) {
         g_api.end_session(g_session);
     }
@@ -1126,6 +1919,11 @@ int context_gc(lua_State* L)
     g_shutdown = false;
     g_session = 0;
     g_init_error.clear();
+    g_event_code = 0;
+    g_next_subscription_id = 1;
+    lua_pushlightuserdata(L, &g_subscription_registry_key);
+    lua_pushnil(L);
+    lua_rawset(L, LUA_REGISTRYINDEX);
     return 0;
 }
 
@@ -1148,6 +1946,23 @@ void push_class(lua_State* L, lua_CFunction constructor)
 }
 
 }  // namespace
+
+void queue_input_event(InputKind kind, int32_t code, float x, float y)
+{
+    if (g_shutdown || g_subscriptions.empty() || !std::isfinite(x) || !std::isfinite(y))
+        return;
+    try {
+        if (g_pending_input.size() >= kMaxPendingInput) g_pending_input.pop_front();
+        g_pending_input.push_back({kind, code, x, y, event_timestamp()});
+    } catch (...) {
+        DBG_LOG("[D3D SDK] input event dropped after allocation failure");
+    }
+}
+
+bool has_active_subscriptions()
+{
+    return !g_subscriptions.empty();
+}
 
 int open(lua_State* L)
 {
@@ -1194,8 +2009,16 @@ int open(lua_State* L)
         {"get_z", texture_level_get}, {"set_z", texture_level_set},
         {"get_visible", texture_visible_get}, {"set_visible", texture_visible_set},
         {"get_hit_test", texture_hit_test_get}, {"set_hit_test", texture_hit_test_set},
-        {"pixel_size", texture_pixel_size}, {"contains", texture_contains},
+        {"pixel_size", texture_pixel_size}, {"contains", texture_contains}, {"on", texture_on},
         {"is_destroyed", texture_is_destroyed}, {"destroy", texture_destroy},
+        {nullptr, nullptr},
+    };
+    static const luaL_Reg subscription_meta[] = {
+        {"__gc", subscription_gc}, {"__close", subscription_gc},
+        {"__tostring", subscription_tostring}, {nullptr, nullptr},
+    };
+    static const luaL_Reg subscription_methods[] = {
+        {"is_active", subscription_is_active}, {"cancel", subscription_cancel},
         {nullptr, nullptr},
     };
     static const luaL_Reg context_meta[] = {
@@ -1205,6 +2028,7 @@ int open(lua_State* L)
     make_metatable(L, kFontMeta, font_meta, font_methods);
     make_metatable(L, kTextMeta, text_meta, text_methods);
     make_metatable(L, kTextureMeta, texture_meta, texture_methods);
+    make_metatable(L, kSubscriptionMeta, subscription_meta, subscription_methods);
     luaL_newmetatable(L, kContextMeta);
     luaL_setfuncs(L, context_meta, 0);
     lua_pop(L, 1);
@@ -1241,6 +2065,21 @@ int open(lua_State* L)
     push_class(L, font_new); lua_setfield(L, -2, "Font");
     push_class(L, text_new); lua_setfield(L, -2, "Text");
     push_class(L, texture_new); lua_setfield(L, -2, "Texture");
+    lua_newtable(L); lua_setfield(L, -2, "Subscription");
+    lua_newtable(L);
+    lua_pushinteger(L, 0); lua_setfield(L, -2, "LEFT");
+    lua_pushinteger(L, 1); lua_setfield(L, -2, "RIGHT");
+    lua_pushinteger(L, 2); lua_setfield(L, -2, "MIDDLE");
+    lua_pushinteger(L, 3); lua_setfield(L, -2, "X1");
+    lua_pushinteger(L, 4); lua_setfield(L, -2, "X2");
+    lua_setfield(L, -2, "mouse");
+    lua_newtable(L);
+#define SET_KEYBOARD(name) \
+    lua_pushinteger(L, WARK_ ## name); \
+    lua_setfield(L, -2, #name)
+    SET_KEYBOARD_ALL()
+#undef SET_KEYBOARD
+    lua_setfield(L, -2, "key");
     return 1;
 }
 

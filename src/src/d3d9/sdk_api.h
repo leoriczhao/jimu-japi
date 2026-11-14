@@ -33,6 +33,7 @@ enum D3DSdkCapability : uint64_t {
     D3D_SDK_CAP_TEXT_ALPHA = 1ull << 5,
     D3D_SDK_CAP_UNIFIED_RENDER_QUEUE = 1ull << 6,
     D3D_SDK_CAP_ASSET_MEMORY = 1ull << 7,
+    D3D_SDK_CAP_INPUT_HIT_STACK = 1ull << 8,
 };
 
 enum D3DSdkResourceType : uint32_t {
@@ -193,6 +194,12 @@ struct D3DSdkApiV1 {
     uint32_t (D3D_SDK_CALL *set_texture_source_memory)(
         uint32_t session, uint32_t handle, const char* source,
         const void* data, uint32_t data_size);
+
+    // Appended v1 P4 input boundary. Returns visible, hit-test-enabled
+    // Texture handles under the point in top-most-first render order.
+    uint32_t (D3D_SDK_CALL *get_texture_hit_stack)(
+        uint32_t session, float x, float y, uint32_t* out_handles,
+        uint32_t capacity, uint32_t* out_required);
 };
 #pragma pack(pop)
 

@@ -9,6 +9,7 @@
 #include <limits>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 namespace {
 
@@ -629,6 +630,34 @@ uint32_t D3D_SDK_CALL texture_contains(
     return ok();
 }
 
+uint32_t D3D_SDK_CALL get_texture_hit_stack(
+    uint32_t session, float x, float y, uint32_t* out_handles,
+    uint32_t capacity, uint32_t* out_required)
+{
+    if (!out_required || (capacity > 0 && !out_handles)) {
+        return fail(D3D_SDK_INVALID_ARGUMENT, "texture hit-stack output is invalid");
+    }
+    *out_required = 0;
+    if (!std::isfinite(x) || !std::isfinite(y)) {
+        return fail(D3D_SDK_INVALID_ARGUMENT, "texture hit-stack point is not finite");
+    }
+    const uint32_t check = require_session(session);
+    if (check != D3D_SDK_OK) return check;
+    const auto handles = d3d9_renderer::texture_hit_stack(x, y);
+    if (handles.size() > (std::numeric_limits<uint32_t>::max)()) {
+        return fail(D3D_SDK_CAPACITY_EXCEEDED, "texture hit stack is too large");
+    }
+    *out_required = static_cast<uint32_t>(handles.size());
+    if (!out_handles && capacity == 0) return ok();
+    if (capacity < handles.size()) {
+        return fail(D3D_SDK_BUFFER_TOO_SMALL, "texture hit-stack output buffer is too small");
+    }
+    if (!handles.empty()) {
+        std::memcpy(out_handles, handles.data(), handles.size() * sizeof(uint32_t));
+    }
+    return ok();
+}
+
 #undef DEFINE_INT_PROPERTY
 #undef DEFINE_FLOAT_PROPERTY
 #undef DEFINE_UINT_PROPERTY
@@ -652,7 +681,8 @@ extern "C" __declspec(dllexport) bool D3D_SDK_CALL GetD3DSdkApi(
         | D3D_SDK_CAP_CORE_PROPERTIES
         | D3D_SDK_CAP_TEXT_ALPHA
         | D3D_SDK_CAP_UNIFIED_RENDER_QUEUE
-        | D3D_SDK_CAP_ASSET_MEMORY;
+        | D3D_SDK_CAP_ASSET_MEMORY
+        | D3D_SDK_CAP_INPUT_HIT_STACK;
     api.begin_session = &begin_session;
     api.end_session = &end_session;
     api.get_resource_counts = &get_resource_counts;
@@ -709,6 +739,7 @@ extern "C" __declspec(dllexport) bool D3D_SDK_CALL GetD3DSdkApi(
     api.texture_contains = &texture_contains;
     api.create_texture_from_memory = &create_texture_from_memory;
     api.set_texture_source_memory = &set_texture_source_memory;
+    api.get_texture_hit_stack = &get_texture_hit_stack;
     std::memcpy(out_api, &api, std::min<uint32_t>(caller_size, sizeof(api)));
     return true;
 }

@@ -5,6 +5,8 @@ local d3d = require "jass.d3d"
 
 local M = {}
 local visual_resources
+local event_state
+local event_resources
 
 function M.run(done)
     if not _G.__JAPI_TEST_INTERACTIVE_D3D then
@@ -34,6 +36,11 @@ function M.run(done)
         assert(caps.session and caps.generation_handles)
         assert(caps.resource_counts and caps.core_properties)
         assert(caps.text_alpha and caps.unified_render_queue and caps.asset_memory)
+        assert(caps.input_hit_stack and caps.subscriptions)
+        assert(type(d3d.Subscription) == "table")
+        assert(d3d.mouse.LEFT == 0 and d3d.mouse.RIGHT == 1)
+        assert(d3d.mouse.MIDDLE == 2 and d3d.mouse.X1 == 3 and d3d.mouse.X2 == 4)
+        assert(type(d3d.key.SHIFT) == "number" and type(d3d.key.Q) == "number")
         local width, height = d3d.window_size()
         assert(width > 0 and height > 0)
         assert(d3d.rgba(0x11, 0x22, 0x33, 0x44) == 0x44112233)
@@ -291,6 +298,158 @@ function M.run(done)
         assert(visual_resources.alpha0:get_color() == 0x00FFFFFF)
     end)
 
+    test("D3D SDK Subscription ownership and idempotent cancellation", function()
+        local baseline = assert(d3d.stats()).subscriptions
+        local target = assert(d3d.Texture.new {
+            source = "asset://d3d-sdk-probe.png",
+            x = 8, y = 8, width = 8, height = 8,
+        })
+        local subscription = assert(target:on("enter", function() end))
+        assert(type(subscription) == "userdata" and subscription:is_active())
+        assert(d3d.stats().subscriptions == baseline + 1)
+        assert(subscription:cancel() and subscription:cancel())
+        assert(not subscription:is_active())
+
+        local owned = assert(target:on("leave", function() end))
+        assert(owned:is_active())
+        assert(target:destroy() and target:destroy())
+        assert(not owned:is_active(), "Texture destruction retained its Subscription")
+        assert(d3d.stats().subscriptions == baseline)
+
+        local ok = pcall(function()
+            visual_resources.background:on("unsupported", function() end)
+        end)
+        assert(not ok, "unsupported event name was accepted")
+    end)
+
+    test("D3D SDK P4 real Texture input fixture configured", function()
+        event_state = {
+            entered = false,
+            left = false,
+            mouse_down = 0,
+            mouse_up = 0,
+            click = 0,
+            bottom_click = 0,
+            shift_down = false,
+            shift_up = false,
+            bottom_shift_down = false,
+            bottom_shift_up = false,
+            global_q_down = false,
+            global_q_up = false,
+            hover_q_seen = false,
+            capture_up_outside = false,
+            self_cancelled = false,
+            readonly = false,
+            enumerable = false,
+            contract_error = nil,
+        }
+        event_resources = { subscriptions = {} }
+        event_resources.bottom = assert(d3d.Texture.new {
+            source = "asset://d3d-sdk-probe.png",
+            x = 72, y = 136, width = 256, height = 192,
+            color = 0xFF606060, z = 9500,
+        })
+        event_resources.top = assert(d3d.Texture.new {
+            source = "asset://d3d-sdk-probe.png",
+            x = 72, y = 136, width = 256, height = 192,
+            color = 0xFFFFFFFF, z = 9501,
+        })
+        visual_resources.input = event_resources
+
+        local function keep(subscription)
+            assert(type(subscription) == "userdata")
+            event_resources.subscriptions[#event_resources.subscriptions + 1] = subscription
+            return subscription
+        end
+        local function validate(event, expected_type, expected_target)
+            if event.type ~= expected_type then
+                event_state.contract_error = "wrong event type " .. tostring(event.type)
+            elseif event.target ~= expected_target then
+                event_state.contract_error = "wrong event target"
+            elseif type(event.x) ~= "number" or type(event.y) ~= "number"
+                or type(event.local_x) ~= "number" or type(event.local_y) ~= "number"
+                or type(event.timestamp) ~= "number" or event.timestamp <= 0 then
+                event_state.contract_error = "incomplete event coordinates/timestamp"
+            end
+        end
+
+        keep(event_resources.top:on("enter", function(event)
+            validate(event, "enter", event_resources.top)
+            event_state.entered = true
+            local count = 0
+            for _ in pairs(event) do count = count + 1 end
+            event_state.enumerable = count >= 7
+            event_state.readonly = not pcall(function() event.extra = true end)
+        end))
+        keep(event_resources.top:on("leave", function(event)
+            validate(event, "leave", event_resources.top)
+            event_state.left = true
+        end))
+        keep(event_resources.top:on("mouse_down", function(event)
+            validate(event, "mouse_down", event_resources.top)
+            if event.button == d3d.mouse.LEFT then
+                event_state.mouse_down = event_state.mouse_down + 1
+            end
+        end, { button = d3d.mouse.LEFT }))
+        keep(event_resources.top:on("mouse_up", function(event)
+            validate(event, "mouse_up", event_resources.top)
+            if event.button == d3d.mouse.LEFT then
+                event_state.mouse_up = event_state.mouse_up + 1
+                if not event_resources.top:contains(event.x, event.y) then
+                    event_state.capture_up_outside = true
+                end
+            end
+        end, { button = d3d.mouse.LEFT }))
+        keep(event_resources.top:on("click", function(event)
+            validate(event, "click", event_resources.top)
+            if event.button == d3d.mouse.LEFT then
+                event_state.click = event_state.click + 1
+            end
+        end, { button = d3d.mouse.LEFT }))
+        keep(event_resources.bottom:on("click", function()
+            event_state.bottom_click = event_state.bottom_click + 1
+        end, { button = d3d.mouse.LEFT }))
+
+        keep(event_resources.top:on("key_down", function(event)
+            validate(event, "key_down", event_resources.top)
+            if event.key == d3d.key.SHIFT then event_state.shift_down = true end
+            if event.key == d3d.key.Q then event_state.hover_q_seen = true end
+        end, { propagate = true }))
+        keep(event_resources.top:on("key_up", function(event)
+            validate(event, "key_up", event_resources.top)
+            if event.key == d3d.key.SHIFT then event_state.shift_up = true end
+            if event.key == d3d.key.Q then event_state.hover_q_seen = true end
+        end, { propagate = true }))
+        keep(event_resources.bottom:on("key_down", function(event)
+            if event.key == d3d.key.SHIFT then event_state.bottom_shift_down = true end
+        end, { key = d3d.key.SHIFT }))
+        keep(event_resources.bottom:on("key_up", function(event)
+            if event.key == d3d.key.SHIFT then event_state.bottom_shift_up = true end
+        end, { key = d3d.key.SHIFT }))
+        keep(event_resources.top:on("key_down", function(event)
+            if event.key == d3d.key.Q and event_state.left then
+                event_state.global_q_down = true
+            end
+        end, { key = d3d.key.Q, hover_only = false }))
+        keep(event_resources.top:on("key_up", function(event)
+            if event.key == d3d.key.Q and event_state.left then
+                event_state.global_q_up = true
+            end
+        end, { key = d3d.key.Q, hover_only = false }))
+
+        local self_cancel
+        self_cancel = keep(event_resources.top:on("click", function()
+            event_state.self_cancelled = true
+            self_cancel:cancel()
+        end, { button = d3d.mouse.LEFT }))
+        event_resources.self_cancel = self_cancel
+        event_resources.error_subscription = keep(event_resources.top:on("click", function()
+            error("expected P4 callback isolation probe")
+        end, { button = d3d.mouse.LEFT }))
+
+        assert(d3d.stats().subscriptions >= #event_resources.subscriptions)
+    end)
+
     test("D3D SDK explicit destruction and use-after-destroy", function()
         assert(texture:destroy())
         assert(texture:destroy())
@@ -347,6 +506,55 @@ function M.run(done)
     if done then done(pass, fail) end
 end
 
+function M.verify_events(done)
+    if not _G.__JAPI_TEST_INTERACTIVE_D3D then
+        if done then done(0, 0) end
+        return
+    end
+    print("  [WAIT] release the captured left button, then press Q outside the checkerboard")
+    if visual_resources and visual_resources.title then
+        visual_resources.title:set_text("P4: RELEASE LEFT, THEN PRESS Q OUTSIDE")
+    end
+    local jass = require "jass.common"
+    local ticks = 0
+    local timer = jass.CreateTimer()
+    jass.TimerStart(timer, 0.05, true, function()
+        ticks = ticks + 1
+        local ready = event_state
+            and event_state.entered and event_state.left
+            and event_state.mouse_down >= 2 and event_state.mouse_up >= 2
+            and event_state.click == 1 and event_state.capture_up_outside
+            and event_state.shift_down and event_state.shift_up
+            and event_state.bottom_shift_down and event_state.bottom_shift_up
+            and event_state.global_q_down and event_state.global_q_up
+        if not ready and ticks < 1200 then return end
+        jass.PauseTimer(timer)
+        jass.DestroyTimer(timer)
+
+        local ok, err = pcall(function()
+            assert(ready, "timed out waiting for real mouse/keyboard input")
+            assert(event_state.bottom_click == 0, "click propagated through the top Texture")
+            assert(not event_state.hover_q_seen, "hover-only key callback fired outside")
+            assert(event_state.self_cancelled
+                and not event_resources.self_cancel:is_active(),
+                "callback self-cancellation failed")
+            assert(not event_resources.error_subscription:is_active(),
+                "failed callback Subscription was not cancelled")
+            assert(event_state.readonly and event_state.enumerable,
+                "event table was not read-only and enumerable")
+            assert(event_state.contract_error == nil, event_state.contract_error)
+        end)
+        if ok then
+            print("  [PASS] D3D SDK real Texture subscriptions and callback isolation")
+            if done then done(1, 0) end
+        else
+            print("  [FAIL] D3D SDK real Texture subscriptions and callback isolation : "
+                .. tostring(err))
+            if done then done(0, 1) end
+        end
+    end)
+end
+
 function M.shutdown(done)
     if not _G.__JAPI_TEST_INTERACTIVE_D3D then
         if done then done(0, 0) end
@@ -360,6 +568,8 @@ function M.shutdown(done)
         assert(d3d.shutdown())
         assert(d3d.shutdown())
         visual_resources = nil
+        event_resources = nil
+        event_state = nil
         collectgarbage("collect")
         assert(not d3d.is_available())
         local status = d3d.status()

@@ -1129,6 +1129,30 @@ bool texture_contains(texture_handle_t h, float x, float y)
         && local_y >= -half_height && local_y < half_height;
 }
 
+std::vector<texture_handle_t> texture_hit_stack(float x, float y)
+{
+    struct HitEntry {
+        texture_handle_t handle;
+        int level;
+        uint64_t creationOrder;
+    };
+    std::vector<HitEntry> hits;
+    hits.reserve(g_textures.size());
+    for (const auto& [handle, obj] : g_textures) {
+        if (texture_contains(handle, x, y)) {
+            hits.push_back({handle, obj.level, obj.creationOrder});
+        }
+    }
+    std::sort(hits.begin(), hits.end(), [](const HitEntry& left, const HitEntry& right) {
+        if (left.level != right.level) return left.level > right.level;
+        return left.creationOrder > right.creationOrder;
+    });
+    std::vector<texture_handle_t> handles;
+    handles.reserve(hits.size());
+    for (const auto& hit : hits) handles.push_back(hit.handle);
+    return handles;
+}
+
 bool get_mouse_in_texture(texture_handle_t h)
 {
     auto it = g_textures.find(h);

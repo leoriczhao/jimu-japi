@@ -100,10 +100,10 @@ local function run(done)
 
     test("D3D text object visible-state round-trip", function()
         text = call("CreateText", "(ISRRRI)I", font,
-            "JAPI D3D VISUAL PASS - move cursor into checkerboard and press Shift",
+            "JAPI D3D P4 - click, Shift, then drag outside",
             72.0, 72.0, -1.0, -256)
         assert(text and text ~= 0, "CreateText returned 0")
-        assert(call("GetTextString", "(I)S", text):match("VISUAL PASS"))
+        assert(call("GetTextString", "(I)S", text):match("JAPI D3D P4"))
         assert(math.abs(call("GetTextX", "(I)R", text) - 72.0) < 0.01)
         assert(math.abs(call("GetTextY", "(I)R", text) - 72.0) < 0.01)
         assert(call("GetTextColor", "(I)I", text) == -256)
@@ -211,7 +211,7 @@ local function run(done)
         return
     end
 
-    print("  [WAIT] move the real cursor into the checkerboard, press Shift, then move it out")
+    print("  [WAIT] click inside, press Shift, then hold left and drag outside")
     local entered = false
     local timer = jass.CreateTimer()
     jass.TimerStart(timer, 0.05, true, function()

@@ -530,14 +530,25 @@ local function run_d3d_then_finish()
             test_d3d.run(function(dp, df)
                 pass = pass + dp
                 fail = fail + df
-                if type(test_d3d_sdk.shutdown) == "function" then
-                    test_d3d_sdk.shutdown(function(sp, sf)
-                        pass = pass + sp
-                        fail = fail + sf
+                local function shutdown_sdk()
+                    if type(test_d3d_sdk.shutdown) == "function" then
+                        test_d3d_sdk.shutdown(function(sp, sf)
+                            pass = pass + sp
+                            fail = fail + sf
+                            finish()
+                        end)
+                    else
                         finish()
+                    end
+                end
+                if type(test_d3d_sdk.verify_events) == "function" then
+                    test_d3d_sdk.verify_events(function(ep, ef)
+                        pass = pass + ep
+                        fail = fail + ef
+                        shutdown_sdk()
                     end)
                 else
-                    finish()
+                    shutdown_sdk()
                 end
             end)
         else

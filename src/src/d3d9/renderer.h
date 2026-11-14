@@ -181,6 +181,7 @@ bool             get_texture_trigger(texture_handle_t h);
 void             set_texture_trigger(texture_handle_t h, bool value);
 bool             get_mouse_in_texture(texture_handle_t h);
 bool             texture_contains(texture_handle_t h, float x, float y);
+std::vector<texture_handle_t> texture_hit_stack(float x, float y);
 
 // Source rect (texture cropping)
 // Returns: left, top, right, bottom via output params
