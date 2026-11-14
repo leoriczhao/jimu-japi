@@ -30,12 +30,16 @@ function scene.reset(select_unit)
     local player = jass.Player(0)
     local x = jass.GetPlayerStartLocationX(player)
     local y = jass.GetPlayerStartLocationY(player)
-    local rifleman = jass.CreateUnit(player, fourcc("Hrif"), x, y, 270.0)
+    local rifleman_id = fourcc("Hrif")
+    local rifleman = jass.CreateUnit(player, rifleman_id, x, y, 270.0)
     assert(rifleman ~= nil, "failed to create the hero rifleman (Hrif)")
+    assert(jass.GetUnitTypeId(rifleman) == rifleman_id,
+        "created rifleman has an unexpected unit type id")
+    assert(jass.IsUnitType(rifleman, jass.UNIT_TYPE_HERO),
+        "Hrif object data was not recognized as a hero")
     jass.SetHeroLevel(rifleman, 10, false)
     assert(jass.GetHeroLevel(rifleman) == 10,
-        "Hrif was not recognized as a level-10 hero")
-    jass.SetUnitInvulnerable(rifleman, true)
+        "failed to set Hrif to hero level 10")
     jass.PanCameraToTimed(x, y, 0.0)
     if select_unit then
         jass.SelectUnit(rifleman, true)
