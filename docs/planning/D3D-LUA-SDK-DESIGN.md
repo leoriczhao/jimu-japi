@@ -1,7 +1,8 @@
 # D3D Lua SDK 与完整生命周期设计
 
-> 状态：P0-P4 已闭环；Font/Text/Texture、统一 render queue、D3DXFont/文字 alpha、asset URI/MPQ、
-> 加载失败合同，以及 Subscription/统一输入（真实鼠标键盘）已实机通过。P5-P6 与完整生命周期待实现，
+> 状态：P0-P5 已闭环；Font/Text/Texture、统一 render queue、D3DXFont/文字 alpha、asset URI/MPQ、
+> 加载失败合同、Subscription/统一输入（真实鼠标键盘），以及 TTL、device 世代/lost/reset 事件与生命周期订阅
+> 已实机通过。P6（quickstart/API 参考/迁移文档与 §15 全部门槛）待完成，自动地图/VM 会话钩子仍缺，
 > 整体仍是“SDK 开发中”。
 >
 > 本文是面向地图作者的 D3D Lua SDK 实现契约和验收标准。底层 proxy 的加载、转发、部署与历史验证仍见
@@ -30,11 +31,16 @@ worktree 构建、部署 DLL 与 sidecar hash 已一致；幂等安装/验证/�
 按 <code>z</code> 与创建序放入同一队列，并实现 <code>asset://</code>/<code>game://</code>、MPQ 内存读取、
 BLP1/常用图片解码、共享 CPU cache、reload 与稳定失败合同。实机公共 SDK 功能 8 组通过；与底层 bridge
 合计后的完整日志为 125 项 D3D 侧测试（8 SDK 功能 + 13 bridge + Subscription 真实输入 + shutdown），
-与普通基线合并为 141/141，不是 D3D API 数。P4 已把 Subscription 与统一输入事件接到真实贴图上：
+与普通基线合并为 141/141，不是 D3D API 数（P5 之后为 147/147）。P4 已把 Subscription 与统一输入事件接到真实贴图上：
 enter/leave/mouse_down/mouse_up/click/key_down/key_up、pointer capture、6px 点击阈值、`hover_only`/
 `propagate`/`keep_on_error`、只读 event 表。事件源不依赖 CGameUI 分发（游戏内 1.27a 只送键盘消息），
 鼠标按钮来自窗口 `WM_*` 消息与异步按键状态，两条源共用同一状态机去重。
-P5 自动地图/VM 生命周期与完整 device reset、P6 文档/最终验收仍未完成。
+P5 补上 TTL、device 状态诊断（<code>device_generation</code>/<code>lost_count</code>）和模块级生命周期事件
+<code>d3d.on("resize"|"device_lost"|"device_reset", cb)</code>：实机把窗口尺寸改 20 次，得到 20 个
+<code>resize</code> 事件和 20 次真实 device reset（generation 1→21），过程中 Font/Text/Texture 的句柄、内容、位置、
+尺寸与订阅全部保持；TTL 0.15s 的 Text 在跑帧下自动释放且计数回落。与底层 bridge 合计后的日志为 147 项测试
+（116 普通基线 + 31 D3D 侧），不是 D3D API 数。<code>device_lost</code> 在 1.27a 窗口模式下不可观测（lost 与 reset
+同帧完成），自动地图/VM 生命周期、同进程换图与 P6 文档/最终验收仍未完成。
 
 当前用户已经可以只通过 <code>jass.d3d</code> 创建、修改和销毁字体、文字或 MPQ/游戏资源贴图，不再需要复制
 私有 RPC helper，也不依赖开发机绝对路径。与此同时，<code>jass.message.texture_*</code> 又维护一套不参与真实
@@ -634,8 +640,8 @@ hash 均为 <code>CD3896606FE2F20861F34A1406457972F982D2A72ED8F4B9173606F4FCCF10
 | P1（完成） | 版本化 C ABI、session、generation ResourceManager | ABI/handle/session 原生合同及 1000 轮资源计数归零通过；自动地图结束钩子仍属于 P5 |
 | P2（完成） | <code>jass.d3d</code> userdata 与 Font/Text/Texture 基础 API | 用户无需 RPC 即可创建、修改、销毁；公共 7 组实机通过 |
 | P3（完成） | 统一 render queue、D3DXFont、asset URI/MPQ/BLP | alpha/z、地图内 PNG/BLP1、游戏 BLP、共享 cache、reload、失败合同、clean provenance 与真实窗口均通过 |
-| P4（完成，2026-11-15） | Subscription 与统一输入事件 | 键盘、鼠标、enter/leave/click 全部走真实 Texture；交互回归 141/141，真实鼠标按键由 `WM_*` + 异步按键状态提供 |
-| P5 | GC、TTL、session close、device lost/reset、错误诊断 | 生命周期矩阵和压力测试通过 |
+| P4（完成，2026-11-15） | Subscription 与统一输入事件 | 键盘、鼠标、enter/leave/click 全部走真实 Texture；真实鼠标按键由 `WM_*` + 异步按键状态提供 |
+| P5（完成，2026-11-15） | GC、TTL、session close、device lost/reset、错误诊断 | TTL 到期释放并同步 Lua 句柄、LIFE-11 失败不泄漏、DEV-03 二十次真实 resize/reset 后句柄/属性/订阅保持、`d3d.on` 生命周期事件与 `status()`/`stats()` 诊断通过；交互 147/147。自动地图/VM session close 与同进程换图仍缺，`device_lost` 在 1.27a 窗口模式不可观测（见 14.3） |
 | P6 | 安装/验证/卸载、迁移、API 文档、最终实机验收 | 第 15 节全部通过并记录证据 |
 
 阶段不能跨越完成门槛。例如 P2 的对象能显示，不代表 P5 生命周期完成。
@@ -646,8 +652,20 @@ P1 实际导出为 <code>GetD3DSdkApi</code> ABI v1。P2 在不改变 v1 最小�
 Lua 层覆盖重复 require 的 session 稳定性、三类 userdata、Font 强引用、幂等销毁、use-after-destroy、GC、
 Font <code>__close</code> 和显式 shutdown。P3 新增 <code>text_alpha</code>、<code>unified_render_queue</code>、
 <code>asset_memory</code> capability、专用视觉面板、asset URI/MPQ、共享 cache 和加载失败套件。该结果仍不包含
-Subscription、TTL、完整 device reset、自动地图/VM 关闭或全部 P5 失败路径，不能作为完整 P4-P6 或用户 SDK
-完成证据。
+自动地图/VM 关闭或同进程换图，不能作为完整 P4-P6 或用户 SDK 完成证据。
+
+### 14.3 P5 验收边界（2026-11-15）
+
+- TTL：<code>Text.new{ ttl = 0.15 }</code> 在真实帧循环下由 <code>renderer.cpp</code> 的 <code>on_end_scene</code>
+  递减并释放；Lua 侧下一次访问同步为 expired，<code>d3d.stats().texts</code> 回落。实机已通过。
+- device 事件：窗口尺寸变化 20 次 → <code>resize</code> 20 次、<code>device_reset</code> 20 次、generation 1→21。
+  <code>device_lost</code> 事件通道保留，但 1.27a 窗口模式下 lost 与 reset 在同一帧完成，0.05s 轮询观测不到，
+  因此该事件不由实机证明；按 <code>sdk_api.h</code> 的 <code>D3D_SDK_CAP_DEVICE_STATE</code> 与
+  <code>D3DSdkResourceCountsV1.device_generation</code> 合同由原生测试覆盖。
+- DEV-03：reset 前后 <code>survivor</code> Font/Text/Texture 的句柄存活、文本内容、位置、字体高度、rect 宽度和
+  lifecycle 订阅均保持不变（reset 只重建 default-pool 资源，逻辑 handle 稳定）。
+- LIFE-12（同进程新会话）：本项目不支持游戏内换图，只能由原生合同测试的显式 <code>end_session</code> +
+  旧 handle 失效证明；自动地图/VM 关闭钩子仍缺，属于 P6 之前的已知缺口。
 
 P1 源码提交 <code>b3f4da8</code> 已从 detached clean worktree 完整构建。clean proxy SHA-256 为
 <code>8D7089B68B9028A05C1DB1DAFB70D95B7974049A707EAF91C358633772225035</code>，clean
@@ -729,10 +747,13 @@ vcvars32 + CMake Visual Studio 2022 Win32 Release 构建。Clean proxy SHA-256 �
 ABI/1000 轮合同、handler 合同、普通 108/108、公共 SDK 功能 8 组、底层 bridge 13 组、shutdown 1 组以及真实
 PNG/alpha/z/鼠标/Shift 验收全部通过，累计 130/130；游戏目录 proxy 与 sidecar 回读均等于 clean proxy hash。
 发布候选副本保存在忽略目录 <code>build/d3d/5dbcfd4-newD3d9.dll</code> 与
-<code>build/d3d/5dbcfd4-yd_japi.dll</code>。这完成 P3，但不替代 P4 Subscription、P5 自动 session/device 生命周期
-和 P6 文档/最终验收。
+<code>build/d3d/5dbcfd4-yd_japi.dll</code>。这完成 P3，但不替代 P4 Subscription 与 P6 文档/最终验收；
+P5 的 TTL 与 device 生命周期见 14.3。
 
 ## 15. 验收标准
+
+> 本节是最终交付门槛，只有在 P6 全部逐项记录证据后才能宣称 SDK 可用。P0–P5 已通过项的实测证据见 §14、
+> 14.3 与 [STATUS.md](../STATUS.md)；其中 LIFE-12 与自动地图/VM 会话关闭仍是未完成项。
 
 ### 15.1 构建与静态合同
 
@@ -745,7 +766,7 @@ PNG/alpha/z/鼠标/Shift 验收全部通过，累计 130/130；游戏目录 prox
 | API-01 | Lua 注册 | <code>require "jass.d3d"</code> 成功，返回的类和方法完整 |
 | API-02 | 公共边界 | SDK 功能测试中不存在 <code>UnitId</code>、<code>japi_ht</code> 或手写 spec |
 | COVER-01 | Handler manifest | 54 个兼容名字均有唯一 owner、准确签名、分类、实现状态和稳定测试 ID；未测项不能标为完成 |
-| COVER-02 | 统计语义 | 报告分别列累计测试数、D3D fixture 测试数和 handler 覆盖数，禁止把当前 141/141 表述为 D3D API 数 |
+| COVER-02 | 统计语义 | 报告分别列累计测试数、D3D fixture 测试数和 handler 覆盖数，禁止把当前 147/147 表述为 D3D API 数 |
 | COMPAT-01 | 注册冲突 | D3D 初始化不覆盖 canonical <code>ShowConsole</code>/<code>ShowFpsText</code>/<code>SetKeyboard</code>；重复名字默认拒绝并记录 owner |
 | COMPAT-02 | WARK 键码 | <code>SetKeyboard</code> 与 message API 共用唯一 WARK→VK 映射；修饰键、方向键、F 键、OEM、数字键盘和无效码均通过 |
 | COMPAT-03 | SrcRect JASS ABI | <code>SetTextureSrcRect(IHrect;)V</code> 与 <code>GetTextureSrcRect(I)Hrect;</code> 按内置 wrapper 往返，旧四浮点实现不占用同名入口 |

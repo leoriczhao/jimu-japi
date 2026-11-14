@@ -12,6 +12,7 @@ local scene   = require "lib.scene"
 local test_ex = require "tests.test_ex"
 local test_d3d_sdk = require "tests.test_d3d_sdk"
 local test_d3d = require "tests.test_d3d"
+local test_d3d_lifecycle = require "tests.test_d3d_lifecycle"
 
 -- Handle-level agnostic helpers (works with integer or userdata)
 local function handle_val(h)
@@ -637,11 +638,31 @@ local function run_d3d_then_finish()
                         finish()
                     end
                 end
+                local function run_lifecycle_then_shutdown()
+                    if type(test_d3d_lifecycle) == "table"
+                        and type(test_d3d_lifecycle.run) == "function" then
+                        test_d3d_lifecycle.run(function(lp, lf)
+                            pass = pass + lp
+                            fail = fail + lf
+                            if type(test_d3d_lifecycle.verify_lifecycle) == "function" then
+                                test_d3d_lifecycle.verify_lifecycle(function(vp, vf)
+                                    pass = pass + vp
+                                    fail = fail + vf
+                                    shutdown_sdk()
+                                end)
+                            else
+                                shutdown_sdk()
+                            end
+                        end)
+                    else
+                        shutdown_sdk()
+                    end
+                end
                 if type(test_d3d_sdk.verify_events) == "function" then
                     test_d3d_sdk.verify_events(function(ep, ef)
                         pass = pass + ep
                         fail = fail + ef
-                        shutdown_sdk()
+                        run_lifecycle_then_shutdown()
                     end)
                 else
                     shutdown_sdk()

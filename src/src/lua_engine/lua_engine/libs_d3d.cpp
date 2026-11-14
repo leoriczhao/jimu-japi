@@ -55,6 +55,10 @@ enum class SubscriptionEvent : uint32_t {
     Click,
     KeyDown,
     KeyUp,
+    // Module-level lifecycle events (d3d.on); they have no Texture target.
+    Resize,
+    DeviceLost,
+    DeviceReset,
 };
 
 struct SubscriptionUserdata {
@@ -104,11 +108,20 @@ uint32_t g_next_subscription_id = 1;
 uint32_t g_event_timer = 0;
 uint32_t g_event_code = 0;
 bool g_event_dispatching = false;
+// Lifecycle baseline for d3d.on: the first poll of a session only records the
+// current state, so subscribing never reports historical resets as new ones.
+bool g_lifecycle_known = false;
+bool g_lifecycle_device_ready = false;
+uint32_t g_lifecycle_generation = 0;
+int32_t g_lifecycle_width = 0;
+int32_t g_lifecycle_height = 0;
 constexpr size_t kMaxPendingInput = 256;
 constexpr float kClickMoveThreshold = 6.0f;
 
 void cancel_texture_subscriptions(lua_State* L, uint32_t session, uint32_t texture);
 void cancel_all_subscriptions(lua_State* L);
+void cancel_subscription_by_id(lua_State* L, uint32_t id, int index = 0);
+bool push_subscription_userdata(lua_State* L, uint32_t id);
 void dispatch_leave_before_disable(lua_State* L, uint32_t texture);
 void texture_local_coordinates(
     uint32_t texture, float x, float y, float* out_x, float* out_y);
@@ -1135,6 +1148,9 @@ const char* subscription_event_name(SubscriptionEvent event)
     case SubscriptionEvent::Click: return "click";
     case SubscriptionEvent::KeyDown: return "key_down";
     case SubscriptionEvent::KeyUp: return "key_up";
+    case SubscriptionEvent::Resize: return "resize";
+    case SubscriptionEvent::DeviceLost: return "device_lost";
+    case SubscriptionEvent::DeviceReset: return "device_reset";
     }
     return "unknown";
 }
@@ -1151,6 +1167,23 @@ bool parse_subscription_event(const char* name, SubscriptionEvent* event)
     else if (std::strcmp(name, "key_up") == 0) *event = SubscriptionEvent::KeyUp;
     else return false;
     return true;
+}
+
+bool parse_module_event(const char* name, SubscriptionEvent* event)
+{
+    if (!name || !event) return false;
+    if (std::strcmp(name, "resize") == 0) *event = SubscriptionEvent::Resize;
+    else if (std::strcmp(name, "device_lost") == 0) *event = SubscriptionEvent::DeviceLost;
+    else if (std::strcmp(name, "device_reset") == 0) *event = SubscriptionEvent::DeviceReset;
+    else return false;
+    return true;
+}
+
+bool is_module_event(SubscriptionEvent event)
+{
+    return event == SubscriptionEvent::Resize
+        || event == SubscriptionEvent::DeviceLost
+        || event == SubscriptionEvent::DeviceReset;
 }
 
 bool is_mouse_event(SubscriptionEvent event)
@@ -1227,6 +1260,75 @@ void push_readonly_event(lua_State* L, const SubscriptionEntry& entry,
     lua_remove(L, values_index);
 }
 
+void push_readonly_module_event(lua_State* L, SubscriptionEvent event,
+    int32_t width, int32_t height, uint32_t generation)
+{
+    lua_newtable(L);
+    const int values_index = lua_gettop(L);
+    lua_pushstring(L, subscription_event_name(event)); lua_setfield(L, values_index, "type");
+    lua_pushnumber(L, event_timestamp()); lua_setfield(L, values_index, "timestamp");
+    if (event == SubscriptionEvent::Resize) {
+        lua_pushinteger(L, width); lua_setfield(L, values_index, "width");
+        lua_pushinteger(L, height); lua_setfield(L, values_index, "height");
+    } else {
+        lua_pushinteger(L, static_cast<lua_Integer>(generation));
+        lua_setfield(L, values_index, "generation");
+    }
+
+    lua_newtable(L);
+    const int event_index = lua_gettop(L);
+    lua_newtable(L);
+    lua_pushvalue(L, values_index); lua_setfield(L, -2, "__index");
+    lua_pushcfunction(L, readonly_event_newindex); lua_setfield(L, -2, "__newindex");
+    lua_pushvalue(L, values_index);
+    lua_pushcclosure(L, readonly_event_pairs, 1); lua_setfield(L, -2, "__pairs");
+    lua_pushliteral(L, "read-only D3D event"); lua_setfield(L, -2, "__metatable");
+    lua_setmetatable(L, event_index);
+    lua_remove(L, values_index);
+}
+
+bool fire_module_subscription(lua_State* L, uint32_t id,
+    SubscriptionEvent event, int32_t width, int32_t height, uint32_t generation)
+{
+    const auto found = g_subscriptions.find(id);
+    if (found == g_subscriptions.end()) return false;
+    const SubscriptionEntry entry = found->second;
+    const int base = lua_gettop(L);
+    if (!push_subscription_userdata(L, id)) {
+        cancel_subscription_by_id(L, id);
+        return false;
+    }
+    const int subscription_index = lua_gettop(L);
+    if (lua_getiuservalue(L, subscription_index, 1) != LUA_TFUNCTION) {
+        lua_settop(L, base);
+        cancel_subscription_by_id(L, id);
+        return false;
+    }
+    push_readonly_module_event(L, event, width, height, generation);
+    lua_remove(L, subscription_index);
+    const int call_result = safe_call_not_sleep(L, 1, 0, true);
+    lua_settop(L, base);
+    if (call_result != LUA_OK && !entry.keep_on_error) {
+        DBG_LOG("[D3D SDK] lifecycle subscription %u cancelled after callback error", id);
+        cancel_subscription_by_id(L, id);
+    }
+    return call_result == LUA_OK;
+}
+
+void dispatch_module_event(lua_State* L, SubscriptionEvent event,
+    int32_t width, int32_t height, uint32_t generation)
+{
+    std::vector<uint32_t> ids;
+    for (const auto& [id, entry] : g_subscriptions) {
+        if (entry.session == g_session && entry.texture == 0 && entry.event == event)
+            ids.push_back(id);
+    }
+    for (uint32_t id : ids) {
+        fire_module_subscription(L, id, event, width, height, generation);
+        if (g_shutdown) return;
+    }
+}
+
 void push_subscription_registry(lua_State* L)
 {
     lua_pushlightuserdata(L, &g_subscription_registry_key);
@@ -1287,7 +1389,7 @@ void stop_event_timer()
     message::release_input_dispatch();
 }
 
-void cancel_subscription_by_id(lua_State* L, uint32_t id, int known_userdata = 0)
+void cancel_subscription_by_id(lua_State* L, uint32_t id, int known_userdata)
 {
     g_subscriptions.erase(id);
     if (known_userdata != 0) clear_subscription_userdata(L, known_userdata);
@@ -1595,6 +1697,45 @@ void dispatch_pending_input(lua_State* L)
     }
 }
 
+void poll_lifecycle_events(lua_State* L)
+{
+    if (!g_api_ready || g_session == 0 || !g_api.get_resource_counts) return;
+    D3DSdkResourceCountsV1 counts{};
+    counts.struct_size = sizeof(counts);
+    if (g_api.get_resource_counts(g_session, &counts) != D3D_SDK_OK) return;
+    int32_t width = 0;
+    int32_t height = 0;
+    if (g_api.get_window_size) g_api.get_window_size(g_session, &width, &height);
+
+    if (!g_lifecycle_known) {
+        g_lifecycle_known = true;
+        g_lifecycle_device_ready = counts.device_ready != 0;
+        g_lifecycle_generation = counts.device_generation;
+        g_lifecycle_width = width;
+        g_lifecycle_height = height;
+        return;
+    }
+
+    const bool was_ready = g_lifecycle_device_ready;
+    const uint32_t previous_generation = g_lifecycle_generation;
+    const bool ready = counts.device_ready != 0;
+    g_lifecycle_device_ready = ready;
+    g_lifecycle_generation = counts.device_generation;
+
+    if (was_ready && !ready) {
+        dispatch_module_event(L, SubscriptionEvent::DeviceLost, 0, 0, counts.device_generation);
+    } else if (ready && (!was_ready || counts.device_generation != previous_generation)) {
+        dispatch_module_event(L, SubscriptionEvent::DeviceReset, 0, 0, counts.device_generation);
+    }
+
+    if (width > 0 && height > 0
+        && (width != g_lifecycle_width || height != g_lifecycle_height)) {
+        g_lifecycle_width = width;
+        g_lifecycle_height = height;
+        dispatch_module_event(L, SubscriptionEvent::Resize, width, height, counts.device_generation);
+    }
+}
+
 bool device_is_ready()
 {
     if (!g_api_ready || !g_api.get_resource_counts || g_session == 0) return false;
@@ -1612,6 +1753,9 @@ int event_timer_tick(lua_State* L)
     }
     g_event_dispatching = true;
     try {
+        // Lifecycle events must be observed even while the device is lost,
+        // otherwise a lost->reset transition would go unnoticed.
+        poll_lifecycle_events(L);
         if (device_is_ready()) {
             message::poll_input_devices();
             poll_hover(L);
@@ -1736,6 +1880,60 @@ int texture_on(lua_State* L)
     return 1;
 }
 
+int module_on(lua_State* L)
+{
+    const char* event_name = luaL_checkstring(L, 1);
+    SubscriptionEvent event;
+    if (!parse_module_event(event_name, &event)) {
+        return luaL_argerror(L, 1, "unsupported D3D lifecycle event");
+    }
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    if (!lua_isnoneornil(L, 3)) luaL_checktype(L, 3, LUA_TTABLE);
+    if (!initialize_api()) return push_unavailable(L);
+
+    SubscriptionEntry entry;
+    entry.id = allocate_subscription_id();
+    if (!entry.id) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "D3D subscription capacity exceeded");
+        return 2;
+    }
+    entry.session = g_session;
+    entry.texture = 0;  // module-level: no Texture target
+    entry.event = event;
+    entry.hover_only = false;
+    if (lua_istable(L, 3)) entry.keep_on_error = boolean_field(L, 3, "keep_on_error", false);
+
+    auto* subscription = static_cast<SubscriptionUserdata*>(
+        lua_newuserdatauv(L, sizeof(SubscriptionUserdata), 2));
+    new (subscription) SubscriptionUserdata();
+    subscription->session = entry.session;
+    subscription->id = entry.id;
+    subscription->active = true;
+    luaL_setmetatable(L, kSubscriptionMeta);
+    const int subscription_index = lua_gettop(L);
+    lua_pushvalue(L, 2);
+    lua_setiuservalue(L, subscription_index, 1);
+    register_subscription_userdata(L, entry.id, subscription_index);
+    try {
+        g_subscriptions.emplace(entry.id, entry);
+    } catch (...) {
+        clear_subscription_userdata(L, subscription_index);
+        lua_pop(L, 1);
+        lua_pushnil(L);
+        lua_pushliteral(L, "D3D subscription allocation failed");
+        return 2;
+    }
+    if (!start_event_timer(L)) {
+        cancel_subscription_by_id(L, entry.id, subscription_index);
+        lua_pop(L, 1);
+        lua_pushnil(L);
+        lua_pushliteral(L, "D3D lifecycle dispatcher could not start");
+        return 2;
+    }
+    return 1;
+}
+
 int subscription_cancel(lua_State* L)
 {
     auto* self = static_cast<SubscriptionUserdata*>(
@@ -1810,6 +2008,8 @@ int module_capabilities(lua_State* L)
         (g_api.capabilities & D3D_SDK_CAP_UNIFIED_RENDER_QUEUE) != 0);
     set("asset_memory", (g_api.capabilities & D3D_SDK_CAP_ASSET_MEMORY) != 0);
     set("input_hit_stack", (g_api.capabilities & D3D_SDK_CAP_INPUT_HIT_STACK) != 0);
+    set("device_state", (g_api.capabilities & D3D_SDK_CAP_DEVICE_STATE) != 0);
+    set("lifecycle_events", (g_api.capabilities & D3D_SDK_CAP_DEVICE_STATE) != 0);
     set("subscriptions", g_api_ready
         && (g_api.capabilities & D3D_SDK_CAP_INPUT_HIT_STACK) != 0);
     return 1;
@@ -1830,6 +2030,8 @@ int module_stats(lua_State* L)
     lua_pushinteger(L, static_cast<lua_Integer>(g_subscriptions.size()));
     lua_setfield(L, -2, "subscriptions");
     lua_pushboolean(L, counts.device_ready != 0); lua_setfield(L, -2, "device_ready");
+    lua_pushinteger(L, static_cast<lua_Integer>(counts.device_generation));
+    lua_setfield(L, -2, "device_generation");
     lua_newtable(L);
     lua_pushinteger(L, counts.asset_cache_entries); lua_setfield(L, -2, "entries");
     lua_pushinteger(L, static_cast<lua_Integer>(counts.asset_cache_bytes));
@@ -1854,7 +2056,16 @@ int module_status(lua_State* L)
         if (g_api.get_resource_counts(g_session, &counts) == D3D_SDK_OK) {
             lua_pushboolean(L, counts.device_ready != 0);
             lua_setfield(L, -2, "device_ready");
+            lua_pushinteger(L, static_cast<lua_Integer>(counts.device_generation));
+            lua_setfield(L, -2, "device_generation");
+            lua_pushstring(L, counts.device_ready ? "active" : "lost");
+            lua_setfield(L, -2, "state");
         }
+    } else {
+        lua_pushstring(L, g_shutdown ? "closed" : "unavailable");
+        lua_setfield(L, -2, "state");
+        lua_pushinteger(L, 0);
+        lua_setfield(L, -2, "device_generation");
     }
     return 1;
 }
@@ -1903,6 +2114,7 @@ int module_shutdown(lua_State* L)
     g_session = 0;
     g_shutdown = true;
     g_init_error = "D3D session has been shut down";
+    g_lifecycle_known = false;
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1922,6 +2134,11 @@ int context_gc(lua_State* L)
     g_init_error.clear();
     g_event_code = 0;
     g_next_subscription_id = 1;
+    g_lifecycle_known = false;
+    g_lifecycle_device_ready = false;
+    g_lifecycle_generation = 0;
+    g_lifecycle_width = 0;
+    g_lifecycle_height = 0;
     lua_pushlightuserdata(L, &g_subscription_registry_key);
     lua_pushnil(L);
     lua_rawset(L, LUA_REGISTRYINDEX);
@@ -2059,6 +2276,7 @@ int open(lua_State* L)
         {"stats", module_stats},
         {"window_size", module_window_size},
         {"rgba", module_rgba},
+        {"on", module_on},
         {"shutdown", module_shutdown},
         {nullptr, nullptr},
     };

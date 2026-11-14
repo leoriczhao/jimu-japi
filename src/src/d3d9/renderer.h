@@ -106,6 +106,18 @@ void on_device_reset();
 void on_device_destroyed();
 void on_end_scene(IDirect3DDevice9* pDevice);
 
+// Device state shared by the versioned SDK ABI and the Lua SDK. generation
+// counts successful resets, lost_count counts device-lost transitions, so a
+// consumer can tell a reset apart from a startup and can detect how many
+// times GPU resources were rebuilt under stable logical handles.
+struct DeviceState {
+    uint32_t generation = 0;
+    uint32_t lost_count = 0;
+    bool     ready      = false;
+};
+
+DeviceState device_state();
+
 // Session lifecycle shared by the versioned SDK ABI and legacy bridge.
 uint32_t begin_session();
 bool     end_session(uint32_t session);

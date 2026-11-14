@@ -107,6 +107,7 @@ uint32_t D3D_SDK_CALL get_resource_counts(
     value.text_count = counts.texts;
     value.texture_count = counts.textures;
     value.device_ready = d3d9_renderer::is_device_ready() ? 1u : 0u;
+    value.device_generation = d3d9_renderer::device_state().generation;
     const auto cache = d3d9_renderer::asset_cache_counts();
     value.asset_cache_entries = cache.entries;
     value.asset_cache_bytes = cache.bytes;
@@ -682,7 +683,8 @@ extern "C" __declspec(dllexport) bool D3D_SDK_CALL GetD3DSdkApi(
         | D3D_SDK_CAP_TEXT_ALPHA
         | D3D_SDK_CAP_UNIFIED_RENDER_QUEUE
         | D3D_SDK_CAP_ASSET_MEMORY
-        | D3D_SDK_CAP_INPUT_HIT_STACK;
+        | D3D_SDK_CAP_INPUT_HIT_STACK
+        | D3D_SDK_CAP_DEVICE_STATE;
     api.begin_session = &begin_session;
     api.end_session = &end_session;
     api.get_resource_counts = &get_resource_counts;

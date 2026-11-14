@@ -34,6 +34,7 @@ enum D3DSdkCapability : uint64_t {
     D3D_SDK_CAP_UNIFIED_RENDER_QUEUE = 1ull << 6,
     D3D_SDK_CAP_ASSET_MEMORY = 1ull << 7,
     D3D_SDK_CAP_INPUT_HIT_STACK = 1ull << 8,
+    D3D_SDK_CAP_DEVICE_STATE = 1ull << 9,
 };
 
 enum D3DSdkResourceType : uint32_t {
@@ -51,7 +52,10 @@ struct D3DSdkResourceCountsV1 {
     uint32_t texture_count;
     uint32_t device_ready;
     uint32_t asset_cache_entries;
-    uint32_t reserved;
+    // Formerly reserved. Callers that pass the full V1 size receive the device
+    // generation (incremented per successful device reset); callers that pass
+    // D3D_SDK_RESOURCE_COUNTS_V1_MIN_SIZE keep seeing zero here.
+    uint32_t device_generation;
     uint64_t asset_cache_bytes;
 };
 

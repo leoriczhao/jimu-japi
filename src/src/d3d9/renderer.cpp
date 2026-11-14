@@ -45,6 +45,13 @@ static D3DXCreateFontA_fn g_create_font = nullptr;
 static float g_last_dt = 0.0f;
 static DWORD g_last_tick = 0;
 
+// Device lifecycle counters. Generation starts at 1 so 0 always means "never
+// observed a device"; it advances on every successful reset. Logical resource
+// handles survive a reset, so consumers use the generation to know when the
+// underlying GPU objects were rebuilt.
+static uint32_t g_device_generation = 1;
+static uint32_t g_device_lost_count = 0;
+
 // FPS tracking
 static bool  g_show_fps = false;
 static int   g_fps_frames = 0;
@@ -259,6 +266,7 @@ void on_device_created(IDirect3DDevice9* pDevice)
 
 void on_device_lost()
 {
+    ++g_device_lost_count;
     // Release D3D resources (textures)
     for (auto& [h, obj] : g_textures) {
         if (obj.texture) {
@@ -275,6 +283,10 @@ void on_device_lost()
 
 void on_device_reset()
 {
+    // A reset rebuilt whatever default-pool data the device owned; textures and
+    // fonts reload against the new device while logical handles stay stable.
+    ++g_device_generation;
+
     // Reload textures
     for (auto& [h, obj] : g_textures) {
         reload_texture(obj);
@@ -577,6 +589,15 @@ bool end_session(uint32_t session)
 bool is_device_ready()
 {
     return g_device != nullptr;
+}
+
+DeviceState device_state()
+{
+    DeviceState state;
+    state.generation = g_device_generation;
+    state.lost_count = g_device_lost_count;
+    state.ready = g_device != nullptr;
+    return state;
 }
 
 d3d9_resources::ResourceCounts resource_counts()

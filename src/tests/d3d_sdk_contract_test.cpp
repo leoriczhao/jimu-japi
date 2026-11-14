@@ -50,7 +50,8 @@ int main()
         | D3D_SDK_CAP_TEXT_ALPHA
         | D3D_SDK_CAP_UNIFIED_RENDER_QUEUE
         | D3D_SDK_CAP_ASSET_MEMORY
-        | D3D_SDK_CAP_INPUT_HIT_STACK;
+        | D3D_SDK_CAP_INPUT_HIT_STACK
+        | D3D_SDK_CAP_DEVICE_STATE;
     CHECK((api.capabilities & required_caps) == required_caps,
         "required P3 rendering capabilities are missing");
     CHECK(api.create_texture_from_memory && api.set_texture_source_memory,
@@ -71,6 +72,14 @@ int main()
     CHECK(counts.session_id == session1 && counts.font_count == 0
         && counts.text_count == 0 && counts.texture_count == 0,
         "new session did not start empty");
+    CHECK(counts.device_generation >= 1,
+        "device generation was not reported by resource counts");
+    D3DSdkResourceCountsV1 minimal_counts{};
+    minimal_counts.struct_size = D3D_SDK_RESOURCE_COUNTS_V1_MIN_SIZE;
+    CHECK(api.get_resource_counts(session1, &minimal_counts) == D3D_SDK_OK,
+        "minimal resource count structure was rejected");
+    CHECK(minimal_counts.device_generation == 0,
+        "minimal resource count structure received an out-of-contract field");
 
     uint32_t font1 = 0;
     uint32_t text1 = 0;
