@@ -6,6 +6,7 @@
 #   .\tools\deploy.ps1                                  # all defaults
 #   .\tools\deploy.ps1 -DllPath "path\to\yd_japi.dll"   # custom DLL
 #   .\tools\deploy.ps1 -NoKill                          # leave War3 running after tests
+#   .\tools\deploy.ps1 -Hold                            # keep the session: waits for build\war3.kill, then closes War3
 #   .\tools\deploy.ps1 -InteractivePoint                # require a real Q key for LocalPointOrder
 #   .\tools\deploy.ps1 -InteractiveUi                   # verify hover target and ability button UI
 #   .\tools\deploy.ps1 -InteractiveD3D                  # deploy proxy + run visual D3D probe
@@ -18,6 +19,7 @@ param(
     [string]$MapName = "",
     [int]$Timeout    = 120,
     [switch]$NoKill,
+    [switch]$Hold,
     [switch]$InteractivePoint,
     [switch]$InteractiveUi,
     [switch]$InteractiveD3D,
@@ -230,6 +232,20 @@ while ($elapsed -lt $Timeout) {
 }
 
 # ── Cleanup ─────────────────────────────────────────────────────
+# Only the process that launched War3 holds its creation handle; a fresh shell
+# cannot OpenProcess a War3 that runs at a higher integrity level. -Hold keeps
+# this launcher alive so the session can be closed later by touching the kill
+# file, instead of leaving an unkillable orphan behind.
+$killFile = "$Root\build\war3.kill"
+if ($Hold) {
+    Remove-Item $killFile -Force -ErrorAction SilentlyContinue
+    Write-Host "  Holding War3 session; touch $killFile to close it"
+    while (-not $war3.HasExited -and -not (Test-Path $killFile)) {
+        Start-Sleep -Seconds 1
+    }
+    Remove-Item $killFile -Force -ErrorAction SilentlyContinue
+}
+
 if (-not $NoKill) {
     if (-not $war3.HasExited) {
         $war3.Kill()
