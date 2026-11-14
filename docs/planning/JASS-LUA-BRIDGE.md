@@ -16,9 +16,11 @@
 | pjass 兼容 | 需预处理 | **零改动** | 需预处理 |
 | 地图自包含 | 是 | **是** | 是 |
 
-现在的 `japi.japi` 用的是 `nfunction_add` 注册新原生，JASS 侧需要 `native` 声明。这条路技术上可行但**不是内置 JAPI 的做法**——用户必须手动写 `native` 或者靠脚本生成。
+早期的 `japi.japi` 只用 `nfunction_add` 注册新原生，JASS 侧需要 `native` 声明。这条路技术上可行但**不是内置 JAPI 的做法**——用户必须手动写 `native` 或者靠脚本生成。
 
 内置 JAPI 的做法是：**JASS 侧全是普通函数，不需要任何 native 声明。**
+
+> 2026-10-26 实现补充：`jass.japi` 注册时同时写入 native 表和 UnitId 分发，JASS 侧可以直接用普通函数 `UnitId("Name")`，不需要 `native` 声明。反过来说，`native Foo` + 运行时注册的路线在 callback 模式下**不可用**（已编译的 JASS 调用不会在运行时绑定到新注册项，实测会挂起）；本文未特别说明时，以 UnitId 路线为准。
 
 ## 三、完整调用流程
 

@@ -3,12 +3,12 @@
 > 本文件是仓库中唯一的当前完成状态来源（single source of truth）。
 > `docs/planning/` 下的文件保留方案演进、阶段拆分和历史验收记录，其中的状态标记不代表当前状态。
 
-- 最后更新：2026-08-03
+- 最后更新：2026-10-26
 - 支持版本：Warcraft III 1.27a（当前偏移与实机验收版本）
-- 普通实机回归：`108 passed, 0 failed, 108 total`（2026-08-03）
-- LocalPoint 交互回归：`109 passed, 0 failed, 109 total`（真实前台 Q 键，2026-07-30）
-- UI 交互回归：`110 passed, 0 failed, 110 total`（真实鼠标悬停 + 命令卡显隐，2026-07-30）
-- D3D 实机回归：`130 passed, 0 failed, 130 total`（普通基线 108 项 + 公共 Lua SDK 功能 8 组 + 底层 bridge 13 组 + SDK shutdown 1 组；兼容面仍为 27/54 触达，不是 130 个 API，2026-08-03）
+- 普通实机回归：`116 passed, 0 failed, 116 total`（2026-10-26；新增 8 项 JASS↔Lua bridge 回归）
+- LocalPoint 交互回归：`109 passed, 0 failed, 109 total`（真实前台 Q 键，2026-07-30，旧 108 基线；本次未重跑）
+- UI 交互回归：`110 passed, 0 failed, 110 total`（真实鼠标悬停 + 命令卡显隐，2026-07-30，旧 108 基线；本次未重跑）
+- D3D 实机回归：`130 passed, 0 failed, 130 total`（普通基线 108 项 + 公共 Lua SDK 功能 8 组 + 底层 bridge 13 组 + SDK shutdown 1 组；兼容面仍为 27/54 触达，不是 130 个 API，2026-08-03；该数字对应旧 108 基线，新增 bridge 测试后未重跑交互模式）
 - 默认测试场景：64×64 平坦空图，无基地、野怪、树木或预放物件；最终仅保留 1 个 10 级英雄火枪手 `Hrif`（2026-07-31）
 - 验收入口：先运行 `src\build.bat`，再按第 4 节选择普通或交互模式
 
@@ -20,10 +20,10 @@
 | Lua 引擎模块 | 12/12（含开发中的 `jass.d3d`） | 自动回归 + 实机 | 非 D3D 模块可用；`jass.d3d` 见下行限制 |
 | 核心 runtime 能力 | 7/7 功能目标 | 自动回归 + 实机 | 可用 |
 | Lua DAP 调试器 | P0-P5 完成 | attach、断点、单步、栈、变量、求值实测 | 可用，需 `-WithDebugger` |
-| 非 D3D bridge native | 67/67 注册 | 普通 108/108 + 两套真实交互回归 | 已实现并验收 |
+| 非 D3D bridge native | 67/67 注册 | 普通 116/116 + 两套真实交互回归（旧 108 基线） | 已实现并验收 |
 | D3D 底层 proxy/bridge | proxy、注册、部署、诊断、绘制和 code 回调链基本跑通；P0/P1 兼容、部署和原生 session 基座已闭环 | 普通 108/108 + 累计 D3D 130/130 + 真实视觉/鼠标/Shift 交互 | **底层链路基本跑通，不是整体可用** |
 | D3D Lua SDK 与生命周期 | P2/P3 已提供 Font/Text/Texture 强类型 userdata、统一跨类型队列、D3DXFont alpha、`asset://`/`game://` 内存资源、共享 CPU cache、显式销毁、GC/`__close`、reload 和显式 session shutdown；尚无 Subscription、TTL、完整 device/reset 状态诊断和自动地图/VM 会话钩子 | 公共 SDK 功能 8 组 + shutdown 1 组实机通过；原生 ABI 1000 轮通过 | **SDK 开发中，不可作为完整用户 SDK 交付** |
-| 空白测试场景 | 64×64 空图 + 单个 10 级英雄火枪手确定性复位 | 普通 108/108 + D3D 130/130 + 真实窗口检查 | 可用；默认基座 |
+| 空白测试场景 | 64×64 空图 + 单个 10 级英雄火枪手确定性复位 | 普通 116/116 + D3D 130/130（旧基线） + 真实窗口检查 | 可用；默认基座 |
 | JASS wrapper 自动生成（E4） | 未实现 | 无 | 可选后续 |
 | SaveFunc / func_bind | 仅 `open_code_run_logs` stub | 无完整验收 | 未完成/可选 |
 
@@ -51,10 +51,13 @@
 - Lua -> JASS native 调用与 integer/real/string/handle/code 类型转换。
 - `jass.code(function)` -> JASS code，已通过 `TriggerAddAction` 往返测试。
 - 真 JASS string 转换、SEH 调用保护。
-- 协程 sleep 调度器。
+- 协程 sleep 调度器；2026-10-26 起用真实 trigger action 验证 suspend→resume（不是裸 timer callback）。
 - native hook/unhook 与 `orig` 闭包。
-- handle level 0/1/2、userdata 与 GC。
-- Lua 沙箱。
+- handle level 0/1/2、userdata 与 GC；0/1/2 往返和 level 2 GC 已纳入回归。
+- JASS -> Lua 的 UnitId 桥：`jass.japi` 注册时同时进入 native 表和 UnitId 分发；整数/字符串/布尔、`(Hplayer;)Hplayer;` 句柄、`()V` 回调和错误路由均已实测。
+- `jass.globals` 标量与数组写入已实测；`runtime.error_handle` 能接住 JASS 调 Lua handler 的错误。
+
+当前边界：`native Foo` + 运行时 `jass.japi` 注册在 callback 模式下不能作为 JASS 调用目标（JASS 已编译的 native 调用不会在运行时绑定到新注册项）；JASS→Lua 请走 UnitId 桥或 `jass.code`。`sleep()` 只在 `runtime.sleep = true` 且当前线程是 trigger/action thread 时可用；裸 timer callback 与纯 Lua 协程没有恢复路径。
 
 ### 2.4 非 D3D native（67/67 注册）
 
@@ -96,6 +99,7 @@ device reset 状态诊断、自动地图/VM session close 和同进程新地图�
 | 项目 | 当前证据 | 状态 / 完成条件 |
 |---|---|---|
 | `EXGetEventDamageData` / `EXSetEventDamage` | 真实 `EVENT_UNIT_DAMAGED` 中读取来源/目标/类型，20 点伤害改写为 7，并以 `GetEventDamage`、生命差和原生 7 点对照命中闭环验证；2 项自动测试通过 | **完成** |
+| JASS↔Lua 基础桥接 | `jass.japi` 注册同时进入 native 表和 UnitId 分发；JASS `main` 实测 `()V` 回调、`(II)I`=42、`(Hplayer;)Hplayer;` 句柄往返和错误进 `runtime.error_handle`；`jass.globals` 标量/数组写、handle level 0/1/2、level 2 GC、trigger-action sleep 均通过；普通回归 `116/116` | **完成（UnitId / trigger action 路线）**；JASS 侧 `native Foo` + 运行时注册在 callback 模式不可用；sleep 不适用于裸 timer callback/纯 Lua 协程 |
 | `LocalPointOrder` | bridge ABI 调用安全；真实前台 Q 键进入 `message.hook`（code 81），共享 submit 提交 `blizzard` 点命令并返回 `true`；`EVENT_UNIT_SPELL_EFFECT` 触发且技能 id 为 `AHbz`；清理诊断代码并重编译后交互套件为 `109/0/109` | **完成**；普通右键移动走 smart-click 包，不是该 API 的 point-order 契约，详见逆向记录 08 §7.3 |
 | `GetTargetObject` | `-InteractiveUi` 固定镜头创建敌方城镇大厅；真实鼠标点击/悬停后返回 handle `1050778`，与夹具 handle `1050778` 精确一致 | **完成** |
 | `SetUnitAbilityButtonShow` | 大法师 `AHbz` 命令卡槽从显示 `(0,2)` 变为隐藏 `nil,nil`，10 秒后自动恢复 `(0,2)`；真实窗口截图同时确认紫色暴风雪图标消失，交互套件为 `110/0/110` | **完成** |
@@ -107,13 +111,13 @@ device reset 状态诊断、自动地图/VM session close 和同进程新地图�
 | D3D 渲染隔离与产物溯源 | state-block 修复提交为 `8bba4ae`；P3 源码提交 `5dbcfd4` 从 detached clean worktree 以 Win32 Release 完整构建并实际部署。clean proxy、游戏目录 proxy 与 sidecar hash 均为 `CE3775261DDAE7DF1A6B6820E78EC47F8D7D9506E9368F4DD74084F0102BD13E`；clean `yd_japi.dll` hash 为 `8E5D7B18E18DC0667C33EF8C2025C39FA09CB45A6F7EE50AB592EED7D44E5AF4`；同一 clean build 通过 ABI/1000 轮、handler、普通 108/108、D3D 130/130 与真实视觉/鼠标/Shift | **P3 提交态产物闭环完成**；主工作区的非 D3D 修改未进入 detached commit |
 | D3D 卸载与会话清理 | 独立工具已在隔离目录验证幂等安装/验证/卸载、未知文件保护，并在真实游戏目录完成卸载→再次卸载→未安装验证→普通 108/108→从干净提交产物重装→hash 验证；原生 ABI 的显式 `end_session` 已验证三类资源批量归零和同进程旧 handle 失效，但仍无真实地图切换/VM 关闭钩子 | **部署生命周期与显式 native session 完成，自动会话生命周期未完成**；不能据此宣称 SDK 可用 |
 | D3D Lua SDK | `require "jass.d3d"` 返回 Font/Text/Texture 类；P2 对象层与 P3 统一渲染、alpha、asset URI/MPQ、共享 cache、reload 和失败合同均通过公共 fixture、原生合同与真实窗口；fixture 源码不调用裸 RPC | **SDK 仍在开发**；P4 Subscription、P5 完整生命周期/device、P6 文档与最终门槛仍未完成 |
-| 默认空白地图 | `reference/empty-map/` 的对象层为 0 个 doodad、0 个预放单位（仅保留起始点）；无 Melee 初始化；`Hrif` 继承英雄类型并在运行时设为 10 级；真实窗口确认中央仅 1 个英雄火枪手；普通 `108/108`、D3D `130/130` | **完成并设为默认** |
+| 默认空白地图 | `reference/empty-map/` 的对象层为 0 个 doodad、0 个预放单位（仅保留起始点）；无 Melee 初始化；`Hrif` 继承英雄类型并在运行时设为 10 级；真实窗口确认中央仅 1 个英雄火枪手；普通 `116/116`（2026-10-26）、D3D `130/130`（2026-08-03，旧基线） | **完成并设为默认** |
 | D3D P3 渲染与资源 | Text 使用动态加载的 D3DXFont 绘制 ARGB；Text/Texture 按 `z`、创建序进入同一队列；真实窗口验证 alpha/z。`asset://` PNG、BLP1 与 `game://` BLP 均从 MPQ/资源搜索链以字节缓冲加载；缺失、损坏、穿越和禁用 `file://` 返回稳定错误，失败不增加 handle/cache，失败的换源保留原对象。提交 `5dbcfd4` 的 detached clean build、ABI/handler、普通 108/108、D3D 130/130 和安装 hash 均通过 | **P3 完成**；BLP2 解码子集已有实现，但目标 1.27a 实机证据仅覆盖 BLP1，不把它表述为 BLP2 实机完成 |
 | D3D 后续主线 | P4 Subscription 与统一事件；P5 自动 session、TTL、device lost/reset 和完整压力/失败路径；P6 文档与最终验收 | **未完成，属于当前主线而非可选项** |
 
 ## 4. 验证入口
 
-普通实机回归（无人值守，当前结果为 108/108）：
+普通实机回归（无人值守，当前结果为 116/116）：
 
 ```powershell
 .\tools\deploy.ps1
@@ -126,7 +130,7 @@ LocalPoint 真实交互回归（War3 获得前台焦点后按 Q；默认保留�
 ```
 
 交互模式的成功条件不只是 hook 被调用或 submit 返回 `true`，还要求测试大法师实际触发
-`EVENT_UNIT_SPELL_EFFECT`，且 `GetSpellAbilityId()` 必须等于 `AHbz`。当前结果为 109/109。
+`EVENT_UNIT_SPELL_EFFECT`，且 `GetSpellAbilityId()` 必须等于 `AHbz`。上次结果为 109/109（旧 108 基线；本次未重跑）。
 
 鼠标目标与技能按钮 UI 回归（鼠标指向/点击镜头中央的敌方城镇大厅；显示阶段按一次 Q，
 隐藏保持 10 秒后自动恢复）：
@@ -136,7 +140,7 @@ LocalPoint 真实交互回归（War3 获得前台焦点后按 Q；默认保留�
 ```
 
 成功条件是 `GetTargetObject` 返回值与城镇大厅 handle 精确相等，并且 `AHbz` 在命令卡中
-依次呈现 `(0,2) -> nil,nil -> (0,2)`。当前结果为 110/110。
+依次呈现 `(0,2) -> nil,nil -> (0,2)`。上次结果为 110/110（旧 108 基线；本次未重跑）。
 
 D3D proxy 实机回归（鼠标移入棋盘后按一次 Shift，再移到棋盘外；成功后脚本自动读取日志并关闭 War3）：
 
@@ -148,7 +152,7 @@ D3D proxy 实机回归（鼠标移入棋盘后按一次 Shift，再移到棋盘�
 
 该入口先运行只调用 `jass.d3d` 的公共 SDK fixture，再运行底层兼容 fixture。成功条件包括三类 userdata 的属性、
 依赖、销毁、GC/`__close`、地图 MPQ PNG/BLP1 与游戏 BLP、共享 cache/失败合同、显式混合资源 shutdown，以及
-进程内状态位、JASS bridge、真实渲染、鼠标和 Shift 回调。当前结果为累计 130/130：普通基线 108 项 + 公共 SDK
+进程内状态位、JASS bridge、真实渲染、鼠标和 Shift 回调。上次结果为累计 130/130：普通基线 108 项 + 公共 SDK
 功能 8 组 + 底层 bridge 13 组 + SDK shutdown 1 组。P3 视觉面板还要求 low text 被同 z 后创建贴图遮住、high text
 可见，并且 100%/50%/0% 文字分别为不透明、半透明和不可见，同时显示直接来自地图包的棋盘 PNG。54 个兼容名字
 中底层 fixture 仍只触达 27 个，不能解释为 130 个 D3D API 或完整覆盖。由于目标 War3 以提权进程运行，非提权部署进程
@@ -176,6 +180,7 @@ worktree 的 provenance 命令；本次 clean 构建因此在该 worktree 内使
 
 ## 5. 下一阶段顺序
 
+0. JASS↔Lua 基础桥接（2026-10-26 完成）：UnitId Lua handler、错误路由、整数/字符串/句柄 ABI、globals 写、handle 级别/GC、trigger-action sleep 已纳入普通回归 116/116；JASS 侧运行时声明 native 的路线不纳入支持面。
 1. P3（完成）：统一 render queue、D3DXFont/文字 alpha、`asset://`/`game://`、MPQ BLP1/PNG、共享 cache、加载失败合同与提交态 provenance 均已闭环。
 2. P4：实现 Subscription 与统一鼠标/键盘/enter/leave/click 事件，替代两套 texture 身份。
 3. P5：补齐 Lua VM/地图自动 session 清理、TTL、device lost/reset、同进程新会话、失败路径和压力/soak 验收。
