@@ -354,5 +354,9 @@
    构建、重新部署并回读一致 hash；
 6. **已完成**：proxy、探针和 sidecar 的安全幂等卸载、未知文件保护，以及卸载后普通非 D3D 启动；
 7. **已完成 P1/P2**：版本化 session/generation ABI 与 `jass.d3d` Font/Text/Texture 基础 userdata；
-8. **后续主线**：进入 [D3D-LUA-SDK-DESIGN.md](D3D-LUA-SDK-DESIGN.md) 的 P3-P6：统一 render queue、
-   MPQ asset、Subscription、自动 session、device reset、完整 GC/失败路径和文档验收。
+8. **已完成**：进入 [D3D-LUA-SDK-DESIGN.md](D3D-LUA-SDK-DESIGN.md) 的 P3-P6——统一 render queue、
+   MPQ asset、Subscription、自动 session、device reset、完整 GC/失败路径和文档验收（逐项证据见该文 15.8）；
+9. **已完成（P6）**：提交 `04f6b7e` 的 detached clean worktree 重建与 hash 回读，clean proxy SHA-256 为
+   `89C41C0F133E17A13C8899E343A27EE9879F60D228F2FBEB9AC92904D896879A`，游戏目录 proxy 与 sidecar
+   回读一致（见该文 14.4）。注意游戏目录内直接跑 `d3d-proxy.ps1 -Verify` 需要本地 `D3DX9_42.dll`，
+   而 `deploy.ps1` 从系统目录解析，这是两者口径差异，不影响运行。

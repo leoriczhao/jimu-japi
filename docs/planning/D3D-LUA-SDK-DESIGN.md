@@ -1,9 +1,11 @@
 # D3D Lua SDK 与完整生命周期设计
 
-> 状态：P0-P5.1 已闭环；Font/Text/Texture、统一 render queue、D3DXFont/文字 alpha、asset URI/MPQ、
-> 加载失败合同、Subscription/统一输入（真实鼠标键盘）、TTL、device 世代/lost/reset 事件、生命周期订阅与
-> 地图级 VM 重置均已实机通过。P6 文档三项已交付，§15 剩余两项门槛（BLP2 实机证据、D3D handler 覆盖 27/54）
-> 已于 2026-11-15 补齐（handler 54/54，结论见 15.8）。唯一无法在 1.27a 窗口模式观测的是 device_lost 事件本身。
+> 状态：P0–P6 已闭环，D3D Lua SDK 记录为「可用」（2026-11-15）。Font/Text/Texture、统一 render queue、
+> D3DXFont/文字 alpha、asset URI/MPQ、加载失败合同、Subscription/统一输入（真实鼠标键盘）、TTL、device
+> 世代/lost/reset 事件、生命周期订阅与地图级 VM 重置均已实机通过；§15 两项门槛（BLP2 实机证据、handler
+> 覆盖）已闭合（handler 54/54，BLP2 raw/palette/DXT1 + 坏编码，结论见 15.8）。发布产物来自提交 `04f6b7e`
+> 的 detached clean worktree，构建、部署与 sidecar hash 一致（见 14.4），因此 §16 的 13 项完成定义全部满足。
+> 唯一无法在 1.27a 窗口模式观测的是 device_lost 事件本身。
 >
 > 本文是面向地图作者的 D3D Lua SDK 实现契约和验收标准。底层 proxy 的加载、转发、部署与历史验证仍见
 > [D3D-PROXY-DESIGN.md](D3D-PROXY-DESIGN.md)；项目当前完成度只以
@@ -40,12 +42,18 @@ P5 补上 TTL、device 状态诊断（<code>device_generation</code>/<code>lost_
 <code>resize</code> 事件和 20 次真实 device reset（generation 1→21），过程中 Font/Text/Texture 的句柄、内容、位置、
 尺寸与订阅全部保持；TTL 0.15s 的 Text 在跑帧下自动释放且计数回落。与底层 bridge 合计后的日志为 147 项测试
 （116 普通基线 + 31 D3D 侧），不是 D3D API 数。<code>device_lost</code> 在 1.27a 窗口模式下不可观测（lost 与 reset
-同帧完成），自动地图/VM 生命周期、同进程换图与 P6 文档/最终验收仍未完成。
+同帧完成），自动地图/VM 生命周期、同进程换图与 P6 文档/最终验收当时仍未完成（这些项此后已全部补齐，
+见本节末段与 14.4）。
 
 当前用户已经可以只通过 <code>jass.d3d</code> 创建、修改和销毁字体、文字或 MPQ/游戏资源贴图，不再需要复制
 私有 RPC helper，也不依赖开发机绝对路径。与此同时，<code>jass.message.texture_*</code> 又维护一套不参与真实
 渲染的逻辑矩形；两套入口的对象身份、事件和生命周期并不统一，自动 session/device 生命周期也未闭环。因此
-仍不能把整个 SDK 标记为可交付。
+当时仍不能把整个 SDK 标记为可交付。
+
+2026-11-15 更新：以上三段描述的是 P2–P5 阶段的状态。此后两套贴图身份统一到 Subscription；地图级 VM 重置
+补齐了自动 session 生命周期（`-TestReboot` 8/8，见 [STATUS.md](../STATUS.md)）；P6 的三份用户文档与
+§15.8 门槛结论已交付；发布产物追溯到提交 `04f6b7e` 的 detached clean worktree，构建、部署与 sidecar hash
+一致（14.4）。§15 全部门槛与 §16 的 13 项完成定义均已满足，`STATUS.md` 现记录为「可用」，保留限制见 15.8.4。
 
 本阶段的目标不是再增加几个 bridge handler，而是交付一个稳定、可诊断、可清理、可写进用户文档的
 <code>jass.d3d</code> SDK。只有本文第 15 节的所有完成门槛同时满足后，D3D Lua SDK 才能标记为“可用”。
@@ -761,6 +769,53 @@ PNG/alpha/z/鼠标/Shift 验收全部通过，累计 130/130；游戏目录 prox
 <code>build/d3d/5dbcfd4-yd_japi.dll</code>。这完成 P3，但不替代 P4 Subscription 与 P6 文档/最终验收；
 P5 的 TTL 与 device 生命周期见 14.3。
 
+### 14.4 P6 提交态产物溯源（2026-11-15）
+
+SDK 的发布产物来自提交 `04f6b7e`（`test(d3d): cover all 54 compatibility handlers and prove BLP2 decoding`）。
+该提交的 detached clean worktree 由 `git worktree add --detach build/clean-04f6b7e 04f6b7e` 建立：
+构建前 `HEAD` 精确等于 `04f6b7e`、`git status --porcelain` 为空、tracked diff 为零，构建后仅新增被忽略的
+`build/` 目录。由于 `src/build.bat` 固定切换到主工作区绝对路径，clean 构建同样使用 vcvars32 环境下的等价命令：
+
+~~~powershell
+git worktree add --detach build\clean-04f6b7e 04f6b7e
+cd build\clean-04f6b7e\src
+cmd /c ""D:\vs2022\BuildTools\VC\Auxiliary\Build\vcvars32.bat" >nul && cmake -S . -B build-clean -G "Visual Studio 17 2022" -A Win32 && cmake --build build-clean --config Release"
+~~~
+
+产物与 hash：
+
+| 产物 | 大小 | clean worktree SHA-256 |
+|---|---:|---|
+| `newD3d9.dll`（proxy） | 90112 | `89C41C0F133E17A13C8899E343A27EE9879F60D228F2FBEB9AC92904D896879A` |
+| `yd_japi.dll` | 544768 | `E87148EAB987A23029527909437F6721A0C78FF8872C172F86E87DAD821FE763` |
+| `d3d_sdk_contract_test.exe` | 23040 | `9FF2EEE6FF126149F9AFD0B6D8BD86CDE90AEC784A1D9DC9FD480CB118227526` |
+
+这组 clean 产物（不是主工作区产物）实际部署后跑了五组验证：
+
+- 原生 ABI 合同：`D3D SDK contract PASS: ABI v1, sessions, generation handles, dependencies,
+  alpha/z/assets/input capabilities, failure counters, stress=1000`。
+- handler 静态合同（在 clean worktree 内执行）：`D3D contract PASS: surface=54, proxy=49,
+  canonical=5, fixture=54/54, untested=0`。
+- 普通回归：`116 passed, 0 failed, 116 total`。
+- 交互 D3D：`164 passed, 0 failed, 164 total`，含 `D3D SDK BLP2 memory decode (raw/palette/DXT1)` 与
+  `resize=20 (target 20) lost=0 reset=19`，日志归档 `build/p6-164-clean.log`。
+- 地图级 VM 重置：`8 passed, 0 failed, 8 total`。
+
+部署显式传入两份 clean DLL（`-DllPath` 与 `-D3DProxyPath`）。部署后回读游戏目录 `d3d9.dll` 与
+`.japi_d3d_proxy.sha256` 均为 `89C41C0F133E17A13C8899E343A27EE9879F60D228F2FBEB9AC92904D896879A`，
+探针 sidecar `.japi_d3d_probe.sha256` 为 `952B23437A15F2C65AA9C114920533E63D278D1765B70DA0EC5E709D153EAE6B`。
+同一提交在主工作区的构建 hash 不同（proxy `7D3063B6A3C52DC91A084F9002A4AB0678AE2E0D6CBFE2B4ABF63567876986D5`、
+`yd_japi.dll` `57E03E99BCFD6507A9B78EF5447FF611DF9C7787743A15B3F3AA7055440E67BE`），所以"部署用的就是
+clean 产物"以游戏目录回读值为准。发布候选副本保存在忽略目录 `build/d3d/04f6b7e-newD3d9.dll` 与
+`build/d3d/04f6b7e-yd_japi.dll`。
+
+一个工具差异需要记录：在游戏目录直接跑 `tools/d3d-proxy.ps1 -Verify` 会以
+`D3DX9_42.dll is required: <game dir>\D3DX9_42.dll` 失败，因为该脚本要求游戏目录内有本地 D3DX9_42.dll，
+而 `deploy.ps1` 是从 SysWOW64/System32 解析运行时依赖。本次回读因此使用 `Get-FileHash` 加 sidecar 文件，
+而不是 `-Verify`；这不影响运行（游戏照常加载代理，进程内状态位达到 `0x7F`）。
+
+这一步闭合 §16 第 13 项，`STATUS.md` 因此把 D3D Lua SDK 与生命周期记录为「可用」。
+
 ## 15. 验收标准
 
 > 本节是最终交付门槛。P0–P5 已通过项的实测证据见 §14、14.3 与 [STATUS.md](../STATUS.md)；
@@ -984,6 +1039,10 @@ D3D Lua SDK 只有同时满足以下条件才可在 <code>STATUS.md</code> 标�
 
 任何一项未满足时，只能写“底层链路基本跑通”或“SDK 开发中”，不得写“D3D 可用”。
 
-2026-11-15 状态：第 1–12 项已满足，证据见 §15（含 §15.8 的门槛结论）；第 13 项要求本批测试与文档改动
-先进入提交，再用 detached clean worktree 重建并回读构建、部署与 sidecar hash。因此在完成该提交与 clean 构建之前，
-<code>STATUS.md</code> 的记录是“P0–P6 闭环，可作为 SDK 发布候选”，不写“D3D 可用”。
+2026-11-15 状态：13 项全部满足。第 1–12 项的证据见 §15（含 §15.8 的门槛结论）；第 13 项由提交
+<code>04f6b7e</code> 的 detached clean worktree 闭环——构建前 HEAD 精确为该提交且 tracked diff 为零，clean proxy
+SHA-256 为 <code>89C41C0F133E17A13C8899E343A27EE9879F60D228F2FBEB9AC92904D896879A</code>、clean
+<code>yd_japi.dll</code> SHA-256 为 <code>E87148EAB987A23029527909437F6721A0C78FF8872C172F86E87DAD821FE763</code>，
+部署后游戏目录 proxy 与 sidecar 回读同为 clean proxy hash，并用该产物复跑交互 164/164、普通 116/116、
+地图级 VM 重置 8/8（见 14.4）。因此 <code>STATUS.md</code> 将该行记录为“可用”；15.8.4 的保留限制
+（<code>device_lost</code> 不可观测、<code>ShowFpsText</code> 弱断言、覆盖口径）继续有效。
