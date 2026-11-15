@@ -114,7 +114,7 @@ local run_checks = function()
         assert(panel.click_sub:cancel(), "第二次 cancel 失败（不是幂等）")
         assert(not panel.click_sub:is_active(), "取消后仍然 active")
         assert(d3d.stats().subscriptions == state.baseline,
-            "取消后 subscriptions = " .. tostring(d3d.stats().subscriptions()))
+            "取消后 subscriptions = " .. tostring(d3d.stats().subscriptions))
     end)
 
     check("模块级 d3d.on(\"resize\") 订阅可创建、可取消", function()

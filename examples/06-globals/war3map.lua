@@ -9,6 +9,9 @@
 -- 预期日志  : 若干 [PASS] 行，末尾一行 Results 行且 failed 为 0（本示例 5 项）
 -- 说明      : 数组被 pack.ps1 强制预分配（每个 declared array 先自赋值 [8191]），
 --             所以 #arr == 8192；打包时加 -NoArrayPrealloc 就没有这个保证。
+-- 时序      : JASS 数组全局在加载阶段还没有数组块（#arr == 0、元素读 nil、写进去会被丢掉），
+--             要等地图初始化跑完才可用；所以示例把数组 I/O 放进 1.0s 的一次性 timer，
+--             检查在 1.2s。标量全局（udg_lua_test_value）加载时就能读写。
 -- 验证状态  : 2026-11-16 静态 + 打包验证通过（tools\verify-examples.ps1）
 -- ============================================================
 
@@ -35,7 +38,14 @@ local function poke_globals()
     globals.udg_lua_test_string_array[CONFIG.label_index] = CONFIG.label
 end
 
-poke_globals()
+-- 注意：数组全局在加载阶段还没有数组块（#arr == 0，元素读 nil，写进去会被丢掉），
+-- 要等地图初始化跑完才可用，所以数组 I/O 放进一个 1.0s 的一次性 timer；
+-- 标量全局不走这个限制，加载时直接赋值就行。
+local poke_timer = jass.CreateTimer()
+jass.TimerStart(poke_timer, 1.0, false, function()
+    jass.DestroyTimer(poke_timer)
+    poke_globals()
+end)
 
 -- ============ 以下为示例自检，粘到自己地图时可以删掉 ============
 
@@ -60,33 +70,43 @@ local function finish()
     print("========================================")
 end
 
-check("jass.globals 已加载", function()
-    assert(type(globals) == "table", "globals 不是 table: " .. type(globals))
-end)
+-- 数组检查必须在 1.0s 的 poke_globals() 跑完之后：仓库实测加载阶段数组块还没分配，
+-- 这里用 1.2s 再起一次，给 1.0s 那次留 200ms 余量。
+local function run_checks()
+    check("jass.globals 已加载", function()
+        assert(type(globals) == "table", "globals 不是 table: " .. type(globals))
+    end)
 
-check("标量全局可写可读", function()
-    globals.udg_lua_test_value = 4242
-    assert(globals.udg_lua_test_value == 4242,
-        "读回 " .. tostring(globals.udg_lua_test_value))
-end)
+    check("标量全局可写可读", function()
+        globals.udg_lua_test_value = 4242
+        assert(globals.udg_lua_test_value == 4242,
+            "读回 " .. tostring(globals.udg_lua_test_value))
+    end)
 
-check("整型数组元素可写可读", function()
-    globals.udg_lua_test_array[5] = 909
-    assert(globals.udg_lua_test_array[5] == 909,
-        "读回 " .. tostring(globals.udg_lua_test_array[5]))
-    assert(globals.udg_lua_test_array[CONFIG.array_index] == CONFIG.array_value,
-        "下标 " .. CONFIG.array_index .. " 被别的写入影响")
-end)
+    check("整型数组元素可写可读", function()
+        globals.udg_lua_test_array[5] = 909
+        assert(globals.udg_lua_test_array[5] == 909,
+            "读回 " .. tostring(globals.udg_lua_test_array[5]))
+        assert(globals.udg_lua_test_array[CONFIG.array_index] == CONFIG.array_value,
+            "下标 " .. CONFIG.array_index .. " 被别的写入影响")
+    end)
 
-check("字符串数组可写可读", function()
-    globals.udg_lua_test_string_array[9] = "abc"
-    assert(globals.udg_lua_test_string_array[9] == "abc",
-        "读回 " .. tostring(globals.udg_lua_test_string_array[9]))
-end)
+    check("字符串数组可写可读", function()
+        globals.udg_lua_test_string_array[9] = "abc"
+        assert(globals.udg_lua_test_string_array[9] == "abc",
+            "读回 " .. tostring(globals.udg_lua_test_string_array[9]))
+    end)
 
-check("数组被 pack.ps1 预分配为 8192 个槽位", function()
-    local n = #globals.udg_lua_test_array
-    assert(n == 8192, "数组长度 " .. tostring(n))
+    check("数组被 pack.ps1 预分配为 8192 个槽位", function()
+        local n = #globals.udg_lua_test_array
+        assert(n == 8192, "数组长度 " .. tostring(n))
+    end)
+end
+
+local check_timer = jass.CreateTimer()
+jass.TimerStart(check_timer, 1.2, false, function()
+    jass.DestroyTimer(check_timer)
+    run_checks()
 end)
 
 local finish_timer = jass.CreateTimer()

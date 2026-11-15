@@ -21,7 +21,7 @@
     -OutFile build\scratch\ex-10\out.w3x -WithGetFuncAddr
 
 # 3) 进游戏，等 Results 行
-.\tools\deploy.ps1 -MapDir examples\10-getfunc-addr -MapName vx-undefined.w3x -WithGetFuncAddr
+.\tools\deploy.ps1 -MapDir examples\10-getfunc-addr -MapName vx-10-getfunc-addr.w3x -WithGetFuncAddr
 ```
 
 日志在 `C:\ProgramData\japi_debug.txt`；如果那个文件被占用，DLL 会退化成
@@ -43,6 +43,7 @@
 ```
 
 - 健康环境 **6 passed / 0 failed / 6 total**；不带开关时 **0 passed / 1 failed / 1 total**。
+- 时序：探针是打包时注入的 **2.20s 一次性 timer**（`tools\pack.ps1:327`），到点才填 `udg_lua_getfunc_*`；示例把全部检查放到 `2.6s` 的一次性 timer 里跑。加载时就检查只会读到 `udg_lua_getfunc_ready = 0`（实测 0/6 passed）。
 
 ## 代码要点
 
@@ -67,7 +68,7 @@
 | 文件结构、`Results` 格式（恰好一行、可被 `Results:.*total` 解析） | **已验证**：`tools\verify-examples.ps1` 静态检查通过 |
 | 用到的 `jass.*` 模块全部可 `require`、API 调用在仓库内有出处 | **已验证**：逐个符号在 `map\` / `docs\guide\` / `src\` 里检索到 |
 | `-MapDir` 打包产出非平凡 w3x | **已验证**：`tools\verify-examples.ps1` 打包通过 |
-| 游戏内 `0 failed` 的实跑结果 | **未验证（本文件写作时）**：由 `tools\verify-examples.ps1 -Live` 串行跑，结果记到 `docs\RELEASE.md` 的发布记录 |
+| 游戏内 `0 failed` 的实跑结果 | **已验证**：2026-11-16 `tools\verify-examples.ps1 -Live` 实机跑出 `Results: 6 passed, 0 failed, 6 total`（6/6，DLL `87C83BA1…`）。与另外几个示例**不在同一批**跑完：另一会话占了 war3 单实例锁和共享日志，重跑时被打断，撞车原因见 `examples\README.md` 的「-Live 撞车」一节 |
 
 风险与注意事项：
 

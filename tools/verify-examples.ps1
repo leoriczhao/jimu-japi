@@ -3,12 +3,22 @@
 #
 #   static : manifest shape, file layout, the A/B/C markers, the single
 #            " Results: <N> passed, <M> failed, <T> total" contract, self-contained requires
+#   lua    : when a luac.exe is available ($env:LUAC, build\scratch\luac\luac.exe, or luac on
+#            PATH) every examples\<dir>\war3map.lua is parsed with "luac -p"; a chunk that does
+#            not compile is a [static] failure with luac output quoted. No luac -> one
+#            "  [skip] luac not found" line and the other checks still run.
+#            Build one in seconds with tools\build-luac.ps1.
 #   pack   : tools/pack.ps1 -MapDir examples\<dir> -WorkDir build\scratch\ex-<id>\work
 #            -OutFile build\scratch\ex-<id>\out.w3x (+ -WithJassWrappers / -WithGetFuncAddr
 #            from the manifest), then assert the w3x looks like a real map
 #   live   : tools/deploy.ps1 -MapDir ... -MapName vx-<id>.w3x -Timeout <timeout>, then read
 #            C:\ProgramData\japi_debug*.txt, take the LAST "Results:" line of this run and
 #            require failed == 0 and total >= 3. Serial: one war3.exe at a time.
+#            EXCLUSIVE: -Live needs the whole machine to itself. No war3.exe when a run
+#            starts, and no other deploy session while it runs - C:\ProgramData\japi_debug.txt
+#            (plus the per-pid *_<pid>.txt fallback) and <War3Dir>\Maps\Test\ are shared.
+#            Another session's Remove-Item of the log makes this script see
+#            "[live] no fresh Results line" even though the example did print its [PASS] lines.
 #
 # Usage:
 #   .\tools\verify-examples.ps1                     # static + pack (game not touched)
@@ -80,6 +90,97 @@ function Get-MapMagic {
     }
 }
 
+function Get-LuacPath {
+    # Optional Lua syntax checker. Lookup order: $env:LUAC, the throwaway build from
+    # tools\build-luac.ps1, then whatever luac is on PATH. Returns '' when none is found;
+    # the caller prints a [skip] line and the run continues (missing luac is never a failure).
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrEmpty($env:LUAC)) {
+        $candidates.Add($env:LUAC)
+        $command = Get-Command $env:LUAC -ErrorAction SilentlyContinue
+        if ($command -and $command.Source) { $candidates.Add($command.Source) }
+    }
+    $candidates.Add((Join-Path $Root 'build\scratch\luac\luac.exe'))
+    foreach ($name in @('luac.exe', 'luac', 'luac5.4')) {
+        $command = Get-Command $name -ErrorAction SilentlyContinue
+        if ($command -and $command.Source) { $candidates.Add($command.Source) }
+    }
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrEmpty($candidate)) { continue }
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return (Resolve-Path -LiteralPath $candidate).Path }
+    }
+    return ''
+}
+
+function Test-LuaSyntax {
+    # Returns '' when the chunk parses, otherwise luac's own message, one line long, with the
+    # bare file name rewritten to the repo-relative path, e.g.
+    # "examples\06-globals\war3map.lua:119: unexpected symbol near <eof>".
+    #
+    # Two details matter for the message to survive PowerShell 5.1:
+    #  - stderr is captured through System.Diagnostics.Process (RedirectStandardError). The call
+    #    operator turns native stderr into an ErrorRecord that PowerShell renders with its own
+    #    column wrapping delimited by CR/LF, which used to leave us with a truncated
+    #    "luac.exe : C:\...: war" instead of the real message.
+    #  - luac runs with the example directory as the working directory and a bare file name,
+    #    because Lua shortens long chunk names in its error text ("...ktrees\...").
+    param([string]$LuacPath, [string]$LuaPath, [string]$DisplayPath)
+    $leaf = Split-Path -Leaf $LuaPath
+    $workDir = Split-Path -Parent $LuaPath
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $LuacPath
+    $startInfo.Arguments = '-p "' + $leaf + '"'
+    $startInfo.WorkingDirectory = $workDir
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    $exitCode = 1
+    $text = ''
+    try {
+        [void]$process.Start()
+        $stdoutText = $process.StandardOutput.ReadToEnd()
+        $stderrText = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        $exitCode = $process.ExitCode
+        if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+            $text = $stderrText.Trim()
+        } else {
+            $text = $stdoutText.Trim()
+        }
+    } catch {
+        if (-not $process.HasExited) {
+            try { $process.Kill() } catch { }
+        }
+        return 'could not run luac: ' + $_.Exception.Message
+    } finally {
+        $process.Dispose()
+    }
+    if ($exitCode -eq 0) { return '' }
+    if ($text -eq '') { return 'luac -p exited with ' + $exitCode + ' and printed nothing' }
+    # Keep one line only; luac's first line is the diagnostic (any following lines are the
+    # same text repeated by the compiler).
+    $lines = @($text -split '\r?\n')
+    $message = [string]$lines[0]
+    $message = $message.Trim()
+    # Drop a leading program prefix if luac used one: luac derives its progname from argv[0],
+    # and Process.Start hands it the full exe path, so the raw text starts with something like
+    # "C:\...\build\scratch\luac\luac.exe: war3map.lua:119: ...".
+    $prefix = [regex]::Match($message, '^(.*?[\\/])?(luac|lua)[A-Za-z0-9_.-]*(\.exe)?:\s+')
+    if ($prefix.Success -and $prefix.Length -lt 260) {
+        $message = $message.Substring($prefix.Length)
+    }
+    # Rewrite the chunk name (bare leaf, absolute path or lua-shortened form) to DisplayPath.
+    if ($message.StartsWith($leaf)) {
+        $message = $DisplayPath + $message.Substring($leaf.Length)
+    } elseif ($message.StartsWith($LuaPath)) {
+        $message = $DisplayPath + $message.Substring($LuaPath.Length)
+    }
+    return $message
+}
+
 function New-ExampleResult {
     param($Example)
     return [pscustomobject]@{
@@ -103,7 +204,7 @@ function Add-Note {
 # ---------------------------------------------------------------- static
 
 function Test-ExampleStatic {
-    param($Example, [string[]]$PackSwitches, [string[]]$DeploySwitches)
+    param($Example, [string[]]$PackSwitches, [string[]]$DeploySwitches, [string]$LuacPath = '')
 
     $errors = @()
     $dir = Join-Path $ExamplesDir ([string]$Example.dir)
@@ -188,6 +289,14 @@ function Test-ExampleStatic {
                 $errors += "line $($i + 1): require ""$name"" must live inside the pasteable section"
             }
         }
+    }
+
+    # Lua syntax (optional). pjass only parses war3map.j and everything above is structural,
+    # so an uncompilable chunk (for example a missing paren that pack.ps1 happily bundles) would
+    # otherwise only surface as "no Results line" in a live run. Quote luac's own message verbatim.
+    if (-not [string]::IsNullOrEmpty($LuacPath)) {
+        $syntaxError = Test-LuaSyntax -LuacPath $LuacPath -LuaPath $luaPath -DisplayPath ('examples\' + [string]$Example.dir + '\war3map.lua')
+        if ($syntaxError -ne '') { $errors += 'luac -p failed: ' + $syntaxError }
     }
 
     return $errors
@@ -410,6 +519,12 @@ if ($Filter -ne '') {
 }
 $idsText = ($selected | ForEach-Object { $_.id }) -join ' '
 Write-Host "  examples=$($selected.Count) of $($allExamples.Count): $idsText"
+$luacPath = Get-LuacPath
+if ($luacPath -eq '') {
+    Write-Host '  [skip] luac not found - see tools\build-luac.ps1 for a one-shot build'
+} else {
+    Write-Host "  luac: $luacPath"
+}
 
 $packSwitches = @(Get-SwitchNames -Path $PackScript)
 $deploySwitches = @(Get-SwitchNames -Path $DeployScript)
@@ -436,14 +551,14 @@ if ($Live) {
         $alreadyInstalled = $false
         if ((Test-Path -LiteralPath $installed -PathType Leaf) -and (Test-Path -LiteralPath $sidecar -PathType Leaf)) {
             $ownedHashPre = (Get-Content -LiteralPath $sidecar -Raw -Encoding ASCII).Trim().ToUpperInvariant()
-            if ($ownedHashPre -eq (Get-Sha256 -Path $installed)) {
-                $probeText = ''
-                try { $probeText = (& $D3DProxyScript -Verify -War3Dir $War3Dir *>&1) -join ' ' } catch { $probeText = $_.Exception.Message }
-                if ($probeText -match 'InstalledAndVerified') { $alreadyInstalled = $true }
-            }
+            # Ownership is proven by the sidecar hash: that is literally the file we ship. -Verify is
+            # only a bonus probe - it needs D3DX9_42.dll next to war3.exe and fails on a good install
+            # when that DLL lives in SysWOW64/System32 instead (see docs/STATUS.md), so a -Verify miss
+            # must never trigger a reinstall or a hard failure here.
+            if ($ownedHashPre -eq (Get-Sha256 -Path $installed)) { $alreadyInstalled = $true }
         }
         if ($alreadyInstalled) {
-            Write-Host "  [ok] d3d9 proxy already installed and verified in $War3Dir; leaving it alone"
+            Write-Host "  [ok] d3d9 proxy already installed in $War3Dir (sidecar hash agrees); leaving it alone"
         } else {
             $running = @(Get-Process -Name war3 -ErrorAction SilentlyContinue)
             if ($running.Count -gt 0) {
@@ -490,11 +605,14 @@ if ($Live) {
         }
         $verifyText = ''
         try { $verifyText = (& $D3DProxyScript -Verify -War3Dir $War3Dir *>&1) -join ' ' } catch { $verifyText = $_.Exception.Message }
-        if ($verifyText -notmatch 'InstalledAndVerified') {
+        if ($verifyText -match 'InstalledAndVerified') {
+            Write-Host '  [ok] d3d-proxy.ps1 -Verify: InstalledAndVerified'
+        } elseif ($alreadyInstalled) {
+            Write-Host "  [warn] d3d-proxy.ps1 -Verify did not report InstalledAndVerified; the d3d9.dll hash and its sidecar agree, so the proxy is ours (-Verify needs D3DX9_42.dll next to war3.exe): $verifyText"
+        } else {
             Write-Host "[fail] d3d-proxy.ps1 -Verify did not report InstalledAndVerified: $verifyText"
             exit 1
         }
-        Write-Host '  [ok] d3d-proxy.ps1 -Verify: InstalledAndVerified'
     }
 }
 
@@ -505,7 +623,7 @@ foreach ($example in $selected) {
     Write-Host ''
     Write-Host "[$($example.id)] $($example.title)"
 
-    $staticErrors = @(Test-ExampleStatic -Example $example -PackSwitches $packSwitches -DeploySwitches $deploySwitches)
+    $staticErrors = @(Test-ExampleStatic -Example $example -PackSwitches $packSwitches -DeploySwitches $deploySwitches -LuacPath $luacPath)
     if ($staticErrors.Count -eq 0) {
         $result.Static = 'ok'
         Write-Host '  [static] ok'
@@ -541,14 +659,14 @@ foreach ($example in $selected) {
             Write-Host '  [live] skipped: manifest live=false'
         } else {
             try {
-                $live = Invoke-ExampleLive -Example $example
-                if ($live.Ok) {
+                $liveResult = Invoke-ExampleLive -Example $example
+                if ($liveResult.Ok) {
                     $result.Live = 'ok'
-                    Write-Host "  [live] ok ($($live.Note))"
+                    Write-Host "  [live] ok ($($liveResult.Note))"
                 } else {
                     $result.Live = 'fail'
-                    Write-Host "  [live] $($live.Note)"
-                    Add-Note -Result $result -Text $live.Note
+                    Write-Host "  [live] $($liveResult.Note)"
+                    Add-Note -Result $result -Text $liveResult.Note
                 }
                 $stillRunning = @(Get-Process -Name war3 -ErrorAction SilentlyContinue)
                 if ($stillRunning.Count -gt 0) {

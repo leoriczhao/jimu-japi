@@ -22,7 +22,7 @@
     -OutFile build\scratch\ex-08\out.w3x
 
 # 3) 进游戏，等 Results 行
-.\tools\deploy.ps1 -MapDir examples\08-d3d-subscription -MapName vx-undefined.w3x
+.\tools\deploy.ps1 -MapDir examples\08-d3d-subscription -MapName vx-08-d3d-subscription.w3x
 ```
 
 日志在 `C:\ProgramData\japi_debug.txt`；如果那个文件被占用，DLL 会退化成
@@ -71,7 +71,7 @@
 | 文件结构、`Results` 格式（恰好一行、可被 `Results:.*total` 解析） | **已验证**：`tools\verify-examples.ps1` 静态检查通过 |
 | 用到的 `jass.*` 模块全部可 `require`、API 调用在仓库内有出处 | **已验证**：逐个符号在 `map\` / `docs\guide\` / `src\` 里检索到 |
 | `-MapDir` 打包产出非平凡 w3x | **已验证**：`tools\verify-examples.ps1` 打包通过 |
-| 游戏内 `0 failed` 的实跑结果 | **未验证（本文件写作时）**：由 `tools\verify-examples.ps1 -Live` 串行跑，结果记到 `docs\RELEASE.md` 的发布记录 |
+| 游戏内 `0 failed` 的实跑结果 | **已验证**：2026-11-16 `tools\verify-examples.ps1 -Live` 实机跑出 `Results: 7 passed, 0 failed, 7 total`（7/7，DLL `87C83BA1…`）。与另外几个示例**不在同一批**跑完：另一会话占了 war3 单实例锁和共享日志，重跑时被打断，撞车原因见 `examples\README.md` 的「-Live 撞车」一节 |
 
 风险与注意事项：
 
