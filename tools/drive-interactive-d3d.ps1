@@ -104,6 +104,15 @@ function Wait-Marker([string]$pattern, [int]$timeoutSec) {
     return $false
 }
 
+function Wait-Foreground([IntPtr]$h, [int]$tries) {
+    for ($i = 0; $i -lt $tries; $i++) {
+        $null = [JapiDrive]::Focus($h)
+        Start-Sleep -Milliseconds 150
+        if ([JapiDrive]::GetForegroundWindow() -eq $h) { return $true }
+    }
+    return $false
+}
+
 function Invoke-KeyTap([byte]$vk) {
     [JapiDrive]::keybd_event($vk, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 90
     [JapiDrive]::keybd_event($vk, 0, 2, [IntPtr]::Zero); Start-Sleep -Milliseconds 90
@@ -117,12 +126,11 @@ if (-not $proc) { Write-Output "FAIL: no war3 process"; exit 2 }
 $hwnd = [JapiDrive]::FindGame([uint32]$proc.Id)
 if ($hwnd -eq [IntPtr]::Zero) { Write-Output "FAIL: game window not found"; exit 3 }
 
-$null = [JapiDrive]::Focus($hwnd)
-$focused = $false
-for ($i = 0; $i -lt 40; $i++) {
-    if ([JapiDrive]::GetForegroundWindow() -eq $hwnd) { $focused = $true; break }
-    $null = [JapiDrive]::Focus($hwnd); Start-Sleep -Milliseconds 200
-}
+# War3 shows a splash window before the map window settles, so the first focus attempt can be
+# wasted. Wait for the fixture's own gate marker before claiming the foreground; a gesture sent
+# while another window owns the foreground is silently dropped, which shows up later as a
+# duplicate click from a retry and a false failure of the exact-click-count assertions.
+$focused = Wait-Foreground $hwnd 40
 
 $origin = New-Object JapiDrive+POINT
 $null = [JapiDrive]::ClientToScreen($hwnd, [ref]$origin)
@@ -144,8 +152,12 @@ try {
     # a few times and watch the log for progress instead of trusting a single attempt.
     if (Wait-Marker "\[WAIT\] click inside, press Shift" $TimeoutSeconds) {
         Write-Output "gate 1: pointer gestures (inside=($inX,$inY) outside=($outX,$outY))"
+        if (-not (Wait-Foreground $hwnd 30)) {
+            Write-Output "WARN: could not hold the game foreground; gestures may be dropped"
+        }
+        Start-Sleep -Milliseconds 300
         for ($attempt = 1; $attempt -le 4; $attempt++) {
-            $null = [JapiDrive]::Focus($hwnd)
+            $null = Wait-Foreground $hwnd 20
             $null = [JapiDrive]::SetCursorPos($inX, $inY); Start-Sleep -Milliseconds 400
             Invoke-KeyTap 0x10
             Invoke-LeftDown; Start-Sleep -Milliseconds 110
@@ -171,6 +183,7 @@ try {
     # Gate 2: release the captured button outside the texture, then press Q outside it.
     if (Wait-Marker "\[WAIT\] release the captured left button" 180) {
         Write-Output "gate 2: capture release outside + Q"
+        $null = Wait-Foreground $hwnd 20
         $null = [JapiDrive]::SetCursorPos($outX, $outY); Start-Sleep -Milliseconds 400
         Invoke-LeftDown; Start-Sleep -Milliseconds 110
         Invoke-LeftUp; Start-Sleep -Milliseconds 350
