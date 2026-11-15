@@ -11,6 +11,7 @@
 - LocalPoint 交互回归：`109 passed, 0 failed, 109 total`（真实前台 Q 键，2026-07-30，旧 108 基线；本次未重跑）
 - UI 交互回归：`110 passed, 0 failed, 110 total`（真实鼠标悬停 + 命令卡显隐，2026-07-30，旧 108 基线；本次未重跑）
 - D3D 实机回归：`164 passed, 0 failed, 164 total`（2026-11-15；普通基线 116 项 + D3D 48 项：公共 SDK 功能 8 组 + 底层 bridge 13 组 + P4 Subscription 真实输入 1 组 + P5 生命周期 7 项 + shutdown 1 组 + §15.8 覆盖补齐 17 项（handler 往返 10 + 事件回调 3 + 交互期探针 3 + BLP2 实机 1）；handler 兼容面 54/54 已全部触达，仍不等于 164 个 API）
+- 波次防守 demo 回归：`23 passed, 0 failed, 23 total`（2026-11-16；`deploy.ps1 -Demo` 跑 `map/game/wave.lua` + `map/game/demo.lua` 的 23 条断言：世界构建、波次循环、伤害/击杀/计分、HUD 跟随、败北/胜利、restart、脚本移动命令、Q 施法事件与 CD 门槛、选择可读；真实 OS 级键鼠由 `tools/drive-demo.ps1` 驱动 `-Demo -Hold` 会话复核，同一构建下真 Q 施法、真 R 重开在日志里生效；1.27a 窗口模式的鼠标按钮不进 `message.hook`，所以移动用引擎自带左键命令，`message.order_point` 的落点必须落在当前镜头内）
 - 地图级 VM 重启回归：`9 passed, 0 failed, 9 total`（2026-11-15；同一进程内换图后旧 Lua VM 关闭、新图脚本重载、旧 session 资源归零；新增断言证明 `SaveFunc` 锚点与 `func_bind` 标签表随地图启动被清空）
 - D3D 发布产物溯源：提交 `d151fd7`（SDK 0.4.0）的 detached clean worktree 构建（HEAD 精确一致、tracked diff 为零）用同一产物实跑交互 `164/164`、普通 `116/116`、地图级 VM 重置 `8/8`，游戏目录 proxy 与 sidecar 回读等于 clean proxy hash（2026-11-15；交互回归使用夹具修正提交 `65bceb5`，见第 4 节）
 - 默认测试场景：64×64 平坦空图，无基地、野怪、树木或预放物件；最终仅保留 1 个 10 级英雄火枪手 `Hrif`（2026-07-31）
@@ -28,7 +29,7 @@
 | D3D 底层 proxy/bridge | proxy、注册、部署、诊断、绘制、code 回调链与 device 状态/世代已跑通；P0/P1 兼容、部署和原生 session 基座已闭环 | 普通 116/116 + 累计 D3D 164/164 + 真实视觉/鼠标/Shift 交互 | **可用**（SDK 约束见下行） |
 | D3D Lua SDK 与生命周期 | P2–P5 已提供 Font/Text/Texture 强类型 userdata、统一跨类型队列、D3DXFont alpha、`asset://`/`game://` 内存资源、共享 CPU cache、显式销毁、GC/`__close`、reload、显式 session shutdown，Subscription（enter/leave/mouse_down/mouse_up/click/key_down/key_up、pointer capture、6px 点击阈值、`hover_only`/`propagate`/`keep_on_error`、只读 event 表），以及 P5 生命周期：Text `ttl` 到期释放、`d3d.on("resize"/"device_lost"/"device_reset")` 模块级订阅、`device_generation` 世代号、`d3d.status()` 的 `state`/`device_generation` 诊断和失败不泄漏合同；真实鼠标键盘由窗口 `WM_*` 消息 + 异步按键状态驱动，因为 1.27a 游戏内 CGameUI 分发只送键盘消息；地图级 VM 重置已闭环：换图时 `lua_close` 旧 VM、重载新图脚本，session 随 VM 关闭自动 `end_session`（`-TestReboot` 8/8） | 公共 SDK 功能 8 组 + Subscription 真实输入 + 生命周期 7 项 + shutdown 1 组实机通过（交互 D3D 164/164，其中真实窗口 20 次 resize 触发 20 次 device reset，句柄/属性/订阅全部保持）；handler 兼容面 54/54 与 BLP2 内存解码（raw/palette/DXT1）实机通过；原生 ABI 1000 轮通过 | **可用**（2026-11-15：P0–P6 闭环；发布产物来自提交 `d151fd7`（SDK 0.4.0）的 detached clean 构建，构建/部署/sidecar hash 一致，见 §4 与设计文档 14.4）；保留限制见 [设计文档](planning/D3D-LUA-SDK-DESIGN.md) 15.8.4 |
 | 空白测试场景 | 64×64 空图 + 单个 10 级英雄火枪手确定性复位 | 普通 116/116 + D3D 164/164 + 真实窗口检查 | 可用；默认基座 |
-| 可玩垂直切片（`-Demo`） | 英雄 + 暴风雪（Q）+ 点击选中 + D3D HUD，只用 `jass.common`/`jass.message`/`jass.d3d`；自带 11 条断言 | 普通图 11/11、外来地图夹具 11/11 | **可用，作为地图作者开工样板** |
+| 可玩垂直切片（`-Demo`） | 波次防守小游戏：一个 10 级英雄、5 波进攻、基地血量、胜负与 `R` 重开、暴风雪（`Q`，按镜头内光标落点）、引擎自带左键移动、CD/蓝耗、D3D HUD（血量条/计时/比分/提示）、相机锁定英雄；只用 `jass.common`/`jass.message`/`jass.d3d`；自带 23 条断言 | `deploy.ps1 -Demo` 23/23 + `drive-demo.ps1` 真实键鼠复核 23/23 | **可用，作为地图作者开工样板** |
 | 外来地图接入（bootstrap 注入） | 对无 japi 痕迹的 `war3map.j` 自动注入 globals + `JapiBootstrap()` + `main()` 调用；repack 前用 pjass 校验 | `build\foreign-map` 夹具 `-Demo` 11/11 | **完成（JASS 地图）**；vJass 需 `-SkipJassCheck` |
 | JASS wrapper 自动生成（E4） | `tools/gen-jass-wrappers.ps1` 读三处注册表（EX native、message bridge、D3D manifest）生成 115 个五部曲 wrapper；`pack.ps1 -WithJassWrappers` 把它们插到 `endglobals` 之后，并在 `LoadScript` 之后挂一支 2 秒 timer 探针 | `-WithJassWrappers` 125/125（int/string/real/boolean 往返）；默认 122/122 | **可用（opt-in）**；给地图新增功能的唯一出口仍是 wrapper（native 声明只能复用引擎已有的名字，见下行） |
 | GetFuncAddr（JASS 函数取址） | `pack.ps1 -WithGetFuncAddr` 在脚本最前面声明引擎隐藏 native `SetHeroLevels (C)V`（`Scripts\common.ai` 的 AI 方言 native，签名本来就是 `(C)V`）并注入 builtin 同款 `GetFuncAddr(code)`；DLL 的 `japi_add` 覆写该节点函数指针，把 code 值写进共享哈希表槽 0 | `-WithGetFuncAddr` 126/126（4 项，含 `TriggerAddAction` 执行身份证明）；默认 122/122 且第 8d 节 `[SKIP]` | **可用（opt-in）**；声明规则见 [JASS-NATIVE-DECLARATIONS.md](planning/JASS-NATIVE-DECLARATIONS.md) |
@@ -164,16 +165,20 @@ D3D handler 合同与覆盖校验（静态，不启动 War3；要求 manifest、
 
 当前输出 `D3D contract PASS: surface=54, proxy=49, canonical=5, fixture=54/54, untested=0`。
 
-可玩垂直切片（一个英雄 + 一个技能 + 真实输入 + D3D HUD，自带断言，结果 11/11）：
+可玩垂直切片（波次防守：一个英雄、5 波进攻、基地血量、胜负与重开、D3D HUD，自带断言，结果 23/23）：
 
 ```powershell
-.\tools\deploy.ps1 -Demo          # 自动跑完检查后关闭游戏
+.\tools\deploy.ps1 -Demo          # 自动跑完 23 条断言后关闭游戏
 .\tools\deploy.ps1 -Demo -NoKill  # 留在游戏里继续手玩
+.\tools\deploy.ps1 -Demo -Hold    # 自检后保持会话，供真实键鼠驱动（下面的脚本用这个）
+.\tools\drive-demo.ps1            # 前台真左键点击 + 真 Q + 真 R，并截 build\demo-live-*.png
 ```
 
-切片操作：Q 对鼠标位置放暴风雪，左键选中单位，F2 重启一局（由场景重建触发）。它只用
-`jass.common`、`jass.message`、`jass.d3d` 三组公开入口，不碰 hashtable、`UnitId` 或手写 spec，
-所以它同时是"地图作者能否直接开工"的样板。
+操作：`Q` 在当前镜头内的光标落点放暴风雪（CD 6 秒、蓝耗 75），左键用引擎自带命令移动英雄
+（1.27a 窗口模式的鼠标按钮不进 `message.hook`，所以点击直接放行给游戏），`R`/`F2` 重开一局，
+相机锁定英雄。它只用 `jass.common`、`jass.message`、`jass.d3d` 三组公开入口，不碰 hashtable、
+`UnitId` 或手写 spec，所以它同时是"地图作者能否直接开工"的样板；玩法与自检的拆法和踩坑见
+[MINIMAL-GAME-LOOP.md](guide/MINIMAL-GAME-LOOP.md)。
 
 外来地图接入（地图 JASS 里完全没有 japi 痕迹时，打包器自动注入 bootstrap）：
 
@@ -333,6 +338,7 @@ Clean proxy SHA-256 为 `0564A518EB3CB2F91CD65D0BDC766B9FC5B8709335CFFE5274C1FED
 
 0. JASS↔Lua 基础桥接（2026-10-26 完成）：UnitId Lua handler、错误路由、整数/字符串/句柄 ABI、globals 写、handle 级别/GC、trigger-action sleep 已纳入普通回归 116/116；JASS 侧运行时声明 native 的路线不纳入支持面。
 0b. 开工样板（2026-10-26 完成）：`-Demo` 垂直切片 11/11，外来地图 bootstrap 注入 + pjass 校验通过；下一步是把这条切片扩成真实地图玩法，并补上「任意地图一行命令打包」的文档。
+0c. 波次防守 demo（2026-11-16 完成）：把 11 项的垂直切片扩成可玩的一局——`map/game/wave.lua`（游戏循环：5 波、基地血量、伤害/击杀/计分、CD/蓝耗、败北/胜利/重开、HUD 与相机）加 `map/game/demo.lua`（23 条自检），`tools/drive-demo.ps1` 用真实键鼠复核同一构建（日志里真 Q 施法、真 R 重开生效）。`deploy.ps1 -Demo` 23/23，普通回归 122/122、VM 重置 9/9 未受影响。
 1. P3（完成）：统一 render queue、D3DXFont/文字 alpha、`asset://`/`game://`、MPQ BLP1/PNG、共享 cache、加载失败合同与提交态 provenance 均已闭环。
 2. P4（完成，2026-11-15）：Subscription 与统一鼠标/键盘/enter/leave/click 事件已替代两套 texture 身份；真实输入由窗口 `WM_*` + 异步按键状态提供（游戏内 1.27a 的 CGameUI 分发只送键盘消息），交互回归 141/141 通过。
 3. P5（完成，2026-11-15）：TTL、device 世代/lost/reset 事件、`d3d.on` 模块级订阅、`status()/stats()` 诊断、

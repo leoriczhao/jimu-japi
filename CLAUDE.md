@@ -67,7 +67,9 @@ map-inject/
 ├── map/                         ← 地图开发目录
 │   ├── demo.w3x                # 测试地图
 │   ├── war3map.lua             # 用户 Lua 脚本
-│   └── lib/                    # Lua 工具库
+│   ├── game/                   # 波次防守 demo（wave.lua 游戏循环 + demo.lua 自检）
+│   ├── lib/                    # Lua 工具库
+│   └── tests/                  # 回归夹具
 │
 ├── src/                         ← DLL 源码目录
 │   ├── CMakeLists.txt
@@ -97,6 +99,7 @@ map-inject/
 │   ├── deploy.ps1              # 打包 + 部署 + 启动 War3 + 等结果
 │   ├── make-foreign-map.ps1    # 生成无 japi 痕迹的外来地图夹具
 │   ├── drive-interactive-d3d.ps1  # 按 [WAIT] 标记自动驱动交互 D3D 回归
+│   ├── drive-demo.ps1          # 驱动 -Demo -Hold 会话：真左键/真 Q/真 R + 截图
 │   ├── gen-jass-wrappers.ps1   # 按 C++ 注册表生成 JASS 五部曲 wrapper
 │   ├── pjass.exe               # JASS 语法检查
 │   └── w3x2lni/                # 地图格式转换
