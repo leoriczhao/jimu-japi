@@ -14,10 +14,12 @@
 #   .\tools\deploy.ps1 -TestReboot                      # deploy proxy + verify the Lua VM resets on map boot
 #   .\tools\deploy.ps1 -WithJassWrappers                # generate JASS wrappers for every bridge handler
 #   .\tools\deploy.ps1 -WithGetFuncAddr                 # expose builtin-style GetFuncAddr(code) in the map
+#   .\tools\deploy.ps1 -MapDir "examples\01-hello-jass"  # pack a project tree instead of map\
 param(
     [string]$DllPath = "",
     [string]$D3DProxyPath = "",
     [string]$BaseMap = "",
+    [string]$MapDir = "",
     [string]$LogFile = "",
     [string]$MapName = "",
     [int]$Timeout    = 120,
@@ -43,6 +45,14 @@ $D3DTarget = "$War3Dir\d3d9.dll"
 $D3DProbeTarget = "$War3Dir\japi_d3d_visual_probe.bmp"
 
 if (-not $LogFile) { $LogFile = "C:\ProgramData\japi_debug.txt" }
+# The DLL hardwires its log path (src/src/debug_log.h init_file: C:\ProgramData\japi_debug.txt,
+# plus a per-pid fallback next to it). There is no env/CLI override, so any other -LogFile makes
+# this script wait on a file nobody writes and time out after a perfectly healthy run.
+if ($LogFile -notlike "C:\ProgramData\japi_debug*") {
+    Write-Host "  WARNING: -LogFile $LogFile is not where the DLL writes."
+    Write-Host "           The DLL always logs to C:\ProgramData\japi_debug.txt (per-pid fallback: japi_debug_<pid>.txt);"
+    Write-Host "           this run will time out even if the map passes. Drop -LogFile or point it under C:\ProgramData."
+}
 if (($InteractivePoint -or $InteractiveUi -or $InteractiveD3D) -and -not $PSBoundParameters.ContainsKey("Timeout")) {
     $Timeout = 3660
 }
@@ -55,6 +65,15 @@ if ($DllPath) {
     if (-not [System.IO.Path]::IsPathRooted($DllPath)) {
         $DllPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PWD.Path, $DllPath))
     }
+}
+# Resolve MapDir (a project tree with its own war3map.lua) if provided.
+# pack.ps1 resolves relative paths against its own $PWD, which is the caller's
+# PWD here, so anchoring it to $PWD keeps -MapDir symmetric with pack.ps1.
+if ($MapDir -and -not [System.IO.Path]::IsPathRooted($MapDir)) {
+    $MapDir = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PWD.Path, $MapDir))
+}
+if ($MapDir -and -not (Test-Path "$MapDir\war3map.lua")) {
+    throw "MapDir has no war3map.lua: $MapDir"
 }
 if (-not $D3DProxyPath) {
     $D3DProxyPath = "$Root\src\build\bin\Release\newD3d9.dll"
@@ -137,6 +156,7 @@ Write-Host "[1/4] Packing map..."
 $packArgs = @{}
 if ($DllPath) { $packArgs["DllPath"] = $DllPath }
 if ($BaseMap) { $packArgs["BaseMap"] = $BaseMap }
+if ($MapDir) { $packArgs["MapDir"] = $MapDir }
 if ($InteractivePoint) { $packArgs["InteractivePoint"] = $true }
 if ($InteractiveUi) { $packArgs["InteractiveUi"] = $true }
 if ($InteractiveD3D) { $packArgs["InteractiveD3D"] = $true }
@@ -292,3 +312,15 @@ if ($log) {
     }
 }
 Remove-Item $tmpLog -Force -ErrorAction SilentlyContinue
+
+# Machine-checkable verdict: a run that observed failed > 0 is a hard failure.
+# A timeout stays exit 0 (documented behaviour: the map may legitimately still be
+# running, e.g. interactive suites); callers that need a strict verdict (CI, release
+# runs, tools/verify-examples.ps1) must also require a Results line themselves.
+if ($log) {
+    $verdict = [regex]::Match($log, 'Results:\s*(\d+)\s+passed,\s*(\d+)\s+failed,\s*(\d+)\s+total')
+    if ($verdict.Success -and [int]$verdict.Groups[2].Value -gt 0) {
+        Write-Host "  FAILED: $($verdict.Groups[2].Value) check(s) failed out of $($verdict.Groups[3].Value) — see the Results line above"
+        exit 1
+    }
+}

@@ -7,6 +7,7 @@
 #   .\tools\pack.ps1 -BaseMap "other.w3m"               # custom map/archive/source dir
 #   .\tools\pack.ps1 -BaseMap "foreign" -SkipJassCheck  # vJass maps: skip pjass validation
 #   .\tools\pack.ps1 -OutFile "out\test.w3x"            # custom output
+#   .\tools\pack.ps1 -MapDir "examples\01-hello-jass" -WorkDir "build\w1"  # pack a project tree, isolated scratch
 #   .\tools\pack.ps1 -Demo                             # playable vertical slice instead of the suite
 #   .\tools\pack.ps1 -WithJassWrappers                  # generate JASS wrappers for every bridge handler
 #   .\tools\pack.ps1 -WithGetFuncAddr                   # expose builtin-style GetFuncAddr(code) in the map
@@ -15,6 +16,7 @@ param(
     [string]$BaseMap  = "",
     [string]$OutFile  = "",
     [string]$MapDir   = "",
+    [string]$WorkDir  = "",
     [switch]$InteractivePoint,
     [switch]$InteractiveUi,
     [switch]$InteractiveD3D,
@@ -37,8 +39,8 @@ if (-not $DllPath)  { $DllPath  = "$Root\src\build\bin\Release\yd_japi.dll" }
 if (-not $BaseMap)  { $BaseMap = "$Root\reference\empty-map" }
 if (-not $OutFile)  { $OutFile  = "$Root\build\output.w3x" }
 if (-not $MapDir)   { $MapDir   = "$Root\map" }
+if (-not $WorkDir)  { $WorkDir  = "$Root\build\work" }
 $CbSrc   = "$Root\tools\callback"
-$WorkDir = "$Root\build\work"
 
 # Resolve to absolute paths
 function Resolve-Abs($p) {
@@ -49,6 +51,7 @@ $DllPath = Resolve-Abs $DllPath
 $BaseMap = Resolve-Abs $BaseMap
 $OutFile = Resolve-Abs $OutFile
 $MapDir  = Resolve-Abs $MapDir
+$WorkDir = Resolve-Abs $WorkDir
 
 # Validate
 if (-not (Test-Path $BaseMap)) { throw "Base map or source directory not found: $BaseMap" }
@@ -187,8 +190,11 @@ if ((Get-Item -LiteralPath $BaseMap).PSIsContainer) {
 $UnitObjectIni = "$WorkDir\war3map.w3u.ini"
 if (Test-Path -LiteralPath $UnitObjectIni) {
     Write-Host '  [1b] Compile unit object data'
-    $ObjectMap = "$Root\build\work-object.w3x"
-    $ObjectDir = "$Root\build\work-object"
+    # Derived from $WorkDir so concurrent pack runs (examples/scaffold checks)
+    # with distinct -WorkDir values cannot clobber each other. With the default
+    # -WorkDir this is still build\work-object{,.w3x}.
+    $ObjectMap = "$WorkDir-object.w3x"
+    $ObjectDir = "$WorkDir-object"
     if (Test-Path -LiteralPath $ObjectMap) { Remove-Item -LiteralPath $ObjectMap -Force }
     if (Test-Path -LiteralPath $ObjectDir) { Remove-Item -LiteralPath $ObjectDir -Recurse -Force }
     Use-W3x2Lni 'obj' $WorkDir $ObjectMap
