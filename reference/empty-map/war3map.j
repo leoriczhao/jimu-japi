@@ -20,6 +20,17 @@ globals
     // before LoadScript (JapiForceAllocArrays).
     integer array udg_lua_test_array_untouched
     string array udg_lua_test_string_array
+
+    // Generated JASS wrapper self-check probes: written by the probe block that
+    // tools/pack.ps1 -WithJassWrappers injects after LoadScript, read by the
+    // Lua suite (section 8c). They stay at these values otherwise.
+    integer udg_lua_wrapper_ready = 0
+    integer udg_lua_wrapper_int = -1
+    string udg_lua_wrapper_text = ""
+    string udg_lua_wrapper_hex = ""
+    real udg_lua_wrapper_real = -1.0
+    real udg_lua_wrapper_real_base = -1.0
+    boolean udg_lua_wrapper_bool = false
 endglobals
 
 function InitGlobals takes nothing returns nothing

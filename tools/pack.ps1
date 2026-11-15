@@ -20,7 +20,8 @@ param(
     [switch]$Demo,
     [switch]$TestReboot,
     [switch]$SkipJassCheck,
-    [switch]$NoArrayPrealloc
+    [switch]$NoArrayPrealloc,
+    [switch]$WithJassWrappers
 )
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -236,12 +237,54 @@ if ($arrayGlobals.Count -gt 0) {
     Write-Host ("  Array prealloc: " + $arrayGlobals.Count + " array globals")
 }
 
+# JASS wrappers: callback mode rejects custom native declarations (the map
+# script is compiled before the plugin registers anything), so every UnitId
+# bridge handler is exposed as a builtin-style five-step JASS wrapper instead.
+# The generator reads the C++ registries, so the wrapper surface cannot drift.
+$jassWrapperBlock = ''
+$wrapperProbe = ''
+if ($WithJassWrappers) {
+    $genScript = Join-Path $PSScriptRoot 'gen-jass-wrappers.ps1'
+    if (-not (Test-Path $genScript)) { throw "missing generator: $genScript" }
+    # Names the map already defines are left alone (the base map hand-writes a
+    # few wrappers), everything else is generated.
+    $mapFunctions = @([regex]::Matches($jContent,
+        '(?m)^[ \t]*function[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]+takes') |
+        ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+    $wrapperOut = "$WorkDir\jass-wrappers.j"
+    $jassWrapperBlock = & $genScript -Root $Root -OutFile $wrapperOut -SkipNames $mapFunctions
+    if (-not $jassWrapperBlock) { throw 'wrapper generator produced no output' }
+    $wrapperCount = ([regex]::Matches($jassWrapperBlock, '(?m)^function ')).Count
+    Write-Host ("  JASS wrappers: " + $wrapperCount + " generated, " + $mapFunctions.Count + " map functions left as-is")
+    if ($jContent -match '(?m)^[ \t]*integer[ \t]+udg_lua_wrapper_ready\b') {
+        # The probe runs from a one-shot timer instead of inline map main():
+        # the UI-backed handlers (GetLittleMapX / SetLittleMapX) are not ready
+        # while the map is still on the loading screen, and a live value such
+        # as GetFps cannot be sampled twice and compared.
+        $wrapperProbe = $nl +
+            '    set udg_lua_wrapper_ready = 1' + $nl +
+            '    call TimerStart(CreateTimer(), 2.00, false, function JapiWrapperProbeActions)'
+        $jassWrapperBlock += $nl +
+            'function JapiWrapperProbeActions takes nothing returns nothing' + $nl +
+            '    call DestroyTimer(GetExpiredTimer())' + $nl +
+            '    set udg_lua_wrapper_int = GetGameVersion()' + $nl +
+            '    set udg_lua_wrapper_hex = Hex(255)' + $nl +
+            '    set udg_lua_wrapper_text = GetPluginVersion()' + $nl +
+            '    set udg_lua_wrapper_real_base = GetLittleMapX()' + $nl +
+            '    call SetLittleMapX(udg_lua_wrapper_real_base + 0.01)' + $nl +
+            '    set udg_lua_wrapper_real = GetLittleMapX()' + $nl +
+            '    call SetLittleMapX(udg_lua_wrapper_real_base)' + $nl +
+            '    set udg_lua_wrapper_bool = GetChatState()' + $nl +
+            'endfunction' + $nl
+    }
+}
+
 # Lines that hand the shared hashtable over to the DLL and load war3map.lua.
 # When the base map carries the bridge probe functions, exercise JASS -> Lua
 # immediately after LoadScript (the Lua handlers register synchronously).
 $loadScriptLines = $arrayAllocCall +
     '    call SaveStr(japi_ht, japi__key, 0, "()V")' + $nl +
-    '    call UnitId("LoadScript")'
+    '    call UnitId("LoadScript")' + $wrapperProbe
 if ($jContent -match 'function LuaBridgeProbeCall') {
     $loadScriptLines += $nl +
         '    call LuaCallback1()' + $nl +
@@ -311,9 +354,13 @@ function Add-JapiBootstrap {
 }
 
 if ($jContent -match [regex]::Escape('call UnitId("LoadScript")')) {
+    $loadScriptReplacement = 'call UnitId("LoadScript")'
     if ($arrayAllocCall) {
-        $jContent = $jContent.Replace('call UnitId("LoadScript")',
-            'call JapiForceAllocArrays()' + $nl + '    call UnitId("LoadScript")')
+        $loadScriptReplacement = 'call JapiForceAllocArrays()' + $nl + '    call UnitId("LoadScript")'
+    }
+    if ($wrapperProbe) { $loadScriptReplacement += $wrapperProbe }
+    if ($loadScriptReplacement -ne 'call UnitId("LoadScript")') {
+        $jContent = $jContent.Replace('call UnitId("LoadScript")', $loadScriptReplacement)
     }
     Write-Host '  Bootstrap: already present, left untouched'
 } elseif ($jContent -match [regex]::Escape('call initializePlugin(  )')) {
@@ -348,6 +395,18 @@ if ($arrayGlobals.Count -gt 0) {
     $anchor = $endGlobals.Index + $endGlobals.Length
     $jContent = $jContent.Substring(0, $anchor) + $nl + $nl + $allocFunc + $jContent.Substring($anchor)
     Write-Host '  Array prealloc: JapiForceAllocArrays injected'
+}
+
+# Wrapper block goes right after endglobals: pjass wants every function defined
+# before its first call, and both map code and the probe inside main() call them.
+if ($jassWrapperBlock) {
+    $endGlobals = [regex]::Match($jContent, '(?m)^[ 	]*endglobals')
+    if (-not $endGlobals.Success) {
+        throw "war3map.j has no endglobals anchor for -WithJassWrappers: $BaseMap"
+    }
+    $anchor = $endGlobals.Index + $endGlobals.Length
+    $jContent = $jContent.Substring(0, $anchor) + $nl + $nl + $jassWrapperBlock + $jContent.Substring($anchor)
+    Write-Host '  JASS wrappers: injected after endglobals'
 }
 Set-Content $JFile $jContent -Encoding ASCII -NoNewline
 

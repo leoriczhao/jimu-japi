@@ -123,6 +123,15 @@ CreateFont/DestroyFont/GetFont*/SetFont*（10）、CreateText/GetText*/SetText*�
 
 按注册表为每个 native 生成五部曲 wrapper 注入 war3map.j（与内置 JAPI 图的 wrapper 同形），让 JASS 地图作者直接 `call EXGetUnitAbility(...)`。独立于 E1–E3，随时可做（0.5d）。
 
+**2026-11-15 已实现并验收**：`tools/gen-jass-wrappers.ps1` 读 `ex_natives/Initialize.cpp` 的 `register_cpp_handler`、
+`libs_message.cpp` 的 bridge 表和 `d3d9/handler_manifest.json`，按 spec 推出 JASS 类型生成五部曲 wrapper，
+排除 `LoadScript`/`SimulateMapBoot`/`open_code_run_logs`/`SaveFunc`/`func_bind_trigger_name` 与地图已定义的同名函数，
+跳过 H 返回（1.27a 无 int→handle 转换），最终注入 115 个到 `war3map.j` 的 `endglobals` 之后。
+`pack.ps1 -WithJassWrappers`（`deploy.ps1` 透传）打开注入，并用 2 秒 timer 探针把 int/string/real/boolean 返回值
+写进 `udg_lua_wrapper_*`；普通回归 125/125（默认打包 122/122，第 8c 节打印 `[SKIP]`），地图级 VM 重置 9/9。
+注意 callback 模式不能在脚本里声明 `native`，所以 wrapper 是 JASS 作者的唯一入口；探针必须延后到 timer 里执行，
+加载画面上调 UI 系 handler 会让整局挂死（`GetFps` 也无法二次采样比对，real 改用 little-map 往返验证）。
+
 总估：E1 ≈ 3d，E2 ≈ 2d，E3 ≈ 2–3d。每批结束 deploy 全绿 + commit。
 
 ---

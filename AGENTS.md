@@ -97,6 +97,7 @@ map-inject/
 │   ├── deploy.ps1              # 打包 + 部署 + 启动 War3 + 等结果
 │   ├── make-foreign-map.ps1    # 生成无 japi 痕迹的外来地图夹具
 │   ├── drive-interactive-d3d.ps1  # 按 [WAIT] 标记自动驱动交互 D3D 回归
+│   ├── gen-jass-wrappers.ps1   # 按 C++ 注册表生成 JASS 五部曲 wrapper
 │   ├── pjass.exe               # JASS 语法检查
 │   └── w3x2lni/                # 地图格式转换
 │

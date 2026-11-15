@@ -731,6 +731,96 @@ test("SaveFunc replaces the anchor and keeps the label table", function()
 end)
 
 -- ============================================================
+-- 8c. Generated JASS wrappers (tools/gen-jass-wrappers.ps1)
+-- Callback mode cannot declare custom natives -- the map script is compiled
+-- before the plugin registers anything -- so tools/pack.ps1 -WithJassWrappers
+-- derives a builtin-style five-step JASS wrapper for every UnitId bridge
+-- handler straight from the C++ registries.
+--
+-- The injected probe calls a few generated wrappers from JASS and stores the
+-- results in udg_lua_wrapper_*; comparing them against the same handlers
+-- invoked through the Lua bridge catches any slot/type marshalling mistake.
+-- ============================================================
+if globals.udg_lua_wrapper_ready ~= 1 then
+    print("  [SKIP] JASS wrappers not injected (pack/deploy with -WithJassWrappers)")
+else
+    local function wrapper_ht()
+        local ht, key = globals.japi_ht, globals.japi__key
+        assert(ht ~= nil and key ~= nil, "japi hashtable globals not available")
+        return ht, key
+    end
+
+    -- Same handler, same hashtable, but driven from Lua instead of JASS.
+    local function bridge_call(name, spec, ...)
+        local ht, key = wrapper_ht()
+        for i, v in ipairs({...}) do
+            local t = type(v)
+            if t == "number" then
+                if math.type(v) == "integer" then jass.SaveInteger(ht, key, i, v)
+                else jass.SaveReal(ht, key, i, v) end
+            elseif t == "string" then
+                jass.SaveStr(ht, key, i, v)
+            elseif t == "boolean" then
+                jass.SaveBoolean(ht, key, i, v)
+            else
+                error("unsupported bridge argument type " .. t)
+            end
+        end
+        jass.SaveStr(ht, key, 0, spec)
+        jass.UnitId(name)
+        local r = spec:match("%)(.+)$")
+        if r == "I" then return jass.LoadInteger(ht, key, 0)
+        elseif r == "R" then return jass.LoadReal(ht, key, 0)
+        elseif r == "S" then return jass.LoadStr(ht, key, 0)
+        elseif r == "B" then return jass.LoadBoolean(ht, key, 0) end
+    end
+
+    test("generated JASS wrapper returns the bridge integer", function()
+        local via_jass = globals.udg_lua_wrapper_int
+        local via_lua = bridge_call("GetGameVersion", "()I")
+        assert(type(via_jass) == "number" and via_jass > 0,
+            "JASS wrapper returned no game version: " .. tostring(via_jass))
+        assert(via_jass == via_lua,
+            string.format("wrapper %s vs bridge %s", tostring(via_jass), tostring(via_lua)))
+    end)
+
+    test("generated JASS wrapper round-trips strings", function()
+        local hex = globals.udg_lua_wrapper_hex
+        assert(hex == "000000FF", "Hex(255) through the wrapper: " .. tostring(hex))
+        assert(hex == bridge_call("Hex", "(I)S", 255), "wrapper and bridge disagree on Hex")
+        local plugin = globals.udg_lua_wrapper_text
+        assert(type(plugin) == "string" and #plugin > 0,
+            "JASS wrapper returned no plugin version: " .. tostring(plugin))
+        assert(plugin == bridge_call("GetPluginVersion", "()S"),
+            string.format("wrapper %s vs bridge %s", tostring(plugin),
+                tostring(bridge_call("GetPluginVersion", "()S"))))
+    end)
+
+    test("generated JASS wrappers keep real and boolean types", function()
+        -- GetFps is a live frame counter, so sampling it twice (probe time and
+        -- test time) cannot be compared. GetLittleMapX/SetLittleMapX are a
+        -- deterministic real-valued pair: the probe reads the baseline, nudges
+        -- it by 0.01 through the generated real parameter wrapper, reads the
+        -- result back through the generated real return wrapper, and restores.
+        local base = globals.udg_lua_wrapper_real_base
+        local nudged = globals.udg_lua_wrapper_real
+        assert(type(base) == "number" and type(nudged) == "number",
+            string.format("JASS wrapper returned no real: base=%s nudged=%s",
+                tostring(base), tostring(nudged)))
+        assert(math.abs(nudged - (base + 0.01)) < 1e-4,
+            string.format("SetLittleMapX/GetLittleMapX round trip %s -> %s",
+                tostring(base), tostring(nudged)))
+        local bridge_x = bridge_call("GetLittleMapX", "()R")
+        assert(type(bridge_x) == "number",
+            "bridge GetLittleMapX returned " .. type(bridge_x))
+        local chat = globals.udg_lua_wrapper_bool
+        assert(type(chat) == "boolean", "JASS wrapper returned no boolean: " .. tostring(chat))
+        assert(chat == bridge_call("GetChatState", "()B"),
+            "wrapper and bridge disagree on GetChatState")
+    end)
+end
+
+-- ============================================================
 -- Summary
 local function finish()
     local scene_ok, scene_err = pcall(scene.reset, true)

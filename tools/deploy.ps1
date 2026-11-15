@@ -12,6 +12,7 @@
 #   .\tools\deploy.ps1 -InteractiveD3D                  # deploy proxy + run visual D3D probe
 #   .\tools\deploy.ps1 -Demo                            # deploy proxy + run the playable vertical slice
 #   .\tools\deploy.ps1 -TestReboot                      # deploy proxy + verify the Lua VM resets on map boot
+#   .\tools\deploy.ps1 -WithJassWrappers                # generate JASS wrappers for every bridge handler
 param(
     [string]$DllPath = "",
     [string]$D3DProxyPath = "",
@@ -26,7 +27,8 @@ param(
     [switch]$InteractiveD3D,
     [switch]$WithDebugger,
     [switch]$Demo,
-    [switch]$TestReboot
+    [switch]$TestReboot,
+    [switch]$WithJassWrappers
 )
 
 $Root     = Split-Path -Parent $PSScriptRoot
@@ -139,6 +141,7 @@ if ($InteractiveD3D) { $packArgs["InteractiveD3D"] = $true }
 if ($WithDebugger) { $packArgs["WithDebugger"] = $true }
 if ($Demo) { $packArgs["Demo"] = $true }
 if ($TestReboot) { $packArgs["TestReboot"] = $true }
+if ($WithJassWrappers) { $packArgs["WithJassWrappers"] = $true }
 $packResult = & $PackScript @packArgs 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host $packResult

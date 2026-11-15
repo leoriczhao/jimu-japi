@@ -6,6 +6,7 @@
 - 最后更新：2026-11-15
 - 支持版本：Warcraft III 1.27a（当前偏移与实机验收版本）
 - 普通实机回归：`122 passed, 0 failed, 122 total`（2026-11-15 复跑；含 8 项 JASS↔Lua bridge 回归、数组全局预分配后的 `jass.globals` 用例，以及 6 项 `SaveFunc` / `func_bind_trigger_name` 回归）
+- JASS wrapper 回归：`125 passed, 0 failed, 125 total`（2026-11-15；`deploy.ps1 -WithJassWrappers` 为 115 个 bridge handler 生成五部曲 wrapper 后跑 122 项基线 + 3 项 wrapper 断言；默认打包仍为 `122/122`，第 8c 节打印 `[SKIP]`）
 - LocalPoint 交互回归：`109 passed, 0 failed, 109 total`（真实前台 Q 键，2026-07-30，旧 108 基线；本次未重跑）
 - UI 交互回归：`110 passed, 0 failed, 110 total`（真实鼠标悬停 + 命令卡显隐，2026-07-30，旧 108 基线；本次未重跑）
 - D3D 实机回归：`164 passed, 0 failed, 164 total`（2026-11-15；普通基线 116 项 + D3D 48 项：公共 SDK 功能 8 组 + 底层 bridge 13 组 + P4 Subscription 真实输入 1 组 + P5 生命周期 7 项 + shutdown 1 组 + §15.8 覆盖补齐 17 项（handler 往返 10 + 事件回调 3 + 交互期探针 3 + BLP2 实机 1）；handler 兼容面 54/54 已全部触达，仍不等于 164 个 API）
@@ -28,7 +29,7 @@
 | 空白测试场景 | 64×64 空图 + 单个 10 级英雄火枪手确定性复位 | 普通 116/116 + D3D 164/164 + 真实窗口检查 | 可用；默认基座 |
 | 可玩垂直切片（`-Demo`） | 英雄 + 暴风雪（Q）+ 点击选中 + D3D HUD，只用 `jass.common`/`jass.message`/`jass.d3d`；自带 11 条断言 | 普通图 11/11、外来地图夹具 11/11 | **可用，作为地图作者开工样板** |
 | 外来地图接入（bootstrap 注入） | 对无 japi 痕迹的 `war3map.j` 自动注入 globals + `JapiBootstrap()` + `main()` 调用；repack 前用 pjass 校验 | `build\foreign-map` 夹具 `-Demo` 11/11 | **完成（JASS 地图）**；vJass 需 `-SkipJassCheck` |
-| JASS wrapper 自动生成（E4） | 未实现 | 无 | 可选后续 |
+| JASS wrapper 自动生成（E4） | `tools/gen-jass-wrappers.ps1` 读三处注册表（EX native、message bridge、D3D manifest）生成 115 个五部曲 wrapper；`pack.ps1 -WithJassWrappers` 把它们插到 `endglobals` 之后，并在 `LoadScript` 之后挂一支 2 秒 timer 探针 | `-WithJassWrappers` 125/125（int/string/real/boolean 往返）；默认 122/122 | **可用（opt-in）**；callback 模式仍不能在地图里声明 native，wrapper 是唯一出口 |
 | SaveFunc / func_bind | `SaveFunc (I)V` 存锚点、`func_bind_trigger_name (IS)V` 存地址→UTF-8 标签，`jass.debug` 暴露查询/清理 API，崩溃消息回退查表，地图启动清表 | 普通 122/122（6 项）+ VM 重置 9/9 | 已实现（地址来源见 §3 限制） |
 
 ## 2. 已交付功能
@@ -40,6 +41,7 @@
 - Lua VM 惰性创建并从 MPQ 加载合并后的 `script\war3map.lua`。
 - `pack.ps1` 默认使用可提交的 `reference/empty-map/` 源地图，也支持显式传入 `.w3m` / `.w3x` 或其他源目录；完成 Lua 合并、DLL/debugger 资源注入与地图重打包。
 - 打包器默认对所有声明的数组全局做预分配（`JapiForceAllocArrays`，见 §4），使 `jass.globals` 从第一个地图开始就能写任意合法下标；`-NoArrayPrealloc` 可关闭。
+- `gen-jass-wrappers.ps1` 从 C++ 注册表生成 JASS 五部曲 wrapper（`Save*` 填槽 → `SaveStr` 槽 0 写 spec → `UnitId(name)` → `Load*` 读返回），`pack.ps1 -WithJassWrappers` 把它们注入 `endglobals` 之后，见 §4。
 - `deploy.ps1` 部署并启动真实 War3，按本次进程的新日志等待 `Results:`。
 - `war3map.w3u.ini` 定义真正的英雄单位 `Hrif`（英雄父类 + 火枪手模型/图标/声音/弹道）；打包时自动生成二进制对象数据。
 - `lib.scene` 在初始化与测试结束时清空单位，创建唯一的可受伤 10 级英雄火枪手，并在最终画面选中它。
@@ -122,6 +124,7 @@ bridge handler、清 message/D3D 分发状态，再 `lua_close` 旧 `lua_State` 
 | `EXGetEventDamageData` / `EXSetEventDamage` | 真实 `EVENT_UNIT_DAMAGED` 中读取来源/目标/类型，20 点伤害改写为 7，并以 `GetEventDamage`、生命差和原生 7 点对照命中闭环验证；2 项自动测试通过 | **完成** |
 | JASS↔Lua 基础桥接 | `jass.japi` 注册同时进入 native 表和 UnitId 分发；JASS `main` 实测 `()V` 回调、`(II)I`=42、`(Hplayer;)Hplayer;` 句柄往返和错误进 `runtime.error_handle`；`jass.globals` 标量/数组写、handle level 0/1/2、level 2 GC、trigger-action sleep 均通过；普通回归 `116/116` | **完成（UnitId / trigger action 路线）**；JASS 侧 `native Foo` + 运行时注册在 callback 模式不可用；sleep 不适用于裸 timer callback/纯 Lua 协程。数组策略：JASS VM 只在首次写入时分配数组块，且没有公开分配器，所以由打包器在 `LoadScript` 之前插入 `JapiForceAllocArrays()`（对每个数组 `set arr[8191] = arr[8191]`，每个数组 32 KB），此后 `jass.globals` 的 `index>0` 写入、`#arr` 与字符串数组都可靠；万一仍有未分配数组，`jarray_newindex` 会写一条 `[jass.globals] write ignored` 日志而不是静默丢弃 |
 | `SaveFunc` / `func_bind_trigger_name` | 两个名字按内置地图的线上契约实现为 bridge handler（`(I)V` 存锚点、`(IS)V` 存地址→UTF-8 标签）；仓库内没有任何脚本能产生 Action 地址，所以夹具用 `jass.code(function() ... end)` 生成真实 trampoline 地址，再用 `TriggerAddCondition` + `TriggerEvaluate` 证明该地址确实被 VM 执行，标签/rebind/clear/锚点替换逐项断言（含中文标签字节精确）；普通回归 6 项通过、VM 重置新增 1 项证明表随地图启动清空，日志可见 `[FuncBind] bind 0x0012ABD0 -> reboot-should-drop` 与 `[FuncBind] clearing 1 binding(s) on map boot` | **完成（不含脚本 Action 地址来源）**：callback 模式下 `war3map.j` 声明 `SetHeroLevels` 这类 native 会让脚本编译期失败（运行时注册项不在编译期 native 表里，地图到不了 `main()`，实测整局不启动），`jass.debug.jass_func_address` 只能解析 native；可用地址来源是 `jass.code(Lua 函数)` 与 native 名。内置 `GetFuncAddr` → 脚本 Action 标签这条链保留为可选后续 |
+| JASS wrapper 自动生成（E4） | `gen-jass-wrappers.ps1` 从 `ex_natives/Initialize.cpp`（57 条）、`libs_message.cpp` 的 bridge 表（12 条）与 `d3d9/handler_manifest.json`（54 条）生成五部曲 wrapper，去重后 115 个注入 `war3map.j` 的 `endglobals` 之后；`-WithJassWrappers` 打包后实机 `125/125`（3 项断言：`GetGameVersion` int 与 Lua 直连一致、`Hex(255)`/`GetPluginVersion` 字符串一致、`SetLittleMapX`+`GetLittleMapX` 的 0.01 实数往返与 `GetChatState` 布尔一致），默认打包 `122/122` 时第 8c 节打印 `[SKIP]` | **可用（opt-in）**：callback 模式下脚本在插件注册之前编译，所以地图里声明不了 native，wrapper 是 JASS 作者唯一入口；跳过 5 个（`GetPlayerSelectedUnit`/`GetTargetObject` 这类 H 返回，1.27a 无 int→handle 转换；`GetMouseX`/`GetMouseY`/`EXExecuteScript` 地图自己已定义）。探针必须走 2 秒 timer：加载画面上取 `GetLittleMapX` 会挂住整局 |
 | `LocalPointOrder` | bridge ABI 调用安全；真实前台 Q 键进入 `message.hook`（code 81），共享 submit 提交 `blizzard` 点命令并返回 `true`；`EVENT_UNIT_SPELL_EFFECT` 触发且技能 id 为 `AHbz`；清理诊断代码并重编译后交互套件为 `109/0/109` | **完成**；普通右键移动走 smart-click 包，不是该 API 的 point-order 契约，详见逆向记录 08 §7.3 |
 | `GetTargetObject` | `-InteractiveUi` 固定镜头创建敌方城镇大厅；真实鼠标点击/悬停后返回 handle `1050778`，与夹具 handle `1050778` 精确一致 | **完成** |
 | `SetUnitAbilityButtonShow` | 大法师 `AHbz` 命令卡槽从显示 `(0,2)` 变为隐藏 `nil,nil`，10 秒后自动恢复 `(0,2)`；真实窗口截图同时确认紫色暴风雪图标消失，交互套件为 `110/0/110` | **完成** |
@@ -180,6 +183,21 @@ D3D handler 合同与覆盖校验（静态，不启动 War3；要求 manifest、
 交付哈希表句柄、`UnitId("LoadScript")`）以及 `main()` 末尾的调用。打包在 repack 前用
 `tools\pjass.exe` + 1.27.1 的 Common.j/Blizzard.j 校验补丁后的 `war3map.j`；vJass 地图可加
 `-SkipJassCheck` 跳过。
+
+JASS wrapper 自动生成（E4）：把每个 bridge handler 以内置 JAPI 的五部曲形状注入 `war3map.j`，JASS 地图直接 `call EXGetUnitAbility(...)`（`-WithJassWrappers` 时 125/125，默认打包 122/122 且第 8c 节打印 `[SKIP]`）：
+
+```powershell
+.\tools\deploy.ps1 -WithJassWrappers                            # 打包 + 部署 + 全量回归
+.\tools\pack.ps1 -WithJassWrappers                              # 只打包，人工看 build\work\war3map.j
+.\tools\gen-jass-wrappers.ps1 -OutFile build\jass-wrappers.j    # 只生成 wrapper 文本
+```
+
+生成器读三处注册表（EX native、message bridge 表、D3D manifest），排除 `LoadScript` / `SimulateMapBoot` /
+`open_code_run_logs` / `SaveFunc` / `func_bind_trigger_name`（这些不是给 JASS 作者的入口），跳过地图已定义的同名
+函数与 H 返回的 handler，输出按分组名排序以保证可复现。注入点在 `endglobals` 之后、`main` 之前；callback 模式下
+脚本在插件注册之前编译，所以只能生成 wrapper 函数，不能声明 `native`。探针是一支 2 秒 timer：它把 int/string/real/boolean
+返回值写进 `udg_lua_wrapper_*`，第 8c 节再用 Lua 直连 bridge 比对；real 用 `GetLittleMapX`/`SetLittleMapX` 的 0.01 往返
+（`GetFps` 是实时帧率，两次采样不可比），并必须延后到计时器里执行——加载画面上调 UI 系 handler 会让整局挂住。
 
 地图级 VM 重置回归（同一进程内换图：父图建资源 → 6 秒后 `UnitId("SimulateMapBoot")` → 旧 VM 关闭 → 子脚本接管；结果 9/9，含 `func_bind` 标签表随启动清空的断言）：
 
@@ -330,7 +348,15 @@ Clean proxy SHA-256 为 `0564A518EB3CB2F91CD65D0BDC766B9FC5B8709335CFFE5274C1FED
    （含 6 项新用例：`jass.code(fn)` 生成的真实 code 地址被 `TriggerEvaluate` 执行、中文标签字节精确、
    rebind 覆盖、clear 清空、锚点替换），VM 重置 `9/9`。限制：callback 模式无法在脚本里声明 native，
    所以内置 `GetFuncAddr` → 脚本 Action 地址这条链没有通道，标签目标限定为 Lua trampoline 与 native 地址。
-8. 接着做 JASS wrapper 自动生成（E4）（未开工）。
+8. JASS wrapper 自动生成（E4）（完成，2026-11-15）：`tools/gen-jass-wrappers.ps1` 从三处 C++ 注册表生成
+   内置同形的五部曲 wrapper，`pack.ps1 -WithJassWrappers`（`deploy.ps1` 透传）把 115 个 wrapper 插到
+   `endglobals` 之后，并在 `LoadScript` 之后挂一支 2 秒 timer 探针。实机 `125/125`（122 基线 + 3 项：
+   int 与 `GetGameVersion` 一致、`Hex(255)`/`GetPluginVersion` 字符串一致、`SetLittleMapX`+`GetLittleMapX`
+   的 0.01 实数往返与 `GetChatState` 布尔一致），默认打包仍 `122/122` 且 8c 打印 `[SKIP]`，VM 重置 `9/9` 未受影响。
+   踩坑：探针最初内联在 `main()` 里调 UI 系 handler，加载画面上整局挂死（日志停在 `script\war3map.lua loaded`），
+   改成 timer 后正常；`GetFps` 无法两次采样比对，故 real 改用 little-map 往返。
+9. 三项遗留工程债（数组分配、E4、SaveFunc/func_bind）到此全部闭环；若要继续，剩下的是可选项：
+   内置 `GetFuncAddr` → 脚本 Action 地址通道（callback 模式无入口）与 `jass.globals` 之外的 host 侧能力。
 
 ## 6. 文档职责
 
