@@ -36,6 +36,7 @@ check("the JASS globals channel works in the new VM", function()
         "scalar read " .. tostring(globals.udg_lua_test_value))
     globals.udg_lua_test_array[1] = 424242
     array_echo = globals.udg_lua_test_array[1]
+    assert(array_echo == 424242, "array[1] read back " .. tostring(array_echo))
 end)
 
 local status = d3d.status()

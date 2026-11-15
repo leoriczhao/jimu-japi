@@ -14,6 +14,12 @@ globals
     integer udg_lua_handle_result = 0
     integer udg_lua_test_value = 0
     integer array udg_lua_test_array
+
+    // Arrays the JASS code never touches: they only become writable at
+    // index > 0 because tools/pack.ps1 force-allocates every declared array
+    // before LoadScript (JapiForceAllocArrays).
+    integer array udg_lua_test_array_untouched
+    string array udg_lua_test_string_array
 endglobals
 
 function InitGlobals takes nothing returns nothing

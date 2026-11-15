@@ -1,7 +1,9 @@
 #include "class_array.h"
 #include "jassbind.h"
 #include "common.h"
+#include "debug_log.h"
 #include <warcraft3/jass/global_variable.h>
+#include <cstdio>
 
 namespace warcraft3::lua_engine {
 	namespace globals {
@@ -25,7 +27,7 @@ namespace warcraft3::lua_engine {
 		jass::global_variable gv = jarray_value(L);
 		int32_t index = (int32_t)luaL_checkinteger(L, 2);
 
-		if (!gv.array_vaild(index))
+		if (!gv.is_vaild() || !gv.is_array() || !gv.array_vaild(index))
 		{
 			lua_pushnil(L);
 			return 1;
@@ -40,8 +42,26 @@ namespace warcraft3::lua_engine {
 		jass::global_variable gv = jarray_value(L);
 		int32_t index = (int32_t)luaL_checkinteger(L, 2);
 	
-		if (!gv.array_vaild(index))
+		if (!gv.is_vaild() || !gv.is_array() || !gv.array_vaild(index))
 		{
+			// Dropping the write silently used to hide the lazy-allocation rule:
+			// the JASS VM only materialises an array block on its first store, so
+			// an array the map never touched is invisible here.
+			// tools/pack.ps1 preallocates every declared array
+			// (JapiForceAllocArrays); this log keeps whatever still slips
+			// through visible instead of losing the value.
+			static int warned_unallocated = 0;
+			if (warned_unallocated < 16)
+			{
+				++warned_unallocated;
+				const char* array_name = gv.is_vaild() ? gv.name() : "?";
+				char msg[320];
+				snprintf(msg, sizeof(msg),
+					"[jass.globals] write ignored: %s[%d] - array not allocated "
+					"(pack the map with tools/pack.ps1, or touch %s[0] from JASS first)",
+					array_name, (int)index, array_name);
+				japi_log::sync_write(msg);
+			}
 			return 0;
 		}
 	
@@ -49,10 +69,14 @@ namespace warcraft3::lua_engine {
 		return 0;
 	}
 	
+	// __len receives the array table itself as argument 1 (the metatable is
+	// shared by every array, so there is no per-array upvalue to read).
+	// Reading the node from lua_upvalueindex(1) here used to yield 0 and turn
+	// #arr into a null-pointer dereference.
 	int jarray_len(lua_State* L)
 	{
-		jass::global_variable gv((hashtable::variable_node*)lua_tointeger(L, lua_upvalueindex(1)));
-		lua_pushinteger(L, gv.array_size());
+		jass::global_variable gv = jarray_value(L);
+		lua_pushinteger(L, gv.is_vaild() ? (lua_Integer)gv.array_size() : 0);
 		return 1;
 	}
 

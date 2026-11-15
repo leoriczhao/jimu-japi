@@ -19,7 +19,8 @@ param(
     [switch]$WithDebugger,
     [switch]$Demo,
     [switch]$TestReboot,
-    [switch]$SkipJassCheck
+    [switch]$SkipJassCheck,
+    [switch]$NoArrayPrealloc
 )
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -217,10 +218,29 @@ Write-Host '  [3/5] Patching war3map.j'
 $jContent = Get-Content $JFile -Raw -Encoding ASCII
 $nl = [string][char]13 + [string][char]10
 
+# Every array global is allocated lazily by the JASS VM on its first store, and
+# the VM exposes no allocator. The only public way to materialise the block is a
+# self-assign at the last legal index, so do it for every declared array before
+# LoadScript: from then on jass.globals can write index > 0 uniformly. Cost is
+# 32 KB per array (8192 * 4 bytes); -NoArrayPrealloc opts out.
+$arrayGlobals = @()
+if (-not $NoArrayPrealloc) {
+    $arrayGlobals = @([regex]::Matches($jContent,
+        '(?m)^[ \t]*(?:constant[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]+array[ \t]+([A-Za-z_][A-Za-z0-9_]*)') |
+        ForEach-Object { $_.Groups[1].Value } |
+        Select-Object -Unique)
+}
+$arrayAllocCall = ''
+if ($arrayGlobals.Count -gt 0) {
+    $arrayAllocCall = '    call JapiForceAllocArrays()' + $nl
+    Write-Host ("  Array prealloc: " + $arrayGlobals.Count + " array globals")
+}
+
 # Lines that hand the shared hashtable over to the DLL and load war3map.lua.
 # When the base map carries the bridge probe functions, exercise JASS -> Lua
 # immediately after LoadScript (the Lua handlers register synchronously).
-$loadScriptLines = '    call SaveStr(japi_ht, japi__key, 0, "()V")' + $nl +
+$loadScriptLines = $arrayAllocCall +
+    '    call SaveStr(japi_ht, japi__key, 0, "()V")' + $nl +
     '    call UnitId("LoadScript")'
 if ($jContent -match 'function LuaBridgeProbeCall') {
     $loadScriptLines += $nl +
@@ -291,6 +311,10 @@ function Add-JapiBootstrap {
 }
 
 if ($jContent -match [regex]::Escape('call UnitId("LoadScript")')) {
+    if ($arrayAllocCall) {
+        $jContent = $jContent.Replace('call UnitId("LoadScript")',
+            'call JapiForceAllocArrays()' + $nl + '    call UnitId("LoadScript")')
+    }
     Write-Host '  Bootstrap: already present, left untouched'
 } elseif ($jContent -match [regex]::Escape('call initializePlugin(  )')) {
     $jContent = $jContent.Replace('call initializePlugin(  )',
@@ -302,6 +326,28 @@ if ($jContent -match [regex]::Escape('call UnitId("LoadScript")')) {
     }
     $jContent = Add-JapiBootstrap $jContent $loadScriptLines
     Write-Host '  Bootstrap: injected into map main() (foreign map)'
+}
+
+# Helper that materialises every declared array block. Defined right after
+# endglobals so both the bootstrap above and map main() can call it.
+if ($arrayGlobals.Count -gt 0) {
+    $allocBody = ''
+    foreach ($arrayName in $arrayGlobals) {
+        $allocBody += '    set ' + $arrayName + '[8191] = ' + $arrayName + '[8191]' + $nl
+    }
+    $allocFunc = '// japi array preallocation injected by tools/pack.ps1' + $nl +
+        '// JASS allocates an array block on its first store, so this self-assign is the' + $nl +
+        '// only public way to make jass.globals writes legal at index > 0.' + $nl +
+        'function JapiForceAllocArrays takes nothing returns nothing' + $nl +
+        $allocBody +
+        'endfunction' + $nl + $nl
+    $endGlobals = [regex]::Match($jContent, '(?m)^[ \t]*endglobals')
+    if (-not $endGlobals.Success) {
+        throw "war3map.j declares array globals but has no endglobals anchor: $BaseMap"
+    }
+    $anchor = $endGlobals.Index + $endGlobals.Length
+    $jContent = $jContent.Substring(0, $anchor) + $nl + $nl + $allocFunc + $jContent.Substring($anchor)
+    Write-Host '  Array prealloc: JapiForceAllocArrays injected'
 }
 Set-Content $JFile $jContent -Encoding ASCII -NoNewline
 

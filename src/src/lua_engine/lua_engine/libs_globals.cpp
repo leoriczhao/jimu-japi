@@ -2,6 +2,8 @@
 #include "class_array.h"
 #include "libs_runtime.h"
 #include "common.h"
+#include "debug_log.h"
+#include <cstdio>
 #include <warcraft3/hashtable.h>
 #include <warcraft3/war3_searcher.h>
 #include <warcraft3/jass/func_value.h>
@@ -116,16 +118,19 @@ namespace warcraft3::lua_engine::globals {
 			}
 			else
 			{
-				switch (gv.type())
+				// Whole-array assignment from Lua is not supported: write elements
+				// through globals.<name>[i] instead. Log it once so the no-op is
+				// visible rather than silently discarding the value.
+				static int warned_array_assign = 0;
+				if (warned_array_assign < 4)
 				{
-				case jass::OPCODE_VARIABLE_INTEGER_ARRAY:
-				case jass::OPCODE_VARIABLE_REAL_ARRAY:
-				case jass::OPCODE_VARIABLE_STRING_ARRAY:
-				case jass::OPCODE_VARIABLE_HANDLE_ARRAY:
-				case jass::OPCODE_VARIABLE_BOOLEAN_ARRAY:
-					break;
-				default:
-					break;
+					++warned_array_assign;
+					char msg[256];
+					snprintf(msg, sizeof(msg),
+						"[jass.globals] assignment to whole array ignored: %s "
+						"(write elements instead: globals.%s[i] = value)",
+						name, name);
+					japi_log::sync_write(msg);
 				}
 			}
 		}

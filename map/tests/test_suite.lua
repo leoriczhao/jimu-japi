@@ -554,9 +554,28 @@ test("jass.globals scalar and array writes", function()
     globals.udg_lua_test_value = 12345
     assert(globals.udg_lua_test_value == 12345,
         "scalar read " .. tostring(globals.udg_lua_test_value))
+
+    -- tools/pack.ps1 force-allocates every declared array before LoadScript
+    -- (self-assign at index 8191), so writes past index 0 must round-trip even
+    -- on arrays no JASS code ever touched.
     globals.udg_lua_test_array[0] = 7
     assert(globals.udg_lua_test_array[0] == 7,
-        "array read " .. tostring(globals.udg_lua_test_array[0]))
+        "array[0] read " .. tostring(globals.udg_lua_test_array[0]))
+    globals.udg_lua_test_array[1] = 424242
+    assert(globals.udg_lua_test_array[1] == 424242,
+        "array[1] read " .. tostring(globals.udg_lua_test_array[1]))
+    globals.udg_lua_test_array[8191] = 99
+    assert(globals.udg_lua_test_array[8191] == 99,
+        "array[8191] read " .. tostring(globals.udg_lua_test_array[8191]))
+    assert(#globals.udg_lua_test_array == 8192,
+        "array_size " .. tostring(#globals.udg_lua_test_array))
+
+    globals.udg_lua_test_array_untouched[5] = 77
+    assert(globals.udg_lua_test_array_untouched[5] == 77,
+        "untouched array[5] read " .. tostring(globals.udg_lua_test_array_untouched[5]))
+    globals.udg_lua_test_string_array[7] = "japi"
+    assert(globals.udg_lua_test_string_array[7] == "japi",
+        "string array[7] read " .. tostring(globals.udg_lua_test_string_array[7]))
 end)
 
 test("handle_level 0/1/2 round-trip", function()

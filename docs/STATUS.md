@@ -5,7 +5,7 @@
 
 - 最后更新：2026-11-15
 - 支持版本：Warcraft III 1.27a（当前偏移与实机验收版本）
-- 普通实机回归：`116 passed, 0 failed, 116 total`（2026-10-26；新增 8 项 JASS↔Lua bridge 回归）
+- 普通实机回归：`116 passed, 0 failed, 116 total`（2026-11-15 复跑；含 8 项 JASS↔Lua bridge 回归与数组全局预分配后的 `jass.globals` 用例）
 - LocalPoint 交互回归：`109 passed, 0 failed, 109 total`（真实前台 Q 键，2026-07-30，旧 108 基线；本次未重跑）
 - UI 交互回归：`110 passed, 0 failed, 110 total`（真实鼠标悬停 + 命令卡显隐，2026-07-30，旧 108 基线；本次未重跑）
 - D3D 实机回归：`164 passed, 0 failed, 164 total`（2026-11-15；普通基线 116 项 + D3D 48 项：公共 SDK 功能 8 组 + 底层 bridge 13 组 + P4 Subscription 真实输入 1 组 + P5 生命周期 7 项 + shutdown 1 组 + §15.8 覆盖补齐 17 项（handler 往返 10 + 事件回调 3 + 交互期探针 3 + BLP2 实机 1）；handler 兼容面 54/54 已全部触达，仍不等于 164 个 API）
@@ -39,6 +39,7 @@
 - `UnitId` + hashtable RPC 完成 JASS/Lua bridge 分发。
 - Lua VM 惰性创建并从 MPQ 加载合并后的 `script\war3map.lua`。
 - `pack.ps1` 默认使用可提交的 `reference/empty-map/` 源地图，也支持显式传入 `.w3m` / `.w3x` 或其他源目录；完成 Lua 合并、DLL/debugger 资源注入与地图重打包。
+- 打包器默认对所有声明的数组全局做预分配（`JapiForceAllocArrays`，见 §4），使 `jass.globals` 从第一个地图开始就能写任意合法下标；`-NoArrayPrealloc` 可关闭。
 - `deploy.ps1` 部署并启动真实 War3，按本次进程的新日志等待 `Results:`。
 - `war3map.w3u.ini` 定义真正的英雄单位 `Hrif`（英雄父类 + 火枪手模型/图标/声音/弹道）；打包时自动生成二进制对象数据。
 - `lib.scene` 在初始化与测试结束时清空单位，创建唯一的可受伤 10 级英雄火枪手，并在最终画面选中它。
@@ -59,7 +60,7 @@
 - native hook/unhook 与 `orig` 闭包。
 - handle level 0/1/2、userdata 与 GC；0/1/2 往返和 level 2 GC 已纳入回归。
 - JASS -> Lua 的 UnitId 桥：`jass.japi` 注册时同时进入 native 表和 UnitId 分发；整数/字符串/布尔、`(Hplayer;)Hplayer;` 句柄、`()V` 回调和错误路由均已实测。
-- `jass.globals` 标量与数组写入已实测；`runtime.error_handle` 能接住 JASS 调 Lua handler 的错误。
+- `jass.globals` 标量与数组读写已实测（含 `index` 0/1/8191、`#arr` 长度、从未被 JASS 触碰过的整数/字符串数组）；`runtime.error_handle` 能接住 JASS 调 Lua handler 的错误。
 
 当前边界：`native Foo` + 运行时 `jass.japi` 注册在 callback 模式下不能作为 JASS 调用目标（JASS 已编译的 native 调用不会在运行时绑定到新注册项）；JASS→Lua 请走 UnitId 桥或 `jass.code`。`sleep()` 只在 `runtime.sleep = true` 且当前线程是 trigger/action thread 时可用；裸 timer callback 与纯 Lua 协程没有恢复路径。
 
@@ -116,7 +117,7 @@ bridge handler、清 message/D3D 分发状态，再 `lua_close` 旧 `lua_State` 
 | 项目 | 当前证据 | 状态 / 完成条件 |
 |---|---|---|
 | `EXGetEventDamageData` / `EXSetEventDamage` | 真实 `EVENT_UNIT_DAMAGED` 中读取来源/目标/类型，20 点伤害改写为 7，并以 `GetEventDamage`、生命差和原生 7 点对照命中闭环验证；2 项自动测试通过 | **完成** |
-| JASS↔Lua 基础桥接 | `jass.japi` 注册同时进入 native 表和 UnitId 分发；JASS `main` 实测 `()V` 回调、`(II)I`=42、`(Hplayer;)Hplayer;` 句柄往返和错误进 `runtime.error_handle`；`jass.globals` 标量/数组写、handle level 0/1/2、level 2 GC、trigger-action sleep 均通过；普通回归 `116/116` | **完成（UnitId / trigger action 路线）**；JASS 侧 `native Foo` + 运行时注册在 callback 模式不可用；sleep 不适用于裸 timer callback/纯 Lua 协程；已知限制：`jass.globals` 对地图从未分配过的数组元素 `index>0` 写入无效（`class_array.cpp` 的 `gv.array_vaild`），读回 `nil` |
+| JASS↔Lua 基础桥接 | `jass.japi` 注册同时进入 native 表和 UnitId 分发；JASS `main` 实测 `()V` 回调、`(II)I`=42、`(Hplayer;)Hplayer;` 句柄往返和错误进 `runtime.error_handle`；`jass.globals` 标量/数组写、handle level 0/1/2、level 2 GC、trigger-action sleep 均通过；普通回归 `116/116` | **完成（UnitId / trigger action 路线）**；JASS 侧 `native Foo` + 运行时注册在 callback 模式不可用；sleep 不适用于裸 timer callback/纯 Lua 协程。数组策略：JASS VM 只在首次写入时分配数组块，且没有公开分配器，所以由打包器在 `LoadScript` 之前插入 `JapiForceAllocArrays()`（对每个数组 `set arr[8191] = arr[8191]`，每个数组 32 KB），此后 `jass.globals` 的 `index>0` 写入、`#arr` 与字符串数组都可靠；万一仍有未分配数组，`jarray_newindex` 会写一条 `[jass.globals] write ignored` 日志而不是静默丢弃 |
 | `LocalPointOrder` | bridge ABI 调用安全；真实前台 Q 键进入 `message.hook`（code 81），共享 submit 提交 `blizzard` 点命令并返回 `true`；`EVENT_UNIT_SPELL_EFFECT` 触发且技能 id 为 `AHbz`；清理诊断代码并重编译后交互套件为 `109/0/109` | **完成**；普通右键移动走 smart-click 包，不是该 API 的 point-order 契约，详见逆向记录 08 §7.3 |
 | `GetTargetObject` | `-InteractiveUi` 固定镜头创建敌方城镇大厅；真实鼠标点击/悬停后返回 handle `1050778`，与夹具 handle `1050778` 精确一致 | **完成** |
 | `SetUnitAbilityButtonShow` | 大法师 `AHbz` 命令卡槽从显示 `(0,2)` 变为隐藏 `nil,nil`，10 秒后自动恢复 `(0,2)`；真实窗口截图同时确认紫色暴风雪图标消失，交互套件为 `110/0/110` | **完成** |
@@ -139,6 +140,11 @@ bridge handler、清 message/D3D 分发状态，再 `lua_close` 旧 `lua_State` 
 ```powershell
 .\tools\deploy.ps1
 ```
+
+打包器会给每个声明的数组全局生成并在 `main()` 里调用 `JapiForceAllocArrays`（位置在
+`initializePlugin()` 之后、`UnitId("LoadScript")` 之前，因为 JASS 的 `InitGlobals()` 晚于
+`LoadScript`，而数组块只能由 JASS store 分配）。每个数组固定占 8192×4 = 32 KB；
+不需要这批预分配时加 `-NoArrayPrealloc`（例如给内存敏感的地图打补丁）。
 
 D3D handler 合同与覆盖校验（静态，不启动 War3；要求 manifest、注册点与 `test_d3d.lua` 触达集合严格一致）：
 
@@ -308,7 +314,12 @@ Clean proxy SHA-256 为 `0564A518EB3CB2F91CD65D0BDC766B9FC5B8709335CFFE5274C1FED
    窗口模式下仍不可观测，`ShowFpsText` 只有弱断言，覆盖数不等于每个 handler 的全部参数边界。发布产物
    溯源（§16 第 13 项）随后闭环：提交 `d151fd7`（SDK 0.4.0）的 detached clean worktree 重建与 hash 回读已完成（第 4 节、
    设计文档 14.4），因此总览里该行改为「可用」。
-6. 之后再评估 JASS wrapper 自动生成和 SaveFunc/func_bind。
+6. 数组全局预分配（完成，2026-11-15）：打包器在 `LoadScript` 之前调用 `JapiForceAllocArrays`，对每个声明的
+   数组全局做一次 `[8191]` 自赋值，从而把「JASS VM 惰性分配数组块」这件事挡在地图作者视野之外；
+   `jass.globals` 的 `index>0` 写入、`#arr` 长度和字符串数组都进了普通回归（116/116），未分配时的静默丢写
+   改为一条 `[jass.globals] write ignored` 日志。同时修掉 `class_array.cpp` 的 `__len` 空指针（读取不存在的
+   upvalue, `#arr` 会让游戏挂起）。
+7. 接着做 JASS wrapper 自动生成（E4）与 SaveFunc/func_bind（进行中）。
 
 ## 6. 文档职责
 

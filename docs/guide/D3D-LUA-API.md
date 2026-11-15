@@ -271,7 +271,9 @@ Subscription 也走 `__close`，可配合 `local sub <close> = texture:on(...)`�
 - `device_lost` 事件不可观测（见 §8）。
 - 地图级重置只在**重新载入地图**时发生（重新进图/重开一局）；单局游戏内没有“重启本图”的入口，
   需要重开就重新进图，此时旧 VM、旧 session 和旧 HUD 会一起消失。
-- `jass.globals` 只对地图已分配过的数组元素可靠：`index>0` 且地图从未触碰过的元素写入无效、读回 `nil`。
+- `jass.globals` 的数组元素依赖打包器注入的预分配（`tools/pack.ps1` 默认给每个声明的数组生成
+  `JapiForceAllocArrays`，在 `LoadScript` 之前调用）：默认打包出的图可以写任意合法下标（0–8191）并读 `#arr`；
+  用 `-NoArrayPrealloc` 打包时，从未被 JASS 触碰过的数组 `index>0` 写入无效、读回 `nil`。
 - `Texture:error()` 恒为 nil（保留接口）。
 - `file://` 禁用；单文件上限 64 MiB；BLP 只走内存解码路径（`asset://`/`game://`），实机证据覆盖 BLP1/PNG
   与 BLP2 的 raw BGRA / 调色板 / DXT1（BLP2 的 JPEG 编码不支持，会报 `texture asset is invalid`）。
