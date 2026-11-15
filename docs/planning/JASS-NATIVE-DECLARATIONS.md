@@ -60,7 +60,16 @@ R1 的手感特别差：失败是**静默**的——地图不报错，直接回�
 
 这张表不是猜的：它就是 `Scripts\common.ai`（暴雪的 AI 脚本方言，文件头 `$Id: common.ai,v 1.68 2003/05/12`）里声明的 native 集——`common.ai:45 native SetHeroLevels takes code func returns nothing`、`:21 native GetUnitGoldCost takes integer unitid returns integer`、`:108 native TeleportCaptain takes real x, real y returns nothing`、`:126 native StartThread takes code func returns nothing`。这些名字只在 AI 方言里可见，`common.j`（地图脚本方言）从不声明它们，所以普通地图代码看不见；但引擎启动时把 AI 那套 native 一起注册进同一张 native 表，地图脚本按名字声明就能命中（R2）。
 
-证据来源：本机 `D:\Warcraft III Frozen Throne 1.27a publish\jass_temp\Scripts\common.ai`（98,429 B，与同目录 `common.j` 166,690 B、`jass_temp\war3map.j` 101,161 B、`jass_temp\war3mapSkin.txt`、`jass_temp\检测消息.txt` 同一批 2026-06-15 时间戳）。这批文件是内置插件的 `jass.dll` 把脚本集解出来自己重编译留下的（对上 `docs/re-builtin-japi/02-jass-dll.md:494-495` 里的 `jass_temp\war3map.j`、`jass_temp\Scripts\common.j` 字符串），也解释了内置地图为什么能声明那三条 native：它不走游戏自己的 `war3map.j` 编译路径。`tools/w3x2lni/data/enUS-1.27.1/mpq/Scripts/` 里只有 `Common.j` 与 `Blizzard.j`、没有 `common.ai`，所以拿 `Common.j` 搜这三个名字是搜不到的。
+证据来源：本机 `D:\Warcraft III Frozen Throne 1.27a publish\jass_temp\Scripts\common.ai`（98,429 B；同目录还有 `common.j` 166,690 B、`blizzard.j` 451,847 B、`jass_temp\war3map.j` 101,161 B、`jass_temp\war3mapSkin.txt`，以及 `jass_temp\检测消息.txt`，同一批 2026-06-15 时间戳）。这是一次**脚本抽取 + `pjass` 语法检查**留下的临时目录：
+
+- `jass_temp\war3map.j` 与 `reference/builtin-japi/war3map.j` 字节完全相同（SHA256 `0CD995951237863E1582F11A87C3EDB9768BB0A40F89F34ECE0941E4DD99CCF8`），`war3mapSkin.txt` 也与内置地图一致——所以抽的是内置 JAPI 那张演示地图的文件。
+- `检测消息.txt` 就是那次检查的完整日志：命令行 `pjass.exe jass_temp\Scripts\common.j jass_temp\Scripts\common.ai jass_temp\Scripts\blizzard.j jass_temp\war3map.j`，三条 `Parse successful`（common.j/blizzard.j/common.ai），随后 `jass_temp\war3map.j:98: Symbol SetHeroLevels multiply defined`（`:99 TeleportCaptain`、`:100 GetUnitGoldCost` 同理），最后 `Parse failed: 3 errors total`。
+
+这三条 `multiply defined` 正好从反面证明规则：**把 `common.ai` 放进同一个编译单元**时，那三个名字已经被 `common.ai` 声明过，地图脚本再声明就撞名；而游戏运行时编译 `war3map.j` 只拼 `common.j` + `blizzard.j`、**不加载 `common.ai`**，所以同样三条声明在游戏里合法（T10 用我们自己的包法实测通过，不需要任何额外编译路径）。
+
+> 待验证、且本节的结论**不依赖**它：`docs/re-builtin-japi/02-jass-dll.md:494-495` 的字符串转储里有 `jass_free`、`jass_temp\war3map.j`、`jass_temp\Scripts\common.j`，同一份报告的 4.2 节还在插件文件名清单里列了 `pjass.exe`。字符串只能说明这些路径/文件名出现在插件二进制里，**不能**证明插件会在运行时把脚本写到 `jass_temp` 再自己编译；要判定得用 Procmon 抓 `war3.exe` 对 `jass_temp` 的写入与 `pjass.exe` 的进程创建。曾有一版本文把"`jass_temp` 是插件运行时重编译留下的"当成事实，现已降级为本条待验证假设。
+
+`tools/w3x2lni/data/enUS-1.27.1/mpq/Scripts/` 里只有 `Common.j` 与 `Blizzard.j`、没有 `common.ai`，所以拿 `Common.j` 搜这三个名字是搜不到的；本机那份 `common.ai` 是从游戏 MPQ 抽出来的。
 
 `SetHeroLevels` 的语义因此也清楚了：`common.ai:779 function StandardAI takes code heroes, code peons, code attacks`（`:2398 CampaignAI` 同款）里的 `heroes` 是一个 AI 线程函数，`:801` 与 `:2426` 的 `call SetHeroLevels(heroes)` 把它交给引擎去管英雄升级——**参数是一个 code 回调，不是单位 id**。它和地图侧 `common.j:1501 native SetHeroLevel takes unit whichHero, integer level, boolean showEyeCandy`（单数、收 unit 和 level）是两个不同方言里的不同函数；拿 AI 方言的名字做取址隧道安全，原因也在这：标准地图代码根本调不到它。
 
@@ -134,6 +143,6 @@ R1 的手感特别差：失败是**静默**的——地图不报错，直接回�
 
 - 只枚举到 `game.dll` 里那一段 15 条 AI native，**没有**全量导出引擎 native 表：想换别的取址隧道，得先确认名字在 game.dll 注册序列里。
 - 只实测了 `SetHeroLevels`；`TeleportCaptain` / `GetUnitGoldCost` 只解析到字符串与签名，没有单独跑。
-- 规则依赖游戏版本：换 1.27 以外的版本要重新确认名字存在、`japi_add` 覆写仍生效。名字清单的权威来源是各版本自己的 `Scripts\common.ai`（1.27a 的副本在游戏目录 `jass_temp\Scripts\common.ai`；`tools/w3x2lni/data` 只有 `Common.j`/`Blizzard.j`），换版本时先解这份再挑隧道。
+- 规则依赖游戏版本：换 1.27 以外的版本要重新确认名字存在、`japi_add` 覆写仍生效。名字清单的权威来源是各版本自己的 `Scripts\common.ai`（1.27a 的副本在本机游戏目录 `jass_temp\Scripts\common.ai`，来源见 §3；`tools/w3x2lni/data` 只有 `Common.j`/`Blizzard.j`），换版本时先解这份再挑隧道。
 - `GetFuncAddr` 拿到的是 VM 代码区索引，**没有**换算成 `code_table` 里的绝对地址（`src/src/yd_core/warcraft3/jass/trampoline.cpp:11-15` 那套 `offset/4` 换算）；目前用途只需要"能当 code 用 / 能当整数比大小"。
 - R1 的边界是"第一个函数之前"：`globals` 块之前或之后都可以，但**不能**夹在任何 `function` 之后。将来 pack 若要在更早的位置注入别的东西，必须是纯 `globals` 或更早的声明。
