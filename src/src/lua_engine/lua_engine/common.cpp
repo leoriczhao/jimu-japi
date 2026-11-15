@@ -8,6 +8,7 @@
 #include <warcraft3/jass.h>
 #include <warcraft3/jass/trampoline_function.h>
 #include <base/util/singleton.h>
+#include "extensions/ex_natives/FuncBind.h"
 
 namespace warcraft3::lua_engine {
 
@@ -89,6 +90,11 @@ namespace warcraft3::lua_engine {
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER){
 			const char* name = jass_function_name(func_address);
+			// Fall back to the SaveFunc / func_bind_trigger_name labels: those are
+			// exactly the addresses the map author wanted to see named in logs.
+			if (!name) {
+				name = warcraft3::japi::lookup_func_name((uint32_t)func_address);
+			}
 			if (!name) {
 				name = "unknown";
 			}

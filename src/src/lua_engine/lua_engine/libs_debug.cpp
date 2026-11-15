@@ -4,6 +4,7 @@
 #include <warcraft3/war3_searcher.h>
 #include <cstdio>
 #include <string>
+#include "extensions/ex_natives/FuncBind.h"
 
 namespace warcraft3::lua_engine::debug {
 
@@ -172,6 +173,44 @@ namespace warcraft3::lua_engine::debug {
 		return 0;
 	}
 
+	static int func_bind_lookup(lua_State* L)
+	{
+		uint32_t address = (uint32_t)luaL_checkinteger(L, 1);
+		const char* name = warcraft3::japi::lookup_func_name(address);
+		if (!name)
+		{
+			lua_pushnil(L);
+			return 1;
+		}
+		lua_pushstring(L, name);
+		return 1;
+	}
+
+	static int func_bind_count(lua_State* L)
+	{
+		lua_pushinteger(L, (lua_Integer)warcraft3::japi::func_bind_count());
+		return 1;
+	}
+
+	static int func_bind_clear(lua_State* /*L*/)
+	{
+		warcraft3::japi::clear_func_bind();
+		return 0;
+	}
+
+	static int jass_func_address(lua_State* L)
+	{
+		const char* name = luaL_checkstring(L, 1);
+		lua_pushinteger(L, (lua_Integer)warcraft3::japi::find_func_address(name));
+		return 1;
+	}
+
+	static int save_func_addr(lua_State* L)
+	{
+		lua_pushinteger(L, (lua_Integer)warcraft3::japi::save_func_addr());
+		return 1;
+	}
+
 	int open(lua_State* L)
 	{
 		lua_newtable(L);
@@ -188,6 +227,11 @@ namespace warcraft3::lua_engine::debug {
 				{ "handle_ref", handle_ref },
 				{ "handle_unref", handle_unref },
 				{ "gchash", gchash },
+				{ "jass_func_address", jass_func_address },
+				{ "func_bind_lookup", func_bind_lookup },
+				{ "func_bind_count", func_bind_count },
+				{ "func_bind_clear", func_bind_clear },
+				{ "save_func_addr", save_func_addr },
 				{ NULL, NULL },
 			};
 			luaL_setfuncs(L, lib, 0);

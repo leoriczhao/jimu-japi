@@ -50,6 +50,14 @@ check("the D3D session was recreated, not reused", function()
         string.format("session %d survived the VM reset", old_session))
 end)
 
+check("FuncBind labels were cleared by the map boot", function()
+    local jdbg = require "jass.debug"
+    assert(jdbg.func_bind_count() == 0,
+        "labels survived: " .. tostring(jdbg.func_bind_count()))
+    assert(jdbg.save_func_addr() == 0,
+        "anchor survived: " .. tostring(jdbg.save_func_addr()))
+end)
+
 check("old session resources were released", function()
     local stats = assert(d3d.stats())
     assert(stats.session_id == status.session_id,

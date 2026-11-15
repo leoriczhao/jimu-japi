@@ -47,7 +47,7 @@
 | GetChatState | ()B | 聊天框是否打开（CGameUI 状态位） | 中 |
 | GetLittleMapX / SetLittleMapX | ()R / (R)V | 小地图图像坐标（CGameUI+偏移） | 中 |
 | GetLittleMapY / SetLittleMapY | ()R / (R)V | 同上 | 中 |
-| SaveFunc + func_bind_trigger_name | (I)V / (IS)V | 崩溃日志/运行日志反查基础设施，依赖 GetFuncAddr 通道（内置版用 hooked SetHeroLevels）。**判定：降级为可选**——我们的 func_bind 场景（code_run_logs）已另有 stub | 高（可选） |
+| SaveFunc + func_bind_trigger_name | (I)V / (IS)V | 崩溃日志/运行日志反查基础设施，依赖 GetFuncAddr 通道（内置版用 hooked SetHeroLevels）。**判定：降级为可选**——我们的 func_bind 场景（code_run_logs）已另有 stub。2026-11-15 更新：已按内置线上契约实现为 bridge handler（`(I)V` 锚点 + `(IS)V` 地址→标签表）、`jass.debug` 查询/清理 API 与崩溃命名回退，普通 122/122、VM 重置 9/9；内置 `GetFuncAddr` 依赖的 hooked `SetHeroLevels` 在 callback 模式无法由脚本声明，因此脚本 Action 地址仍无通道（见 [STATUS.md](../STATUS.md) §3） | 高（可选） |
 
 ### 2.2 鼠标 / 本地命令 / 选择（10 个缺失）
 

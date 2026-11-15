@@ -49,6 +49,14 @@ function M.run()
         globals.udg_lua_error_result = 12345
     end)
 
+    -- FuncBind state must not survive the reset either: label an address through
+    -- the bridge so the child can assert the table came back empty.
+    local ht, key = globals.japi_ht, globals.japi__key
+    jass.SaveStr(ht, key, 0, "(IS)V")
+    jass.SaveInteger(ht, key, 1, 0x0012ABD0)
+    jass.SaveStr(ht, key, 2, "reboot-should-drop")
+    jass.UnitId("func_bind_trigger_name")
+
     -- Parent -> child handoff through the JASS global table (it outlives the VM).
     -- udg_lua_test_value is the one probe global the injected JASS probes do not
     -- overwrite after LoadScript() returns.

@@ -92,6 +92,7 @@ set(EXT_SOURCES
     src/extensions/ex_natives/UnitState.cpp
     src/extensions/ex_natives/GameInfo.cpp
     src/extensions/ex_natives/CodeRunLogs.cpp
+    src/extensions/ex_natives/FuncBind.cpp
     src/extensions/ex_natives/AbilityState.cpp
     src/extensions/ex_natives/ItemState.cpp
     src/extensions/ex_natives/Effect.cpp

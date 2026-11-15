@@ -5,11 +5,11 @@
 
 - 最后更新：2026-11-15
 - 支持版本：Warcraft III 1.27a（当前偏移与实机验收版本）
-- 普通实机回归：`116 passed, 0 failed, 116 total`（2026-11-15 复跑；含 8 项 JASS↔Lua bridge 回归与数组全局预分配后的 `jass.globals` 用例）
+- 普通实机回归：`122 passed, 0 failed, 122 total`（2026-11-15 复跑；含 8 项 JASS↔Lua bridge 回归、数组全局预分配后的 `jass.globals` 用例，以及 6 项 `SaveFunc` / `func_bind_trigger_name` 回归）
 - LocalPoint 交互回归：`109 passed, 0 failed, 109 total`（真实前台 Q 键，2026-07-30，旧 108 基线；本次未重跑）
 - UI 交互回归：`110 passed, 0 failed, 110 total`（真实鼠标悬停 + 命令卡显隐，2026-07-30，旧 108 基线；本次未重跑）
 - D3D 实机回归：`164 passed, 0 failed, 164 total`（2026-11-15；普通基线 116 项 + D3D 48 项：公共 SDK 功能 8 组 + 底层 bridge 13 组 + P4 Subscription 真实输入 1 组 + P5 生命周期 7 项 + shutdown 1 组 + §15.8 覆盖补齐 17 项（handler 往返 10 + 事件回调 3 + 交互期探针 3 + BLP2 实机 1）；handler 兼容面 54/54 已全部触达，仍不等于 164 个 API）
-- 地图级 VM 重启回归：`8 passed, 0 failed, 8 total`（2026-11-15；同一进程内换图后旧 Lua VM 关闭、新图脚本重载、旧 session 资源归零）
+- 地图级 VM 重启回归：`9 passed, 0 failed, 9 total`（2026-11-15；同一进程内换图后旧 Lua VM 关闭、新图脚本重载、旧 session 资源归零；新增断言证明 `SaveFunc` 锚点与 `func_bind` 标签表随地图启动被清空）
 - D3D 发布产物溯源：提交 `d151fd7`（SDK 0.4.0）的 detached clean worktree 构建（HEAD 精确一致、tracked diff 为零）用同一产物实跑交互 `164/164`、普通 `116/116`、地图级 VM 重置 `8/8`，游戏目录 proxy 与 sidecar 回读等于 clean proxy hash（2026-11-15；交互回归使用夹具修正提交 `65bceb5`，见第 4 节）
 - 默认测试场景：64×64 平坦空图，无基地、野怪、树木或预放物件；最终仅保留 1 个 10 级英雄火枪手 `Hrif`（2026-07-31）
 - 验收入口：先运行 `src\build.bat`，再按第 4 节选择普通或交互模式
@@ -22,14 +22,14 @@
 | Lua 引擎模块 | 12/12（含 `jass.d3d`） | 自动回归 + 实机 | 全部可用；`jass.d3d` 的保留限制见下方 D3D 行与设计文档 15.8.4 |
 | 核心 runtime 能力 | 7/7 功能目标 | 自动回归 + 实机 | 可用 |
 | Lua DAP 调试器 | P0-P5 完成 | attach、断点、单步、栈、变量、求值实测 | 可用，需 `-WithDebugger` |
-| 非 D3D bridge native | 67/67 注册 | 普通 116/116 + 两套真实交互回归（旧 108 基线） | 已实现并验收 |
+| 非 D3D bridge native | 历史批次 67/67 注册，2026-11-15 追加 `SaveFunc (I)V` 与 `func_bind_trigger_name (IS)V` | 普通 122/122 + 两套真实交互回归（旧 108 基线） | 已实现并验收 |
 | D3D 底层 proxy/bridge | proxy、注册、部署、诊断、绘制、code 回调链与 device 状态/世代已跑通；P0/P1 兼容、部署和原生 session 基座已闭环 | 普通 116/116 + 累计 D3D 164/164 + 真实视觉/鼠标/Shift 交互 | **可用**（SDK 约束见下行） |
 | D3D Lua SDK 与生命周期 | P2–P5 已提供 Font/Text/Texture 强类型 userdata、统一跨类型队列、D3DXFont alpha、`asset://`/`game://` 内存资源、共享 CPU cache、显式销毁、GC/`__close`、reload、显式 session shutdown，Subscription（enter/leave/mouse_down/mouse_up/click/key_down/key_up、pointer capture、6px 点击阈值、`hover_only`/`propagate`/`keep_on_error`、只读 event 表），以及 P5 生命周期：Text `ttl` 到期释放、`d3d.on("resize"/"device_lost"/"device_reset")` 模块级订阅、`device_generation` 世代号、`d3d.status()` 的 `state`/`device_generation` 诊断和失败不泄漏合同；真实鼠标键盘由窗口 `WM_*` 消息 + 异步按键状态驱动，因为 1.27a 游戏内 CGameUI 分发只送键盘消息；地图级 VM 重置已闭环：换图时 `lua_close` 旧 VM、重载新图脚本，session 随 VM 关闭自动 `end_session`（`-TestReboot` 8/8） | 公共 SDK 功能 8 组 + Subscription 真实输入 + 生命周期 7 项 + shutdown 1 组实机通过（交互 D3D 164/164，其中真实窗口 20 次 resize 触发 20 次 device reset，句柄/属性/订阅全部保持）；handler 兼容面 54/54 与 BLP2 内存解码（raw/palette/DXT1）实机通过；原生 ABI 1000 轮通过 | **可用**（2026-11-15：P0–P6 闭环；发布产物来自提交 `d151fd7`（SDK 0.4.0）的 detached clean 构建，构建/部署/sidecar hash 一致，见 §4 与设计文档 14.4）；保留限制见 [设计文档](planning/D3D-LUA-SDK-DESIGN.md) 15.8.4 |
 | 空白测试场景 | 64×64 空图 + 单个 10 级英雄火枪手确定性复位 | 普通 116/116 + D3D 164/164 + 真实窗口检查 | 可用；默认基座 |
 | 可玩垂直切片（`-Demo`） | 英雄 + 暴风雪（Q）+ 点击选中 + D3D HUD，只用 `jass.common`/`jass.message`/`jass.d3d`；自带 11 条断言 | 普通图 11/11、外来地图夹具 11/11 | **可用，作为地图作者开工样板** |
 | 外来地图接入（bootstrap 注入） | 对无 japi 痕迹的 `war3map.j` 自动注入 globals + `JapiBootstrap()` + `main()` 调用；repack 前用 pjass 校验 | `build\foreign-map` 夹具 `-Demo` 11/11 | **完成（JASS 地图）**；vJass 需 `-SkipJassCheck` |
 | JASS wrapper 自动生成（E4） | 未实现 | 无 | 可选后续 |
-| SaveFunc / func_bind | 仅 `open_code_run_logs` stub | 无完整验收 | 未完成/可选 |
+| SaveFunc / func_bind | `SaveFunc (I)V` 存锚点、`func_bind_trigger_name (IS)V` 存地址→UTF-8 标签，`jass.debug` 暴露查询/清理 API，崩溃消息回退查表，地图启动清表 | 普通 122/122（6 项）+ VM 重置 9/9 | 已实现（地址来源见 §3 限制） |
 
 ## 2. 已交付功能
 
@@ -62,9 +62,12 @@
 - JASS -> Lua 的 UnitId 桥：`jass.japi` 注册时同时进入 native 表和 UnitId 分发；整数/字符串/布尔、`(Hplayer;)Hplayer;` 句柄、`()V` 回调和错误路由均已实测。
 - `jass.globals` 标量与数组读写已实测（含 `index` 0/1/8191、`#arr` 长度、从未被 JASS 触碰过的整数/字符串数组）；`runtime.error_handle` 能接住 JASS 调 Lua handler 的错误。
 
+- `SaveFunc` / `func_bind_trigger_name` bridge handler、地址→标签表与 `jass.debug` 的 `jass_func_address`/`save_func_addr`/`func_bind_lookup`/`func_bind_count`/`func_bind_clear` 已实测；`jass.code(fn)` 能把 Lua 函数变成 VM 真正会执行的 code 地址（地址来源限制见 §3）。
+- 崩溃消息在 `jass_function_name` 之外回退查 `func_bind` 标签表，地图启动（含同进程换图）时清空锚点与标签。
+
 当前边界：`native Foo` + 运行时 `jass.japi` 注册在 callback 模式下不能作为 JASS 调用目标（JASS 已编译的 native 调用不会在运行时绑定到新注册项）；JASS→Lua 请走 UnitId 桥或 `jass.code`。`sleep()` 只在 `runtime.sleep = true` 且当前线程是 trigger/action thread 时可用；裸 timer callback 与纯 Lua 协程没有恢复路径。
 
-### 2.4 非 D3D native（67/67 注册）
+### 2.4 非 D3D native（历史批次 67/67 注册；2026-11-15 追加 `SaveFunc` 与 `func_bind_trigger_name`）
 
 - 单位数据 12 个。
 - 技能/Buff 数据 14 个。
@@ -118,6 +121,7 @@ bridge handler、清 message/D3D 分发状态，再 `lua_close` 旧 `lua_State` 
 |---|---|---|
 | `EXGetEventDamageData` / `EXSetEventDamage` | 真实 `EVENT_UNIT_DAMAGED` 中读取来源/目标/类型，20 点伤害改写为 7，并以 `GetEventDamage`、生命差和原生 7 点对照命中闭环验证；2 项自动测试通过 | **完成** |
 | JASS↔Lua 基础桥接 | `jass.japi` 注册同时进入 native 表和 UnitId 分发；JASS `main` 实测 `()V` 回调、`(II)I`=42、`(Hplayer;)Hplayer;` 句柄往返和错误进 `runtime.error_handle`；`jass.globals` 标量/数组写、handle level 0/1/2、level 2 GC、trigger-action sleep 均通过；普通回归 `116/116` | **完成（UnitId / trigger action 路线）**；JASS 侧 `native Foo` + 运行时注册在 callback 模式不可用；sleep 不适用于裸 timer callback/纯 Lua 协程。数组策略：JASS VM 只在首次写入时分配数组块，且没有公开分配器，所以由打包器在 `LoadScript` 之前插入 `JapiForceAllocArrays()`（对每个数组 `set arr[8191] = arr[8191]`，每个数组 32 KB），此后 `jass.globals` 的 `index>0` 写入、`#arr` 与字符串数组都可靠；万一仍有未分配数组，`jarray_newindex` 会写一条 `[jass.globals] write ignored` 日志而不是静默丢弃 |
+| `SaveFunc` / `func_bind_trigger_name` | 两个名字按内置地图的线上契约实现为 bridge handler（`(I)V` 存锚点、`(IS)V` 存地址→UTF-8 标签）；仓库内没有任何脚本能产生 Action 地址，所以夹具用 `jass.code(function() ... end)` 生成真实 trampoline 地址，再用 `TriggerAddCondition` + `TriggerEvaluate` 证明该地址确实被 VM 执行，标签/rebind/clear/锚点替换逐项断言（含中文标签字节精确）；普通回归 6 项通过、VM 重置新增 1 项证明表随地图启动清空，日志可见 `[FuncBind] bind 0x0012ABD0 -> reboot-should-drop` 与 `[FuncBind] clearing 1 binding(s) on map boot` | **完成（不含脚本 Action 地址来源）**：callback 模式下 `war3map.j` 声明 `SetHeroLevels` 这类 native 会让脚本编译期失败（运行时注册项不在编译期 native 表里，地图到不了 `main()`，实测整局不启动），`jass.debug.jass_func_address` 只能解析 native；可用地址来源是 `jass.code(Lua 函数)` 与 native 名。内置 `GetFuncAddr` → 脚本 Action 标签这条链保留为可选后续 |
 | `LocalPointOrder` | bridge ABI 调用安全；真实前台 Q 键进入 `message.hook`（code 81），共享 submit 提交 `blizzard` 点命令并返回 `true`；`EVENT_UNIT_SPELL_EFFECT` 触发且技能 id 为 `AHbz`；清理诊断代码并重编译后交互套件为 `109/0/109` | **完成**；普通右键移动走 smart-click 包，不是该 API 的 point-order 契约，详见逆向记录 08 §7.3 |
 | `GetTargetObject` | `-InteractiveUi` 固定镜头创建敌方城镇大厅；真实鼠标点击/悬停后返回 handle `1050778`，与夹具 handle `1050778` 精确一致 | **完成** |
 | `SetUnitAbilityButtonShow` | 大法师 `AHbz` 命令卡槽从显示 `(0,2)` 变为隐藏 `nil,nil`，10 秒后自动恢复 `(0,2)`；真实窗口截图同时确认紫色暴风雪图标消失，交互套件为 `110/0/110` | **完成** |
@@ -177,7 +181,7 @@ D3D handler 合同与覆盖校验（静态，不启动 War3；要求 manifest、
 `tools\pjass.exe` + 1.27.1 的 Common.j/Blizzard.j 校验补丁后的 `war3map.j`；vJass 地图可加
 `-SkipJassCheck` 跳过。
 
-地图级 VM 重置回归（同一进程内换图：父图建资源 → 6 秒后 `UnitId("SimulateMapBoot")` → 旧 VM 关闭 → 子脚本接管；结果 8/8）：
+地图级 VM 重置回归（同一进程内换图：父图建资源 → 6 秒后 `UnitId("SimulateMapBoot")` → 旧 VM 关闭 → 子脚本接管；结果 9/9，含 `func_bind` 标签表随启动清空的断言）：
 
 ```powershell
 .\tools\deploy.ps1 -TestReboot
@@ -281,7 +285,7 @@ Clean proxy SHA-256 为 `0564A518EB3CB2F91CD65D0BDC766B9FC5B8709335CFFE5274C1FED
 `d3d_sdk_contract_test.exe` 为 `87EBB317E9E94AB0F0A333CA55F3F11A384AB937258A68ECF7FFC74A1A2304B6`。
 用这两份 clean DLL 部署后：原生 ABI 合同（stress=1000）、`verify_contract.ps1`
 （`surface=54, proxy=49, canonical=5, fixture=54/54, untested=0`）、普通 116/116、交互 D3D 164/164
-（含 BLP2 raw/palette/DXT1 与 resize=20 生命周期项，日志 `build\p6-164-d151fd7.log`）、地图级 VM 重置 8/8
+（含 BLP2 raw/palette/DXT1 与 resize=20 生命周期项，日志 `build\p6-164-d151fd7.log`）、地图级 VM 重置 8/8（当时夹具 8 项；此后新增 `func_bind` 清理断言，现为 9 项）
 全部通过；游戏目录 `d3d9.dll` 与 `.japi_d3d_proxy.sha256` 回读均为 clean proxy hash，探针 sidecar 为
 `952B23437A15F2C65AA9C114920533E63D278D1765B70DA0EC5E709D153EAE6B`。运行时 `yd_japi.dll` 来自地图负载
 （`pack.ps1` 把 `-DllPath` 打进地图，日志打印 clean 路径），游戏目录里那份旧文件不参与运行。
@@ -306,7 +310,7 @@ Clean proxy SHA-256 为 `0564A518EB3CB2F91CD65D0BDC766B9FC5B8709335CFFE5274C1FED
    1.27a 窗口模式下不可观测，记入已知缺口。
 4. 地图级 VM 重置（完成，2026-11-15）：换图时 `callback` 重入 `Initialize()` → 丢弃 Lua handler、清 message/D3D
    分发状态 → `lua_close` 旧 VM → 新图首次 `ExecuteFunc` 重建 VM 并加载新 `war3map.lua`；session 随 VM 关闭自动
-   `end_session`，同进程换图回归 8/8；对应 LIFE-09/LIFE-12 的自动部分。
+   `end_session`，同进程换图回归 9/9（夹具随后新增 `func_bind` 清理断言）；对应 LIFE-09/LIFE-12 的自动部分。
 5. P6（完成，2026-11-15）：quickstart、API reference、迁移指南已落地在 `docs/guide/`（见 §6）；§15 两项门槛
    已闭合——D3D handler 兼容面由 fixture 触达 54/54（`verify_contract.ps1` 要求 manifest、注册点与
    `test_d3d.lua` 触达集合严格相等），BLP2 raw/palette/DXT1 与坏编码由 4 个夹具在 `asset://` 内存路径实机验证；
@@ -319,7 +323,14 @@ Clean proxy SHA-256 为 `0564A518EB3CB2F91CD65D0BDC766B9FC5B8709335CFFE5274C1FED
    `jass.globals` 的 `index>0` 写入、`#arr` 长度和字符串数组都进了普通回归（116/116），未分配时的静默丢写
    改为一条 `[jass.globals] write ignored` 日志。同时修掉 `class_array.cpp` 的 `__len` 空指针（读取不存在的
    upvalue, `#arr` 会让游戏挂起）。
-7. 接着做 JASS wrapper 自动生成（E4）与 SaveFunc/func_bind（进行中）。
+7. SaveFunc / func_bind（完成，2026-11-15）：按内置地图的线上契约实现 `SaveFunc (I)V` 与
+   `func_bind_trigger_name (IS)V` 两个 bridge handler、地址→标签表、`jass.debug` 的
+   `jass_func_address`/`save_func_addr`/`func_bind_lookup`/`func_bind_count`/`func_bind_clear`，
+   并让崩溃消息在 native 名之后回退查标签表；地图启动（含同进程换图）时清表。普通回归 `122/122`
+   （含 6 项新用例：`jass.code(fn)` 生成的真实 code 地址被 `TriggerEvaluate` 执行、中文标签字节精确、
+   rebind 覆盖、clear 清空、锚点替换），VM 重置 `9/9`。限制：callback 模式无法在脚本里声明 native，
+   所以内置 `GetFuncAddr` → 脚本 Action 地址这条链没有通道，标签目标限定为 Lua trampoline 与 native 地址。
+8. 接着做 JASS wrapper 自动生成（E4）（未开工）。
 
 ## 6. 文档职责
 

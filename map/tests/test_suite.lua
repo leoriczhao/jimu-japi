@@ -618,6 +618,119 @@ test("userdata handle is collected after GC", function()
 end)
 
 -- ============================================================
+-- 8b. SaveFunc / func_bind_trigger_name (code address -> label)
+-- The wire contract is builtin-japi's: SaveFunc stores one anchor address,
+-- func_bind_trigger_name(address, label) labels an address, and both travel as
+-- integers in hashtable slots (the bridge ABI has no 'C' type).
+--
+-- Where the addresses come from: declaring a custom native (SetHeroLevels and
+-- friends) in war3map.j does not work in callback mode -- natives registered at
+-- runtime are absent from the native table while the map script is compiled, so
+-- the game never reaches main(). jass.debug.jass_func_address resolves natives
+-- only; jass.code(fn) is the supported way to get a real code address for a Lua
+-- function, and the trampoline it returns runs inside the game's VM.
+-- ============================================================
+local jdbg = require "jass.debug"
+
+local function fb_ht()
+    local ht, key = globals.japi_ht, globals.japi__key
+    assert(ht ~= nil and key ~= nil, "japi hashtable globals not available")
+    return ht, key
+end
+
+local function save_func_rpc(address)
+    local ht, key = fb_ht()
+    jass.SaveStr(ht, key, 0, "(I)V")
+    jass.SaveInteger(ht, key, 1, address)
+    jass.UnitId("SaveFunc")
+end
+
+local function bind_label(address, label)
+    local ht, key = fb_ht()
+    jass.SaveStr(ht, key, 0, "(IS)V")
+    jass.SaveInteger(ht, key, 1, address)
+    jass.SaveStr(ht, key, 2, label)
+    jass.UnitId("func_bind_trigger_name")
+end
+
+-- A Lua function turned into a real JASS code value. The label table keys on
+-- exactly the address the VM would call for that function.
+local trampoline_hits = 0
+local action_addr = jass.code(function()
+    trampoline_hits = trampoline_hits + 1
+    return true
+end)
+
+test("jass.debug.jass_func_address resolves native functions", function()
+    assert(type(action_addr) == "number" and action_addr ~= 0,
+        "jass.code did not return a code address")
+    local native_addr = jdbg.jass_func_address("UnitId")
+    assert(native_addr ~= 0, "no code address for the native UnitId")
+    assert(native_addr ~= action_addr, "native and trampoline share an address")
+    assert(jdbg.jass_func_address("NoSuchJassFunction") == 0,
+        "unknown name must resolve to 0")
+end)
+
+test("jass.code returns a code address the VM executes", function()
+    trampoline_hits = 0
+    local t = jass.CreateTrigger()
+    jass.TriggerAddCondition(t, jass.Condition(action_addr))
+    jass.TriggerEvaluate(t)
+    jass.DestroyTrigger(t)
+    assert(trampoline_hits == 1,
+        "trampoline ran " .. tostring(trampoline_hits) .. " times")
+end)
+
+test("SaveFunc stores the anchor address sent through the bridge", function()
+    jdbg.func_bind_clear()
+    save_func_rpc(action_addr)
+    assert(jdbg.save_func_addr() == action_addr,
+        "anchor mismatch: " .. tostring(jdbg.save_func_addr()))
+end)
+
+test("func_bind_trigger_name stores exact UTF-8 labels per address", function()
+    local a, b = 0x0012ABCD, 0x0012ABCE
+    local utf8_label = "方向键左键崩溃A"
+    bind_label(action_addr, "lua-trampoline")
+    bind_label(b, "second")
+    bind_label(a, utf8_label)
+    assert(jdbg.func_bind_count() == 3,
+        "count mismatch: " .. tostring(jdbg.func_bind_count()))
+    assert(jdbg.func_bind_lookup(action_addr) == "lua-trampoline",
+        "address label mismatch: " .. tostring(jdbg.func_bind_lookup(action_addr)))
+    assert(jdbg.func_bind_lookup(b) == "second",
+        "second label mismatch: " .. tostring(jdbg.func_bind_lookup(b)))
+    assert(jdbg.func_bind_lookup(a) == utf8_label,
+        "UTF-8 label mismatch: " .. tostring(jdbg.func_bind_lookup(a)))
+    -- rebinding the same address replaces the label instead of adding a row
+    bind_label(a, "rebound")
+    assert(jdbg.func_bind_lookup(a) == "rebound", "rebind did not win")
+    assert(jdbg.func_bind_count() == 3, "rebind added or dropped a row")
+    assert(jdbg.func_bind_lookup(0) == nil, "address 0 must stay unknown")
+    assert(jdbg.func_bind_lookup(0x7FFFFFF0) == nil, "garbage address must stay unknown")
+end)
+
+test("func_bind_clear drops every label and the table accepts new ones", function()
+    jdbg.func_bind_clear()
+    assert(jdbg.func_bind_count() == 0, "table not empty after clear")
+    assert(jdbg.func_bind_lookup(action_addr) == nil, "stale label survived the clear")
+    bind_label(action_addr, "lua-trampoline")
+    assert(jdbg.func_bind_count() == 1, "table did not accept a label after clear")
+    assert(jdbg.func_bind_lookup(action_addr) == "lua-trampoline", "restore failed")
+end)
+
+test("SaveFunc replaces the anchor and keeps the label table", function()
+    local probe = 0x0012ABCF
+    save_func_rpc(probe)
+    assert(jdbg.save_func_addr() == probe,
+        "anchor not replaced: " .. tostring(jdbg.save_func_addr()))
+    assert(jdbg.func_bind_lookup(action_addr) == "lua-trampoline",
+        "re-anchoring disturbed the label table")
+    save_func_rpc(action_addr)
+    assert(jdbg.save_func_addr() == action_addr, "anchor not restored")
+end)
+
+-- ============================================================
 -- Summary
 local function finish()
     local scene_ok, scene_err = pcall(scene.reset, true)

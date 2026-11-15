@@ -19,6 +19,7 @@
 #include "../lua_engine/lua_engine/lua_loader.h"
 #include "../lua_engine/lua_engine/bridge_dispatch.h"
 #include "debug_log.h"
+#include "ex_natives/FuncBind.h"
 
 // Forward declarations
 namespace warcraft3::lua_engine::lua_loader {
@@ -33,6 +34,9 @@ namespace warcraft3::japi {
     void initialize();
     void initialize_ex_natives();
     uint32_t open_code_run_logs_handler(const uint32_t* args, size_t nargs);
+    uint32_t SaveFunc_handler(const uint32_t* args, size_t nargs);
+    uint32_t func_bind_trigger_name_handler(const uint32_t* args, size_t nargs);
+    void clear_func_bind();
 }
 namespace warcraft3::lua_engine::bridge {
     typedef uint32_t (*cpp_handler_fn)(const uint32_t* args, size_t nargs);
@@ -207,6 +211,8 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
     } else {
         SYNC_LOG("Initialize() again: map boot, resetting the Lua VM");
         warcraft3::lua_engine::lua_loader::on_map_boot(false);
+        // Code addresses belong to the script that produced them.
+        warcraft3::japi::clear_func_bind();
     }
 
     // Step 1: Install ExecuteFunc hook; the Lua VM is created lazily on the
@@ -234,6 +240,15 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
     warcraft3::lua_engine::bridge::register_cpp_handler(
         "open_code_run_logs", "(B)V",
         warcraft3::japi::open_code_run_logs_handler);
+    // builtin-japi's code<->label channel: the map binds a code address to a name
+    // once at boot (SaveFunc) and per trigger action (func_bind_trigger_name).
+    // Addresses travel as integers because the bridge ABI has no 'C' type.
+    warcraft3::lua_engine::bridge::register_cpp_handler(
+        "SaveFunc", "(I)V",
+        warcraft3::japi::SaveFunc_handler);
+    warcraft3::lua_engine::bridge::register_cpp_handler(
+        "func_bind_trigger_name", "(IS)V",
+        warcraft3::japi::func_bind_trigger_name_handler);
     warcraft3::jass::nf_register::flush_add_only();
     SYNC_LOG("Step 3: flush_add_only DONE");
 
@@ -297,6 +312,7 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
         [](const uint32_t*, size_t) -> uint32_t {
             SYNC_LOG("SimulateMapBoot: resetting the Lua VM");
             warcraft3::lua_engine::lua_loader::on_map_boot(true);
+            warcraft3::japi::clear_func_bind();
             warcraft3::lua_engine::lua_loader::load_script_file("script\\reboot_child.lua");
             SYNC_LOG("SimulateMapBoot: done");
             return 0;
