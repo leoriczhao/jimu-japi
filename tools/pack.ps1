@@ -528,7 +528,7 @@ Copy-Item $CbSrc  "$WorkDir\callback" -Force
 function New-Blp2Fixture {
     param(
         [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][ValidateSet('raw', 'palette', 'dxt1', 'bad')][string]$Kind,
+        [Parameter(Mandatory)][ValidateSet('raw', 'palette', 'dxt1', 'solid', 'bad')][string]$Kind,
         [Parameter(Mandatory)][int]$Width,
         [Parameter(Mandatory)][int]$Height
     )
@@ -572,6 +572,14 @@ function New-Blp2Fixture {
             for ($i = 0; $i -lt $blocks; $i++) { $payload.AddRange($block) }
             $dataSize = $payload.Count
         }
+        'solid' {
+            # encoding 3: one flat colour for the whole texture. The demo tints it
+            # with the D3D vertex colour, so a 8x8 white sheet draws any bar.
+            for ($i = 0; $i -lt $pixels; $i++) {
+                $payload.AddRange([byte[]]@(255, 255, 255, 255))
+            }
+            $dataSize = $payload.Count
+        }
         'bad' {
             # encoding 4 is outside the supported subset: validate() must reject
             # it as UnsupportedFormat even though offsets and sizes look sane.
@@ -580,7 +588,7 @@ function New-Blp2Fixture {
         }
     }
 
-    $encoding = switch ($Kind) { 'raw' { 3 } 'palette' { 1 } 'dxt1' { 2 } default { 4 } }
+    $encoding = switch ($Kind) { 'raw' { 3 } 'solid' { 3 } 'palette' { 1 } 'dxt1' { 2 } default { 4 } }
     $alphaDepth = if ($Kind -eq 'palette') { 8 } else { 0 }
     $paletteBytes = if ($Kind -eq 'palette') { 1024 } else { 0 }
     $dataOffset = $headerSize + $paletteBytes
@@ -623,6 +631,12 @@ if ($InteractiveD3D) {
     New-Blp2Fixture -Path "$WorkDir\d3d-sdk-blp2-bad.blp" -Kind bad -Width 16 -Height 16
 }
 
+# One flat white sheet for the demo's D3D overlays: every bar is this texture
+# tinted through set_color(), so no extra art is needed per bar colour.
+if ($Demo -or $InteractiveD3D) {
+    New-Blp2Fixture -Path "$WorkDir\japi-bar-white.blp" -Kind solid -Width 8 -Height 8
+}
+
 # Update MPQ listfile so w3x2lni includes the new files
 $listfile = "$WorkDir\(listfile)"
 $needed = @("callback", "japi.tga")
@@ -630,6 +644,9 @@ if ($InteractiveD3D) {
     $needed += @("d3d-sdk-probe.png", "d3d-sdk-corrupt.png")
     $needed += @("d3d-sdk-blp2-raw.blp", "d3d-sdk-blp2-palette.blp",
         "d3d-sdk-blp2-dxt1.blp", "d3d-sdk-blp2-bad.blp")
+}
+if ($Demo -or $InteractiveD3D) {
+    $needed += @("japi-bar-white.blp")
 }
 $existing = if (Test-Path $listfile) { Get-Content $listfile -Raw } else { "" }
 foreach ($f in $needed) {
