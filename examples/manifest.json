@@ -1,0 +1,129 @@
+{
+  "examples": [
+    {
+      "id": "01-hello-jass",
+      "dir": "01-hello-jass",
+      "title": "最小可运行示例：调用 JASS native",
+      "modules": [
+        "jass.common"
+      ],
+      "pack": [],
+      "d3d": false,
+      "live": true
+    },
+    {
+      "id": "02-input-hook",
+      "dir": "02-input-hook",
+      "title": "native hook + 输入回调",
+      "modules": [
+        "jass.common",
+        "jass.hook",
+        "jass.message"
+      ],
+      "pack": [],
+      "d3d": false,
+      "live": true
+    },
+    {
+      "id": "03-d3d-hud",
+      "dir": "03-d3d-hud",
+      "title": "D3D HUD：Font / Text / Texture",
+      "modules": [
+        "jass.common",
+        "jass.d3d"
+      ],
+      "pack": [],
+      "d3d": true,
+      "live": true
+    },
+    {
+      "id": "04-create-unit-order",
+      "dir": "04-create-unit-order",
+      "title": "造单位 + 下命令",
+      "modules": [
+        "jass.common"
+      ],
+      "pack": [],
+      "d3d": false,
+      "live": true
+    },
+    {
+      "id": "05-sleep-sequence",
+      "dir": "05-sleep-sequence",
+      "title": "用 sleep 编排开场流程",
+      "modules": [
+        "jass.common",
+        "jass.runtime",
+        "jass.sleep"
+      ],
+      "pack": [],
+      "d3d": false,
+      "live": true
+    },
+    {
+      "id": "06-globals",
+      "dir": "06-globals",
+      "title": "读写 JASS 全局变量",
+      "modules": [
+        "jass.common",
+        "jass.globals"
+      ],
+      "pack": [],
+      "d3d": false,
+      "live": true
+    },
+    {
+      "id": "07-slk",
+      "dir": "07-slk",
+      "title": "查游戏数据表（SLK）",
+      "modules": [
+        "jass.common",
+        "jass.slk"
+      ],
+      "pack": [],
+      "d3d": false,
+      "live": true
+    },
+    {
+      "id": "08-d3d-subscription",
+      "dir": "08-d3d-subscription",
+      "title": "D3D 订阅：点击命中 + 生命周期",
+      "modules": [
+        "jass.common",
+        "jass.d3d"
+      ],
+      "pack": [],
+      "d3d": true,
+      "live": true
+    },
+    {
+      "id": "09-jass-wrappers",
+      "dir": "09-jass-wrappers",
+      "title": "JASS wrapper：JASS 与 Lua 两条调用路径对比",
+      "modules": [
+        "jass.common",
+        "jass.globals"
+      ],
+      "pack": [
+        "WithJassWrappers"
+      ],
+      "d3d": false,
+      "live": true
+    },
+    {
+      "id": "10-getfunc-addr",
+      "dir": "10-getfunc-addr",
+      "title": "函数地址与绑定标签（GetFuncAddr）",
+      "modules": [
+        "jass.common",
+        "jass.globals",
+        "jass.debug"
+      ],
+      "pack": [
+        "WithGetFuncAddr"
+      ],
+      "d3d": false,
+      "live": true
+    }
+  ]
+}
