@@ -249,7 +249,7 @@ while ($elapsed -lt $Timeout) {
                 $mtime = (Get-Item $cand).LastWriteTime
                 if ($mtime -lt $launchTime.AddSeconds(-2)) { continue }  # stale
                 Copy-Item $cand $tmpLog -Force -ErrorAction Stop
-                $log = Get-Content $tmpLog -Raw -ErrorAction SilentlyContinue
+                $log = Get-Content $tmpLog -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
                 if ($log -and $log -match "Results:.*total") {
                     $ready = $true
                     $LogFile = $cand
@@ -293,7 +293,7 @@ Start-Sleep -Seconds 1
 if (Test-Path $LogFile) {
     try {
         Copy-Item $LogFile $tmpLog -Force -ErrorAction SilentlyContinue
-        $log = Get-Content $tmpLog -Raw -ErrorAction SilentlyContinue
+        $log = Get-Content $tmpLog -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
     } catch {}
 }
 
