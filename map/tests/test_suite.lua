@@ -618,17 +618,76 @@ test("userdata handle is collected after GC", function()
 end)
 
 -- ============================================================
+-- 8d. GetFuncAddr (tools/pack.ps1 -WithGetFuncAddr)
+-- The JASS side declares the engine's hidden SetHeroLevels -- registered by
+-- game.dll with signature "(C)V", absent from common.j -- before the first
+-- function, then builds GetFuncAddr(f) = SetHeroLevels(f) + LoadInteger(ht,
+-- key, 0). Our DLL rewrites that native node's func_address at load time, so
+-- the call reaches SetHeroLevels_capture and the code index lands in slot 0.
+-- The probe timer pushes those integers back through the UnitId bridge into
+-- SaveFunc and func_bind_trigger_name, so the whole round trip is JASS-driven.
+--
+-- This section runs before 8b on purpose: 8b starts with func_bind_clear(),
+-- which would drop the label asserted below.
+-- ============================================================
+do
+    if globals.udg_lua_getfunc_ready ~= 1 then
+        print("  [SKIP] GetFuncAddr probe not injected (pack/deploy with -WithGetFuncAddr)")
+    else
+        local jdbg = require "jass.debug"
+        local addr  = globals.udg_lua_getfunc_addr
+        local addr2 = globals.udg_lua_getfunc_addr2
+        local addr3 = globals.udg_lua_getfunc_addr3
+
+        print(string.format("  [8d] GetFuncAddr addr=%s addr2=%s addr3=%s hits=%s",
+            tostring(addr), tostring(addr2), tostring(addr3),
+            tostring(globals.udg_lua_getfunc_hits)))
+
+        test("GetFuncAddr returns stable non-zero code addresses", function()
+            assert(type(addr) == "number" and addr ~= 0, "GetFuncAddr returned 0")
+            assert(addr3 == addr, "one function yielded two addresses: " ..
+                tostring(addr) .. " vs " .. tostring(addr3))
+            assert(addr2 ~= 0 and addr2 ~= addr, "distinct functions collided")
+        end)
+
+        test("GetFuncAddr address reaches func_bind_trigger_name", function()
+            local label = jdbg.func_bind_lookup(addr)
+            assert(label == "jass-getfunc-target",
+                "label lookup returned " .. tostring(label))
+        end)
+
+        test("GetFuncAddr address reaches SaveFunc", function()
+            local anchor = jdbg.save_func_addr()
+            assert(anchor == addr2, "SaveFunc anchor is " .. tostring(anchor) ..
+                ", expected " .. tostring(addr2))
+        end)
+
+        test("GetFuncAddr address runs as a JASS trigger action", function()
+            local before = globals.udg_lua_getfunc_hits
+            local trig = jass.CreateTrigger()
+            jass.TriggerAddAction(trig, addr)
+            jass.TriggerExecute(trig)
+            jass.DestroyTrigger(trig)
+            assert(globals.udg_lua_getfunc_hits == before + 1,
+                "action did not run: hits " .. tostring(globals.udg_lua_getfunc_hits))
+        end)
+    end
+end
+
+-- ============================================================
 -- 8b. SaveFunc / func_bind_trigger_name (code address -> label)
 -- The wire contract is builtin-japi's: SaveFunc stores one anchor address,
 -- func_bind_trigger_name(address, label) labels an address, and both travel as
 -- integers in hashtable slots (the bridge ABI has no 'C' type).
 --
--- Where the addresses come from: declaring a custom native (SetHeroLevels and
--- friends) in war3map.j does not work in callback mode -- natives registered at
--- runtime are absent from the native table while the map script is compiled, so
--- the game never reaches main(). jass.debug.jass_func_address resolves natives
--- only; jass.code(fn) is the supported way to get a real code address for a Lua
--- function, and the trampoline it returns runs inside the game's VM.
+-- Where the addresses come from: jass.code(fn) gives a real code address for a
+-- Lua function (its trampoline runs inside the game's VM) and
+-- jass.debug.jass_func_address resolves natives by name. A map script *can* also
+-- declare an engine native that common.j omits (SetHeroLevels) and take a JASS
+-- function's address with it -- that is section 8d, packed with -WithGetFuncAddr.
+-- The declaration is only legal when the name already exists in the engine's
+-- native table and it precedes the first function; see
+-- docs/planning/JASS-NATIVE-DECLARATIONS.md.
 -- ============================================================
 local jdbg = require "jass.debug"
 
@@ -732,10 +791,12 @@ end)
 
 -- ============================================================
 -- 8c. Generated JASS wrappers (tools/gen-jass-wrappers.ps1)
--- Callback mode cannot declare custom natives -- the map script is compiled
--- before the plugin registers anything -- so tools/pack.ps1 -WithJassWrappers
+-- A map script cannot declare a native that only exists at runtime -- it is
+-- compiled before the plugin registers anything -- so tools/pack.ps1 -WithJassWrappers
 -- derives a builtin-style five-step JASS wrapper for every UnitId bridge
--- handler straight from the C++ registries.
+-- handler straight from the C++ registries. (Declaring an *engine* native such
+-- as SetHeroLevels is legal under narrower rules: see section 8d and
+-- docs/planning/JASS-NATIVE-DECLARATIONS.md.)
 --
 -- The injected probe calls a few generated wrappers from JASS and stores the
 -- results in udg_lua_wrapper_*; comparing them against the same handlers

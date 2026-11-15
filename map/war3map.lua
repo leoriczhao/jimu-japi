@@ -13,6 +13,7 @@ local message = require "jass.message"
 local runtime = require "jass.runtime"
 local japi    = require "jass.japi"
 local hook    = require "jass.hook"
+local globals = require "jass.globals"
 local util    = require "lib.util"
 local scene   = require "lib.scene"
 local demo    = require "game.demo"
@@ -35,6 +36,12 @@ if _G.__JAPI_REBOOT_PARENT then
     end
     return
 end
+
+-- The DLL only loads this script once its Lua VM is up, so this write doubles
+-- as a DLL-alive flag for the JASS probes injected by tools/pack.ps1
+-- (-WithGetFuncAddr). Without the DLL, a bridge-backed native would resolve to
+-- the engine's AI stub and jump to NULL.
+globals.udg_lua_japi_alive = 1
 
 -- Establish a deterministic empty scene after JASS main() has completed:
 -- flat map, no melee base, and exactly one rifleman.

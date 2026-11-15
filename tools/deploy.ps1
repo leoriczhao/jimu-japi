@@ -13,6 +13,7 @@
 #   .\tools\deploy.ps1 -Demo                            # deploy proxy + run the playable vertical slice
 #   .\tools\deploy.ps1 -TestReboot                      # deploy proxy + verify the Lua VM resets on map boot
 #   .\tools\deploy.ps1 -WithJassWrappers                # generate JASS wrappers for every bridge handler
+#   .\tools\deploy.ps1 -WithGetFuncAddr                 # expose builtin-style GetFuncAddr(code) in the map
 param(
     [string]$DllPath = "",
     [string]$D3DProxyPath = "",
@@ -28,7 +29,8 @@ param(
     [switch]$WithDebugger,
     [switch]$Demo,
     [switch]$TestReboot,
-    [switch]$WithJassWrappers
+    [switch]$WithJassWrappers,
+[switch]$WithGetFuncAddr
 )
 
 $Root     = Split-Path -Parent $PSScriptRoot
@@ -142,6 +144,7 @@ if ($WithDebugger) { $packArgs["WithDebugger"] = $true }
 if ($Demo) { $packArgs["Demo"] = $true }
 if ($TestReboot) { $packArgs["TestReboot"] = $true }
 if ($WithJassWrappers) { $packArgs["WithJassWrappers"] = $true }
+if ($WithGetFuncAddr) { $packArgs["WithGetFuncAddr"] = $true }
 $packResult = & $PackScript @packArgs 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host $packResult

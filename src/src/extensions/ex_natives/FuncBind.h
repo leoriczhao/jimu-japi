@@ -8,10 +8,18 @@
 //   func_bind_trigger_name (IS)V  code address + UTF-8 label
 //
 // Addresses travel as integers because the bridge ABI has no 'C' type and the
-// real UnitId takes an integer. The builtin's map side obtains them from
-// GetFuncAddr(), i.e. SetHeroLevels(code) + LoadInteger(ht, key, 0); that route
-// is closed to us (see find_func_address below), so code addresses reach this
-// table from jass.code() trampolines and from the resolver instead.
+// real UnitId takes an integer. Three producers feed this table:
+//   1. GetFuncAddr() on the JASS side, i.e. SetHeroLevels(code) +
+//      LoadInteger(ht, key, 0). SetHeroLevels is a real engine native -- signature
+//      "(C)V", registered by game.dll, absent from common.j -- that a map script
+//      may declare as long as the name already exists in the engine's native
+//      table and the declaration precedes the first function. Our japi_add of
+//      "SetHeroLevels" rewrites that node's func_address, so the call lands in
+//      SetHeroLevels_capture (libs_message.cpp) instead of the engine's AI stub.
+//      tools/pack.ps1 -WithGetFuncAddr injects the declaration and GetFuncAddr().
+//   2. jass.code() trampolines (a Lua function callable from JASS).
+//   3. find_func_address() for native names.
+// See docs/planning/JASS-NATIVE-DECLARATIONS.md for the rules and the evidence.
 #pragma once
 
 #include <cstddef>
@@ -28,12 +36,9 @@ namespace warcraft3::japi {
 
 	// Resolve a native name to its code address (the VM's native table, plus the
 	// jass.japi entries registered at runtime). Map script functions are not in
-	// either table: the JASS side cannot produce their addresses on its own in
-	// callback mode, because declaring a custom native (SetHeroLevels) in
-	// war3map.j makes the game reject the script before main() ever runs --
-	// natives registered at runtime are not in the map's native table at compile
-	// time. So find_func_address() returns 0 for script names by design, and the
-	// supported way to obtain a callable code address from Lua is jass.code(fn).
+	// either table, so this returns 0 for script names by design: a script
+	// function's address comes either from jass.code(fn) on the Lua side or from
+	// GetFuncAddr(function f) on the JASS side (see this header's top comment).
 	uint32_t find_func_address(const char* func_name);
 
 	uint32_t save_func_addr();

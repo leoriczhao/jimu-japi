@@ -31,6 +31,18 @@ globals
     real udg_lua_wrapper_real = -1.0
     real udg_lua_wrapper_real_base = -1.0
     boolean udg_lua_wrapper_bool = false
+
+    // GetFuncAddr self-check probes (tools/pack.ps1 -WithGetFuncAddr). The probe
+    // timer fills addr/addr2/addr3 and calls func_bind_trigger_name + SaveFunc
+    // through the UnitId bridge; the Lua suite (section 8d) proves the integers
+    // really address the compiled JASS functions by executing the action.
+    // udg_lua_japi_alive is set by war3map.lua, i.e. only once the DLL is up.
+    integer udg_lua_japi_alive = 0
+    integer udg_lua_getfunc_ready = 0
+    integer udg_lua_getfunc_addr = 0
+    integer udg_lua_getfunc_addr2 = 0
+    integer udg_lua_getfunc_addr3 = 0
+    integer udg_lua_getfunc_hits = 0
 endglobals
 
 function InitGlobals takes nothing returns nothing

@@ -8,6 +8,8 @@
 #   .\tools\pack.ps1 -BaseMap "foreign" -SkipJassCheck  # vJass maps: skip pjass validation
 #   .\tools\pack.ps1 -OutFile "out\test.w3x"            # custom output
 #   .\tools\pack.ps1 -Demo                             # playable vertical slice instead of the suite
+#   .\tools\pack.ps1 -WithJassWrappers                  # generate JASS wrappers for every bridge handler
+#   .\tools\pack.ps1 -WithGetFuncAddr                   # expose builtin-style GetFuncAddr(code) in the map
 param(
     [string]$DllPath  = "",
     [string]$BaseMap  = "",
@@ -21,7 +23,8 @@ param(
     [switch]$TestReboot,
     [switch]$SkipJassCheck,
     [switch]$NoArrayPrealloc,
-    [switch]$WithJassWrappers
+    [switch]$WithJassWrappers,
+    [switch]$WithGetFuncAddr
 )
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -237,10 +240,16 @@ if ($arrayGlobals.Count -gt 0) {
     Write-Host ("  Array prealloc: " + $arrayGlobals.Count + " array globals")
 }
 
-# JASS wrappers: callback mode rejects custom native declarations (the map
-# script is compiled before the plugin registers anything), so every UnitId
-# bridge handler is exposed as a builtin-style five-step JASS wrapper instead.
-# The generator reads the C++ registries, so the wrapper surface cannot drift.
+# JASS wrappers: every UnitId bridge handler is exposed as a builtin-style
+# five-step JASS wrapper, so map code can call it without hand-writing the
+# hashtable dance. The generator reads the C++ registries, so the wrapper
+# surface cannot drift.
+#
+# Native declarations are a separate axis (-WithGetFuncAddr): the map script is
+# compiled before the plugin registers anything, yet a declaration DOES resolve
+# when the name already exists in the engine's native table and the declaration
+# precedes the first function. That is exactly how builtin-japi's GetFuncAddr
+# works; see docs/planning/JASS-NATIVE-DECLARATIONS.md.
 $jassWrapperBlock = ''
 $wrapperProbe = ''
 if ($WithJassWrappers) {
@@ -279,12 +288,73 @@ if ($WithJassWrappers) {
     }
 }
 
+# GetFuncAddr (-WithGetFuncAddr): builtin-japi's map side turns a JASS `code`
+# into an integer via SetHeroLevels(f) + LoadInteger(ht, key, 0). SetHeroLevels is
+# a real engine native -- registered by game.dll with signature "(C)V" -- that
+# common.j never declares, so it is invisible to ordinary map code. Two rules
+# make the declaration legal in callback mode: the name must already exist in
+# the engine's native table, and the declaration must precede the first
+# function. Our DLL then rewrites that node's func_address at load time, so the
+# call reaches SetHeroLevels_capture instead of the engine's AI stub (which
+# jumps to NULL outside an AI script). See docs/planning/JASS-NATIVE-DECLARATIONS.md.
+$funcAddrDecl = ''
+$funcAddrBlock = ''
+$funcAddrProbe = ''
+if ($WithGetFuncAddr) {
+    $declaredNative = $jContent -match '(?m)^[ 	]*native[ 	]+SetHeroLevels\b'
+    $declaredFunc = $jContent -match '(?m)^[ 	]*function[ 	]+GetFuncAddr[ 	]+takes'
+    if (-not $declaredNative) {
+        $funcAddrDecl = '// japi: engine native that common.j omits; declared here so the map can take a code address.' + $nl +
+            'native SetHeroLevels takes code f returns nothing' + $nl + $nl
+    }
+    if (-not $declaredFunc) {
+        $funcAddrBlock = $nl +
+            'function GetFuncAddr takes code f returns integer' + $nl +
+            '    call SetHeroLevels(f)' + $nl +
+            '    return LoadInteger(japi_ht, japi__key, 0)' + $nl +
+            'endfunction' + $nl
+    }
+    if ($jContent -match '(?m)^[ 	]*integer[ 	]+udg_lua_getfunc_ready\b') {
+        # The probe runs from its own one-shot timer: map main() is too early for
+        # the JASS globals it writes and for the DLL-registered natives it calls.
+        $funcAddrProbe = $nl +
+            '    call TimerStart(CreateTimer(), 2.20, false, function JapiGetFuncAddrProbeActions)'
+        $funcAddrBlock += $nl +
+            'function JapiGetFuncAddrTarget takes nothing returns nothing' + $nl +
+            '    set udg_lua_getfunc_hits = udg_lua_getfunc_hits + 1' + $nl +
+            'endfunction' + $nl +
+            'function JapiGetFuncAddrTarget2 takes nothing returns nothing' + $nl +
+            'endfunction' + $nl +
+            'function JapiGetFuncAddrProbeActions takes nothing returns nothing' + $nl +
+            '    call DestroyTimer(GetExpiredTimer())' + $nl +
+            '    if udg_lua_japi_alive != 1 then' + $nl +
+            '        return' + $nl +
+            '    endif' + $nl +
+            '    set udg_lua_getfunc_addr = GetFuncAddr(function JapiGetFuncAddrTarget)' + $nl +
+            '    set udg_lua_getfunc_addr2 = GetFuncAddr(function JapiGetFuncAddrTarget2)' + $nl +
+            '    set udg_lua_getfunc_addr3 = GetFuncAddr(function JapiGetFuncAddrTarget)' + $nl +
+            '    call SaveStr(japi_ht, japi__key, 0, "(IS)V")' + $nl +
+            '    call SaveInteger(japi_ht, japi__key, 1, udg_lua_getfunc_addr)' + $nl +
+            '    call SaveStr(japi_ht, japi__key, 2, "jass-getfunc-target")' + $nl +
+            '    call UnitId("func_bind_trigger_name")' + $nl +
+            '    call SaveStr(japi_ht, japi__key, 0, "(I)V")' + $nl +
+            '    call SaveInteger(japi_ht, japi__key, 1, udg_lua_getfunc_addr2)' + $nl +
+            '    call UnitId("SaveFunc")' + $nl +
+            '    set udg_lua_getfunc_ready = 1' + $nl +
+            'endfunction' + $nl
+    }
+    if ($declaredNative -and $declaredFunc) {
+        Write-Host '  GetFuncAddr: map already declares the native and the helper, nothing injected'
+    } else {
+        Write-Host '  GetFuncAddr: SetHeroLevels declaration + GetFuncAddr wrapper injected'
+    }
+}
 # Lines that hand the shared hashtable over to the DLL and load war3map.lua.
 # When the base map carries the bridge probe functions, exercise JASS -> Lua
 # immediately after LoadScript (the Lua handlers register synchronously).
 $loadScriptLines = $arrayAllocCall +
     '    call SaveStr(japi_ht, japi__key, 0, "()V")' + $nl +
-    '    call UnitId("LoadScript")' + $wrapperProbe
+    '    call UnitId("LoadScript")' + $wrapperProbe + $funcAddrProbe
 if ($jContent -match 'function LuaBridgeProbeCall') {
     $loadScriptLines += $nl +
         '    call LuaCallback1()' + $nl +
@@ -407,6 +477,24 @@ if ($jassWrapperBlock) {
     $anchor = $endGlobals.Index + $endGlobals.Length
     $jContent = $jContent.Substring(0, $anchor) + $nl + $nl + $jassWrapperBlock + $jContent.Substring($anchor)
     Write-Host '  JASS wrappers: injected after endglobals'
+}
+# GetFuncAddr helper block also goes right after endglobals: pjass wants every
+# function defined before its first call, and the probe timer calls it from main().
+if ($funcAddrBlock) {
+    $endGlobals = [regex]::Match($jContent, '(?m)^[ 	]*endglobals')
+    if (-not $endGlobals.Success) {
+        throw "war3map.j has no endglobals anchor for -WithGetFuncAddr: $BaseMap"
+    }
+    $anchor = $endGlobals.Index + $endGlobals.Length
+    $jContent = $jContent.Substring(0, $anchor) + $funcAddrBlock + $jContent.Substring($anchor)
+    Write-Host '  GetFuncAddr: helper injected after endglobals'
+}
+# The native declaration is the one piece that has to precede the first function
+# (the globals block counts): placed after any function the whole script fails to
+# load, the game drops back to the main menu and the DLL never initializes.
+if ($funcAddrDecl) {
+    $jContent = $funcAddrDecl + $jContent
+    Write-Host '  GetFuncAddr: native SetHeroLevels declared at top of war3map.j'
 }
 Set-Content $JFile $jContent -Encoding ASCII -NoNewline
 

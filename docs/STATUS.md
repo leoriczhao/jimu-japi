@@ -3,10 +3,11 @@
 > 本文件是仓库中唯一的当前完成状态来源（single source of truth）。
 > `docs/planning/` 下的文件保留方案演进、阶段拆分和历史验收记录，其中的状态标记不代表当前状态。
 
-- 最后更新：2026-11-15
+- 最后更新：2026-11-16
 - 支持版本：Warcraft III 1.27a（当前偏移与实机验收版本）
 - 普通实机回归：`122 passed, 0 failed, 122 total`（2026-11-15 复跑；含 8 项 JASS↔Lua bridge 回归、数组全局预分配后的 `jass.globals` 用例，以及 6 项 `SaveFunc` / `func_bind_trigger_name` 回归）
 - JASS wrapper 回归：`125 passed, 0 failed, 125 total`（2026-11-15；`deploy.ps1 -WithJassWrappers` 为 115 个 bridge handler 生成五部曲 wrapper 后跑 122 项基线 + 3 项 wrapper 断言；默认打包仍为 `122/122`，第 8c 节打印 `[SKIP]`）
+- GetFuncAddr 回归：`126 passed, 0 failed, 126 total`（2026-11-16；`deploy.ps1 -WithGetFuncAddr` 注入内置 JAPI 的 `native SetHeroLevels takes code f returns nothing` + `GetFuncAddr(code)` 后跑 122 项基线 + 4 项断言：JASS 函数地址非零且稳定、地址经 `UnitId` 桥进 `func_bind_trigger_name`、进 `SaveFunc` 锚点、地址交给 `TriggerAddAction` 后函数体真的执行；实测同一函数两次取值都是 19、另一函数是 20；默认打包下第 8d 节打印 `[SKIP]`）
 - LocalPoint 交互回归：`109 passed, 0 failed, 109 total`（真实前台 Q 键，2026-07-30，旧 108 基线；本次未重跑）
 - UI 交互回归：`110 passed, 0 failed, 110 total`（真实鼠标悬停 + 命令卡显隐，2026-07-30，旧 108 基线；本次未重跑）
 - D3D 实机回归：`164 passed, 0 failed, 164 total`（2026-11-15；普通基线 116 项 + D3D 48 项：公共 SDK 功能 8 组 + 底层 bridge 13 组 + P4 Subscription 真实输入 1 组 + P5 生命周期 7 项 + shutdown 1 组 + §15.8 覆盖补齐 17 项（handler 往返 10 + 事件回调 3 + 交互期探针 3 + BLP2 实机 1）；handler 兼容面 54/54 已全部触达，仍不等于 164 个 API）
@@ -29,8 +30,9 @@
 | 空白测试场景 | 64×64 空图 + 单个 10 级英雄火枪手确定性复位 | 普通 116/116 + D3D 164/164 + 真实窗口检查 | 可用；默认基座 |
 | 可玩垂直切片（`-Demo`） | 英雄 + 暴风雪（Q）+ 点击选中 + D3D HUD，只用 `jass.common`/`jass.message`/`jass.d3d`；自带 11 条断言 | 普通图 11/11、外来地图夹具 11/11 | **可用，作为地图作者开工样板** |
 | 外来地图接入（bootstrap 注入） | 对无 japi 痕迹的 `war3map.j` 自动注入 globals + `JapiBootstrap()` + `main()` 调用；repack 前用 pjass 校验 | `build\foreign-map` 夹具 `-Demo` 11/11 | **完成（JASS 地图）**；vJass 需 `-SkipJassCheck` |
-| JASS wrapper 自动生成（E4） | `tools/gen-jass-wrappers.ps1` 读三处注册表（EX native、message bridge、D3D manifest）生成 115 个五部曲 wrapper；`pack.ps1 -WithJassWrappers` 把它们插到 `endglobals` 之后，并在 `LoadScript` 之后挂一支 2 秒 timer 探针 | `-WithJassWrappers` 125/125（int/string/real/boolean 往返）；默认 122/122 | **可用（opt-in）**；callback 模式仍不能在地图里声明 native，wrapper 是唯一出口 |
-| SaveFunc / func_bind | `SaveFunc (I)V` 存锚点、`func_bind_trigger_name (IS)V` 存地址→UTF-8 标签，`jass.debug` 暴露查询/清理 API，崩溃消息回退查表，地图启动清表 | 普通 122/122（6 项）+ VM 重置 9/9 | 已实现（地址来源见 §3 限制） |
+| JASS wrapper 自动生成（E4） | `tools/gen-jass-wrappers.ps1` 读三处注册表（EX native、message bridge、D3D manifest）生成 115 个五部曲 wrapper；`pack.ps1 -WithJassWrappers` 把它们插到 `endglobals` 之后，并在 `LoadScript` 之后挂一支 2 秒 timer 探针 | `-WithJassWrappers` 125/125（int/string/real/boolean 往返）；默认 122/122 | **可用（opt-in）**；给地图新增功能的唯一出口仍是 wrapper（native 声明只能复用引擎已有的名字，见下行） |
+| GetFuncAddr（JASS 函数取址） | `pack.ps1 -WithGetFuncAddr` 在脚本最前面声明引擎隐藏 native `SetHeroLevels (C)V`（`Scripts\common.ai` 的 AI 方言 native，签名本来就是 `(C)V`）并注入 builtin 同款 `GetFuncAddr(code)`；DLL 的 `japi_add` 覆写该节点函数指针，把 code 值写进共享哈希表槽 0 | `-WithGetFuncAddr` 126/126（4 项，含 `TriggerAddAction` 执行身份证明）；默认 122/122 且第 8d 节 `[SKIP]` | **可用（opt-in）**；声明规则见 [JASS-NATIVE-DECLARATIONS.md](planning/JASS-NATIVE-DECLARATIONS.md) |
+| SaveFunc / func_bind | `SaveFunc (I)V` 存锚点、`func_bind_trigger_name (IS)V` 存地址→UTF-8 标签，`jass.debug` 暴露查询/清理 API，崩溃消息回退查表，地图启动清表 | 普通 122/122（6 项）+ VM 重置 9/9 | 已实现；JASS 函数地址来源已由 `-WithGetFuncAddr` 打通（见上行） |
 
 ## 2. 已交付功能
 
@@ -64,10 +66,11 @@
 - JASS -> Lua 的 UnitId 桥：`jass.japi` 注册时同时进入 native 表和 UnitId 分发；整数/字符串/布尔、`(Hplayer;)Hplayer;` 句柄、`()V` 回调和错误路由均已实测。
 - `jass.globals` 标量与数组读写已实测（含 `index` 0/1/8191、`#arr` 长度、从未被 JASS 触碰过的整数/字符串数组）；`runtime.error_handle` 能接住 JASS 调 Lua handler 的错误。
 
-- `SaveFunc` / `func_bind_trigger_name` bridge handler、地址→标签表与 `jass.debug` 的 `jass_func_address`/`save_func_addr`/`func_bind_lookup`/`func_bind_count`/`func_bind_clear` 已实测；`jass.code(fn)` 能把 Lua 函数变成 VM 真正会执行的 code 地址（地址来源限制见 §3）。
+- `SaveFunc` / `func_bind_trigger_name` bridge handler、地址→标签表与 `jass.debug` 的 `jass_func_address`/`save_func_addr`/`func_bind_lookup`/`func_bind_count`/`func_bind_clear` 已实测；`jass.code(fn)` 能把 Lua 函数变成 VM 真正会执行的 code 地址。
+- 内置 JAPI 的 `GetFuncAddr` 已在 JASS 侧复刻（`pack.ps1 -WithGetFuncAddr`）：声明引擎隐藏 native `SetHeroLevels (C)V` + `GetFuncAddr(code)`，JASS 函数地址变成整数后可进 `func_bind_trigger_name` / `SaveFunc`，也可直接交给 `TriggerAddAction` 执行；该 native 的出处是 `Scripts\common.ai`（AI 方言），参数是 AI 英雄管理线程的 code 回调，与地图侧的 `SetHeroLevel(unit, level, showEyeCandy)` 无关。规则与证据见 [JASS-NATIVE-DECLARATIONS.md](planning/JASS-NATIVE-DECLARATIONS.md)。
 - 崩溃消息在 `jass_function_name` 之外回退查 `func_bind` 标签表，地图启动（含同进程换图）时清空锚点与标签。
 
-当前边界：`native Foo` + 运行时 `jass.japi` 注册在 callback 模式下不能作为 JASS 调用目标（JASS 已编译的 native 调用不会在运行时绑定到新注册项）；JASS→Lua 请走 UnitId 桥或 `jass.code`。`sleep()` 只在 `runtime.sleep = true` 且当前线程是 trigger/action thread 时可用；裸 timer callback 与纯 Lua 协程没有恢复路径。
+当前边界：**运行时新注册**的名字（`native Foo` + `jass.japi` 注册）不能作为 JASS 调用目标；能声明的只有引擎 native 表里已存在的名字（如 `SetHeroLevels`），而且声明必须排在第一个函数之前——详见 [JASS-NATIVE-DECLARATIONS.md](planning/JASS-NATIVE-DECLARATIONS.md)。给地图新增功能请走 UnitId 桥、`tools/gen-jass-wrappers.ps1` 生成的 wrapper 或 `jass.code`。`sleep()` 只在 `runtime.sleep = true` 且当前线程是 trigger/action thread 时可用；裸 timer callback 与纯 Lua 协程没有恢复路径。
 
 ### 2.4 非 D3D native（历史批次 67/67 注册；2026-11-15 追加 `SaveFunc` 与 `func_bind_trigger_name`）
 
@@ -122,9 +125,9 @@ bridge handler、清 message/D3D 分发状态，再 `lua_close` 旧 `lua_State` 
 | 项目 | 当前证据 | 状态 / 完成条件 |
 |---|---|---|
 | `EXGetEventDamageData` / `EXSetEventDamage` | 真实 `EVENT_UNIT_DAMAGED` 中读取来源/目标/类型，20 点伤害改写为 7，并以 `GetEventDamage`、生命差和原生 7 点对照命中闭环验证；2 项自动测试通过 | **完成** |
-| JASS↔Lua 基础桥接 | `jass.japi` 注册同时进入 native 表和 UnitId 分发；JASS `main` 实测 `()V` 回调、`(II)I`=42、`(Hplayer;)Hplayer;` 句柄往返和错误进 `runtime.error_handle`；`jass.globals` 标量/数组写、handle level 0/1/2、level 2 GC、trigger-action sleep 均通过；普通回归 `116/116` | **完成（UnitId / trigger action 路线）**；JASS 侧 `native Foo` + 运行时注册在 callback 模式不可用；sleep 不适用于裸 timer callback/纯 Lua 协程。数组策略：JASS VM 只在首次写入时分配数组块，且没有公开分配器，所以由打包器在 `LoadScript` 之前插入 `JapiForceAllocArrays()`（对每个数组 `set arr[8191] = arr[8191]`，每个数组 32 KB），此后 `jass.globals` 的 `index>0` 写入、`#arr` 与字符串数组都可靠；万一仍有未分配数组，`jarray_newindex` 会写一条 `[jass.globals] write ignored` 日志而不是静默丢弃 |
-| `SaveFunc` / `func_bind_trigger_name` | 两个名字按内置地图的线上契约实现为 bridge handler（`(I)V` 存锚点、`(IS)V` 存地址→UTF-8 标签）；仓库内没有任何脚本能产生 Action 地址，所以夹具用 `jass.code(function() ... end)` 生成真实 trampoline 地址，再用 `TriggerAddCondition` + `TriggerEvaluate` 证明该地址确实被 VM 执行，标签/rebind/clear/锚点替换逐项断言（含中文标签字节精确）；普通回归 6 项通过、VM 重置新增 1 项证明表随地图启动清空，日志可见 `[FuncBind] bind 0x0012ABD0 -> reboot-should-drop` 与 `[FuncBind] clearing 1 binding(s) on map boot` | **完成（不含脚本 Action 地址来源）**：callback 模式下 `war3map.j` 声明 `SetHeroLevels` 这类 native 会让脚本编译期失败（运行时注册项不在编译期 native 表里，地图到不了 `main()`，实测整局不启动），`jass.debug.jass_func_address` 只能解析 native；可用地址来源是 `jass.code(Lua 函数)` 与 native 名。内置 `GetFuncAddr` → 脚本 Action 标签这条链保留为可选后续 |
-| JASS wrapper 自动生成（E4） | `gen-jass-wrappers.ps1` 从 `ex_natives/Initialize.cpp`（57 条）、`libs_message.cpp` 的 bridge 表（12 条）与 `d3d9/handler_manifest.json`（54 条）生成五部曲 wrapper，去重后 115 个注入 `war3map.j` 的 `endglobals` 之后；`-WithJassWrappers` 打包后实机 `125/125`（3 项断言：`GetGameVersion` int 与 Lua 直连一致、`Hex(255)`/`GetPluginVersion` 字符串一致、`SetLittleMapX`+`GetLittleMapX` 的 0.01 实数往返与 `GetChatState` 布尔一致），默认打包 `122/122` 时第 8c 节打印 `[SKIP]` | **可用（opt-in）**：callback 模式下脚本在插件注册之前编译，所以地图里声明不了 native，wrapper 是 JASS 作者唯一入口；跳过 5 个（`GetPlayerSelectedUnit`/`GetTargetObject` 这类 H 返回，1.27a 无 int→handle 转换；`GetMouseX`/`GetMouseY`/`EXExecuteScript` 地图自己已定义）。探针必须走 2 秒 timer：加载画面上取 `GetLittleMapX` 会挂住整局 |
+| JASS↔Lua 基础桥接 | `jass.japi` 注册同时进入 native 表和 UnitId 分发；JASS `main` 实测 `()V` 回调、`(II)I`=42、`(Hplayer;)Hplayer;` 句柄往返和错误进 `runtime.error_handle`；`jass.globals` 标量/数组写、handle level 0/1/2、level 2 GC、trigger-action sleep 均通过；普通回归 `122/122` | **完成（UnitId / trigger action 路线）**；JASS 侧 `native Foo` + 运行时注册在 callback 模式不可用（可声明的只有引擎已有的名字，见 [JASS-NATIVE-DECLARATIONS.md](planning/JASS-NATIVE-DECLARATIONS.md)）；sleep 不适用于裸 timer callback/纯 Lua 协程。数组策略：JASS VM 只在首次写入时分配数组块，且没有公开分配器，所以由打包器在 `LoadScript` 之前插入 `JapiForceAllocArrays()`（对每个数组 `set arr[8191] = arr[8191]`，每个数组 32 KB），此后 `jass.globals` 的 `index>0` 写入、`#arr` 与字符串数组都可靠；万一仍有未分配数组，`jarray_newindex` 会写一条 `[jass.globals] write ignored` 日志而不是静默丢弃 |
+| `SaveFunc` / `func_bind_trigger_name` | 两个名字按内置地图的线上契约实现为 bridge handler（`(I)V` 存锚点、`(IS)V` 存地址→UTF-8 标签）；仓库内没有任何脚本能产生 Action 地址，所以夹具用 `jass.code(function() ... end)` 生成真实 trampoline 地址，再用 `TriggerAddCondition` + `TriggerEvaluate` 证明该地址确实被 VM 执行，标签/rebind/clear/锚点替换逐项断言（含中文标签字节精确）；普通回归 6 项通过、VM 重置新增 1 项证明表随地图启动清空，日志可见 `[FuncBind] bind 0x0012ABD0 -> reboot-should-drop` 与 `[FuncBind] clearing 1 binding(s) on map boot` | **完成**：`jass.code(Lua 函数)`、native 名与 JASS 侧 `GetFuncAddr(function f)` 三个来源均已打通；最后一个由 `-WithGetFuncAddr` 提供（内置同款 `native SetHeroLevels takes code f returns nothing` + `GetFuncAddr(code)`，126/126 里 4 项断言证明地址非零稳定、能进标签表/锚点、交给 `TriggerAddAction` 真的执行函数体）。声明规则见 [JASS-NATIVE-DECLARATIONS.md](planning/JASS-NATIVE-DECLARATIONS.md) |
+| JASS wrapper 自动生成（E4） | `gen-jass-wrappers.ps1` 从 `ex_natives/Initialize.cpp`（57 条）、`libs_message.cpp` 的 bridge 表（12 条）与 `d3d9/handler_manifest.json`（54 条）生成五部曲 wrapper，去重后 115 个注入 `war3map.j` 的 `endglobals` 之后；`-WithJassWrappers` 打包后实机 `125/125`（3 项断言：`GetGameVersion` int 与 Lua 直连一致、`Hex(255)`/`GetPluginVersion` 字符串一致、`SetLittleMapX`+`GetLittleMapX` 的 0.01 实数往返与 `GetChatState` 布尔一致），默认打包 `122/122` 时第 8c 节打印 `[SKIP]` | **可用（opt-in）**：callback 模式下脚本在插件注册之前编译，运行时新注册的名字声明不了（只有引擎已有的名字可声明），wrapper 仍是 JASS 作者调用新增功能的主要入口；跳过 5 个（`GetPlayerSelectedUnit`/`GetTargetObject` 这类 H 返回，1.27a 无 int→handle 转换；`GetMouseX`/`GetMouseY`/`EXExecuteScript` 地图自己已定义）。探针必须走 2 秒 timer：加载画面上取 `GetLittleMapX` 会挂住整局 |
 | `LocalPointOrder` | bridge ABI 调用安全；真实前台 Q 键进入 `message.hook`（code 81），共享 submit 提交 `blizzard` 点命令并返回 `true`；`EVENT_UNIT_SPELL_EFFECT` 触发且技能 id 为 `AHbz`；清理诊断代码并重编译后交互套件为 `109/0/109` | **完成**；普通右键移动走 smart-click 包，不是该 API 的 point-order 契约，详见逆向记录 08 §7.3 |
 | `GetTargetObject` | `-InteractiveUi` 固定镜头创建敌方城镇大厅；真实鼠标点击/悬停后返回 handle `1050778`，与夹具 handle `1050778` 精确一致 | **完成** |
 | `SetUnitAbilityButtonShow` | 大法师 `AHbz` 命令卡槽从显示 `(0,2)` 变为隐藏 `nil,nil`，10 秒后自动恢复 `(0,2)`；真实窗口截图同时确认紫色暴风雪图标消失，交互套件为 `110/0/110` | **完成** |
@@ -195,9 +198,18 @@ JASS wrapper 自动生成（E4）：把每个 bridge handler 以内置 JAPI 的�
 生成器读三处注册表（EX native、message bridge 表、D3D manifest），排除 `LoadScript` / `SimulateMapBoot` /
 `open_code_run_logs` / `SaveFunc` / `func_bind_trigger_name`（这些不是给 JASS 作者的入口），跳过地图已定义的同名
 函数与 H 返回的 handler，输出按分组名排序以保证可复现。注入点在 `endglobals` 之后、`main` 之前；callback 模式下
-脚本在插件注册之前编译，所以只能生成 wrapper 函数，不能声明 `native`。探针是一支 2 秒 timer：它把 int/string/real/boolean
+脚本在插件注册之前编译，所以只能生成 wrapper 函数，不能声明运行时才出现的 `native`（可声明的只有引擎 native 表里已有的名字，见下面的 GetFuncAddr 块）。探针是一支 2 秒 timer：它把 int/string/real/boolean
 返回值写进 `udg_lua_wrapper_*`，第 8c 节再用 Lua 直连 bridge 比对；real 用 `GetLittleMapX`/`SetLittleMapX` 的 0.01 往返
 （`GetFps` 是实时帧率，两次采样不可比），并必须延后到计时器里执行——加载画面上调 UI 系 handler 会让整局挂住。
+
+GetFuncAddr（内置 JAPI 的 JASS 函数取址链，`126/126`，默认打包下第 8d 节打印 `[SKIP]`）：
+
+```powershell
+.\tools\deploy.ps1 -WithGetFuncAddr       # 打包 + 部署 + 全量回归
+.\tools\pack.ps1 -WithGetFuncAddr         # 只打包，人工看 build\work\war3map.j
+```
+
+`pack.ps1` 在脚本**最前面**（`globals` 之前）插 `native SetHeroLevels takes code f returns nothing`，在 `endglobals` 之后插 `GetFuncAddr(code)`；基座地图带 `udg_lua_getfunc_*` 探针全局时再挂一支 2.20 秒 timer，取三个 code 地址并用内联 `UnitId` 调 `func_bind_trigger_name`（`(IS)V`）与 `SaveFunc`（`(I)V`）。`map/war3map.lua` 入口写 `globals.udg_lua_japi_alive = 1`，JASS 探针先查它——DLL 没起来时调用 `SetHeroLevels` 会跳到 NULL。实测 `addr=19 addr2=20 addr3=19`，第 8d 节用 `TriggerAddAction` + `TriggerExecute` 证明该整数是 VM 认可的 code。声明规则、失败现象与证据见 [planning/JASS-NATIVE-DECLARATIONS.md](planning/JASS-NATIVE-DECLARATIONS.md)。
 
 地图级 VM 重置回归（同一进程内换图：父图建资源 → 6 秒后 `UnitId("SimulateMapBoot")` → 旧 VM 关闭 → 子脚本接管；结果 9/9，含 `func_bind` 标签表随启动清空的断言）：
 
@@ -346,8 +358,8 @@ Clean proxy SHA-256 为 `0564A518EB3CB2F91CD65D0BDC766B9FC5B8709335CFFE5274C1FED
    `jass_func_address`/`save_func_addr`/`func_bind_lookup`/`func_bind_count`/`func_bind_clear`，
    并让崩溃消息在 native 名之后回退查标签表；地图启动（含同进程换图）时清表。普通回归 `122/122`
    （含 6 项新用例：`jass.code(fn)` 生成的真实 code 地址被 `TriggerEvaluate` 执行、中文标签字节精确、
-   rebind 覆盖、clear 清空、锚点替换），VM 重置 `9/9`。限制：callback 模式无法在脚本里声明 native，
-   所以内置 `GetFuncAddr` → 脚本 Action 地址这条链没有通道，标签目标限定为 Lua trampoline 与 native 地址。
+   rebind 覆盖、clear 清空、锚点替换），VM 重置 `9/9`。当时判定的限制是「callback 模式无法在脚本里声明 native」，
+   于是内置 `GetFuncAddr` → 脚本 Action 地址被记为没有通道。该结论已在第 10 项证伪并补上 JASS 侧地址来源。
 8. JASS wrapper 自动生成（E4）（完成，2026-11-15）：`tools/gen-jass-wrappers.ps1` 从三处 C++ 注册表生成
    内置同形的五部曲 wrapper，`pack.ps1 -WithJassWrappers`（`deploy.ps1` 透传）把 115 个 wrapper 插到
    `endglobals` 之后，并在 `LoadScript` 之后挂一支 2 秒 timer 探针。实机 `125/125`（122 基线 + 3 项：
@@ -355,8 +367,18 @@ Clean proxy SHA-256 为 `0564A518EB3CB2F91CD65D0BDC766B9FC5B8709335CFFE5274C1FED
    的 0.01 实数往返与 `GetChatState` 布尔一致），默认打包仍 `122/122` 且 8c 打印 `[SKIP]`，VM 重置 `9/9` 未受影响。
    踩坑：探针最初内联在 `main()` 里调 UI 系 handler，加载画面上整局挂死（日志停在 `script\war3map.lua loaded`），
    改成 timer 后正常；`GetFps` 无法两次采样比对，故 real 改用 little-map 往返。
-9. 三项遗留工程债（数组分配、E4、SaveFunc/func_bind）到此全部闭环；若要继续，剩下的是可选项：
-   内置 `GetFuncAddr` → 脚本 Action 地址通道（callback 模式无入口）与 `jass.globals` 之外的 host 侧能力。
+9. 三项遗留工程债（数组分配、E4、SaveFunc/func_bind）到此全部闭环。
+10. GetFuncAddr（完成，2026-11-16）：先证伪了「callback 模式声明不了 native」的旧结论——真正的规则是
+    「名字必须已存在于引擎 native 表」＋「声明必须在第一个函数之前」，违反任一条整局静默回主菜单。
+    据此复刻内置 JAPI 的取址隧道：`pack.ps1 -WithGetFuncAddr` 声明引擎隐藏 native `SetHeroLevels (C)V`
+    并注入 `GetFuncAddr(code)`；DLL 的 `japi_add` 覆写该节点函数指针，把 code 值写进共享哈希表槽 0。
+    实机 `126/126`（122 基线 + 4 项：地址非零且稳定、进 `func_bind_trigger_name`、进 `SaveFunc`、
+    交给 `TriggerAddAction` 后函数体真的执行），默认打包 `122/122` 且 8d 打印 `[SKIP]`。
+    同一份 DLL 的四项组合实测：默认 `122/122`、`-WithJassWrappers` `125/125`、`-WithGetFuncAddr` `126/126`、
+    `-TestReboot` `9/9`。
+    规则、T2/T3/T10/T11 证据矩阵与 game.dll 里那段 `Scripts\common.ai` AI 方言 native 表见
+    [planning/JASS-NATIVE-DECLARATIONS.md](planning/JASS-NATIVE-DECLARATIONS.md)。至此 §3 里「不含脚本 Action
+    地址来源」的限制解除；仍保留的限制是只验证了 1.27a 与 `SetHeroLevels` 一条隧道。
 
 ## 6. 文档职责
 
