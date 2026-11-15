@@ -189,9 +189,16 @@ local function run(done)
                 assert(jass.LoadInteger(HT, parent, 0x101) == 0)
                 assert(jass.LoadInteger(HT, parent, 0x0FE) == event_id)
             end)
+            -- Compare against the count just before the removal: another fixture event (the
+            -- synthetic keyboard probe) owns its own registration at the same time, so an absolute
+            -- baseline would depend on which of the two registrations is released first.
+            local before_remove = call("GetTextureEventCount", "()I")
             call("TextureRemoveEvent", "(II)V", texture, event_id)
             test("D3D TextureRemoveEvent releases registration", function()
-                assert(call("GetTextureEventCount", "()I") == event_baseline)
+                local now = call("GetTextureEventCount", "()I")
+                assert(now == before_remove - 1,
+                    string.format("event count %d -> %d (expected %d)",
+                        before_remove, now, before_remove - 1))
             end)
             call("SetTextString", "(IS)V", text,
                 "JAPI D3D EVENT PASS - move cursor outside")
@@ -358,9 +365,13 @@ local function run(done)
             assert(jass.LoadInteger(HT, parent, 0x100) == keyboard_key)
             assert(jass.LoadInteger(HT, parent, 0x101) == 0)
         end)
+        local before_remove = call("GetTextureEventCount", "()I")
         call("TextureRemoveEvent", "(II)V", texture, key_event_id)
         test("D3D keyboard TextureRemoveEvent releases registration", function()
-            assert(call("GetTextureEventCount", "()I") == key_event_baseline)
+            local now = call("GetTextureEventCount", "()I")
+            assert(now == before_remove - 1,
+                string.format("event count %d -> %d (expected %d)",
+                    before_remove, now, before_remove - 1))
         end)
     end
 
@@ -387,10 +398,11 @@ local function run(done)
         local inside = call("GetMouseInTexture", "(I)B", texture)
         if inside then
             inside_ticks = inside_ticks + 1
-            -- SetKeyboard goes through PostMessage, so the synthetic key can
-            -- land a frame after the request: retry while the cursor is inside.
-            if not key_press_seen
-                and (not key_press_sent or inside_ticks % 4 == 0) then
+            -- SetKeyboard goes through PostMessage, so the synthetic key can be
+            -- dropped (the game ignores keys while another window owns the
+            -- foreground). Resend every tick while the cursor is inside instead
+            -- of only every fourth one: the inside window can be short.
+            if not key_press_seen then
                 key_press_sent = true
                 call("SetKeyboard", "(IB)V", keyboard_key, true)
             elseif key_press_seen and not key_release_sent then
