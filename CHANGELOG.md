@@ -50,20 +50,41 @@
 |---|---|---|
 | JASS 数组全局预分配（打包器插入 `JapiForceAllocArrays`，每数组 8192×4 = 32 KB），`jass.globals` 从此可在任意下标读写 | `1f07e56` | 实机（默认 `122/122`；`-NoArrayPrealloc` 时不预分配，数组写入相关断言会失败，`docs/planning/JASS-NATIVE-DECLARATIONS.md` 的 T10 记为 `121 passed, 1 failed`） |
 
-### 工具链（本轮工作区改动，未提交）
+### 工具链、示例与文档（本轮，已提交）
 
-| 文件 | 作用 | 验证 |
-|---|---|---|
-| `tools/release-sdk.ps1` | 从指定提交的 clean worktree 构建并打包 SDK 发布件（`yd_japi.dll` / `newD3d9.dll` / `d3d_sdk_contract_test.exe` + `SHA256SUMS.txt` + `manifest.json`） | 静态 + `-NoBuild` 冒烟实跑（见下） |
-| `docs/RELEASE.md` | 发布流程 runbook（前置条件、步骤 0–7、坑表、版本号确认） | 文档，未做发布级复跑 |
-| `CHANGELOG.md` | 本文件 | 文档 |
-| `tools/pack.ps1` / `tools/deploy.ps1` 新开关 | `-MapDir` / `-MapName` / `-WorkDir` / `-Hold` 等（并行工作流提交前的工作区改动） | 实机（`-MapDir`/`-MapName` 端到端；`-Hold` + `drive-interactive-d3d.ps1`） |
-| `examples/` + `tools/new-project.ps1` | 可运行示例与地图脚手架（并行工作流产出，仍是工作区未提交文件） | 见各示例自带说明；**本文件不代其做发布级验收** |
-| `docs/guide/SDK-QUICKSTART.md` / `SDK-GUIDE.md` / `SDK-COOKBOOK.md` | 使用者文档（快速上手 / 综合指南 / 常见配方），同样由并行工作流产出 | 文档；数字口径以 `docs/STATUS.md` 为准 |
+| 文件 | 作用 | 提交 | 验证 |
+|---|---|---|---|
+| `tools/release-sdk.ps1` | 从指定提交的 clean worktree 构建并打包 SDK 发布件（`yd_japi.dll` / `newD3d9.dll` / `d3d_sdk_contract_test.exe` + `SHA256SUMS.txt` + `manifest.json`） | `c4cf647` | 静态 + `-NoBuild` 冒烟实跑（见下） |
+| `docs/RELEASE.md` | 发布流程 runbook（前置条件、步骤 0–7、坑表、版本号确认） | `c4cf647` | 文档，未做发布级复跑 |
+| `CHANGELOG.md` | 本文件 | `c4cf647` | 文档 |
+| `tools/pack.ps1` / `tools/deploy.ps1` 新开关 | `-WorkDir` 打包隔离、`-MapDir`/`-MapName` 工程目录部署、日志守卫与退出判定、`-Hold` 等 | `4d4a5eb` | 实机（`-MapDir`/`-MapName` 端到端；`-Hold` + `drive-interactive-d3d.ps1`） |
+| `examples/` + `tools/verify-examples.ps1` | 10 个可直接打包的最小工程 + 静态/打包/实机三档校验脚本 | `9dc7177` | 静态 + 打包 **10/10 通过**；实机 `-Live` **10/10 全部 0 failed**（逐条数字见下） |
+| `tools/new-project.ps1` | 地图脚手架：生成一个可打包、可部署的空工程（自带 9 项冒烟断言） | `87f9086` | 实机（脚手架空工程 `-MapDir build\scratch\proj\MyMap`：` Results: 9 passed, 0 failed, 9 total (0 skipped)` + `ALL CHECKS PASSED (9/9)`，2026-11-16 lead 实测） |
+| `docs/guide/SDK-QUICKSTART.md` / `SDK-GUIDE.md` / `SDK-COOKBOOK.md` | 使用者文档（快速上手 / 综合指南 / 常见配方） | `0c07e6d` | 文档；数字口径以 `docs/STATUS.md` 为准 |
+| `AGENT.md` 作者工作流 | 新 agent 上手：作者工作流与新增开关 | `9347b12` | 文档 |
 
-`release-sdk.ps1` 的 `-NoBuild` 冒烟（2026-11-16，`-Commit 498a308`）：exit 0，产出 3 个产物 + 两个清单文件，
-包内 SHA-256 与 `src/build/bin/Release` 源文件逐字节一致。**`-NoBuild` 只用于验证脚本本身，绝不能当作发布产物**
-——manifest 里 `built: false`、`artifact_source: "local_worktree"` 就是给这件事留的记号。
+`examples/` 的实机 `-Live` 结果（2026-11-16，同一份 `yd_japi.dll` `87C83BA1…`，`-Timeout 120`）：
+
+| 示例 | `Results:` 行 | 示例 | `Results:` 行 |
+|---|---|---|---|
+| 01-hello-jass | `5 passed, 0 failed, 5 total` | 06-globals | `5 passed, 0 failed, 5 total` |
+| 02-input-hook | `8 passed, 0 failed, 8 total` | 07-slk | `5 passed, 0 failed, 5 total` |
+| 03-d3d-hud | `6 passed, 0 failed, 6 total` | 08-d3d-subscription | `7 passed, 0 failed, 7 total` |
+| 04-create-unit-order | `5 passed, 0 failed, 5 total` | 09-jass-wrappers | `6 passed, 0 failed, 6 total` |
+| 05-sleep-sequence | `6 passed, 0 failed, 6 total` | 10-getfunc-addr | `6 passed, 0 failed, 6 total` |
+
+10 个示例**每一个都有实机 0 failed 的记录**，但没有一批把 10 个一次跑完：同一台机器上另一个会话在跑
+`deploy.ps1 -Demo -Hold`，1.27a 的单实例锁加上共享的 `C:\ProgramData\japi_debug.txt` 造成两次撞车
+（`war3.exe is already running`；以及 `no fresh Results line` 但该示例的 `[PASS]` 行都在——对方 deploy 的
+`Remove-Item` 重建了日志，我们的 `Results:` 写进了已 unlink 的旧句柄）。判定与规避写在 `examples/README.md` 的
+「`-Live` 撞车」一节，逐例的日志来源写进 `docs/STATUS.md` §4。
+
+`release-sdk.ps1` 的 `-NoBuild` 冒烟（2026-11-16）：先在 `-Commit 498a308` 上跑通，随后在 HEAD `9347b12` 复跑，最后在本轮最后一次改动 `tools\`/`examples\` 的提交 `b2e11ab` 上复跑第三次，三次都是
+exit 0、干净 worktree 自动创建并删除。`498a308` 那次包内 hash 与 `src\build\bin\Release` 源文件逐字节一致；`9347b12` 与 `b2e11ab`
+两次产出 `build\sdk\0.4.0-9347b12\`、`build\sdk\0.4.0-b2e11ab\`，三份产物的 SHA-256 与独立 `Get-FileHash` 一致，且
+换 HEAD 后 hash 不变——本轮改动全在 `tools\`、`examples\`、`docs\`，没有碰 DLL 与 Lua 引擎源码。
+**`-NoBuild` 只用于验证脚本本身，绝不能当作发布产物**——manifest 里 `built: false`、`artifact_source: "local_worktree"`
+就是给这件事留的记号。
 
 ### 验证（2026-11-16 实机，本地构建 `yd_japi.dll` = `87C83BA1CE0E6E413CEA7B9D6018E9A289259EC9C2F01EE02E7827DAF6661908`）
 

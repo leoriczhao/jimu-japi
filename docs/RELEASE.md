@@ -64,7 +64,7 @@ git show <commit>:src/src/lua_engine/lua_engine/libs_d3d.cpp | Select-String 'kV
 | `git status --porcelain` | **输出为空** | 有未提交改动就不能当发行基线；先提交或 `git stash`（本仓库约定：不替别人 stash） |
 | `kVersion` | 与你打算写在 `CHANGELOG.md` 里的版本一致 | 改 `libs_d3d.cpp:35` 后再走一遍（改版本会改变 `yd_japi.dll` 字节，hash 必须重算） |
 
-> 示例（本仓库 2026-11-16 的现状）：HEAD = `498a308`，`kVersion` = `0.4.0`，两者不矛盾 —— 发的是「0.4.0 SDK 之上的工具链/文档更新」，所以 `Unreleased` 不空、版本号不动。
+> 示例（本仓库 2026-11-16 的现状）：`kVersion` 仍是 `0.4.0`，因为最后一个改动 `src/` 的提交就是 `498a308` —— 它之后的提交全落在 `tools\`、`examples\`、`docs\`，DLL 与 Lua 引擎源码没动，三者不矛盾：发的是「0.4.0 SDK 之上的工具链/文档更新」，所以 `Unreleased` 不空、版本号不动，产物 hash 也不变。
 
 ---
 
@@ -376,6 +376,7 @@ build\sdk\0.4.0-498a308\
 | 结论 / 命令 | 状态 | 证据 |
 |---|---|---|
 | `tools/release-sdk.ps1 -NoBuild` 端到端 | **已验证** | exit 0；产出 3 产物 + `SHA256SUMS.txt` + `manifest.json`；包内 hash 与 `src\build\bin\Release` 源文件逐一对齐；清单可被 `ConvertFrom-Json` 解析；干净 worktree 已自动删除 |
+| 同上，在全部工具链/示例/文档提交之后复跑（`9347b12`，以及最后一次改动 `tools\`/`examples\` 的 `b2e11ab`） | **已验证**（lead 复跑两次） | 两次都 exit 0；干净 worktree 自动创建并删除；产出 `build\sdk\0.4.0-b2e11ab\`（另有 `0.4.0-9347b12\`）`{SHA256SUMS.txt, manifest.json}`；`yd_japi.dll` `87C83BA1CE0E6E413CEA7B9D6018E9A289259EC9C2F01EE02E7827DAF6661908`（547328 B）、`newD3d9.dll` `7D3063B6A3C52DC91A084F9002A4AB0678AE2E0D6CBFE2B4ABF63567876986D5`（90112 B）、`d3d_sdk_contract_test.exe` `8E0A3E5D341B9FCD97FCBF612E0060FFDFAA4350E14C8E88186D9A028987B458`（23040 B），三者与独立 `Get-FileHash` 一致 |
 | `-NoBuild` 产物 hash 不等于 0.4.0 干净 hash | **已验证**（预期差异） | 本机 `87C83BA1…`/`7D3063B6…`/`8E0A3E5D…` vs 干净 `3A4C8CD1…`/`0564A518…`/`87EBB317…` |
 | 脚本的 **完整构建分支**（`vcvars32` + `cmake`） | **未验证** | 本轮未跑完整构建（约 10 分钟，复用 lead 预构建产物）；命令串已逐字对照 `src/build.bat` / `CMakeLists.txt` / §14.4 |
 | 0.4.0 干净 hash 复现 | **未验证**（本轮未重建 `d151fd7`） | 数值引自 `docs/STATUS.md` §4 与 `docs/planning/D3D-LUA-SDK-DESIGN.md` §14.4 |
