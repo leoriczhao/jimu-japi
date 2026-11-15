@@ -266,6 +266,10 @@ cd build\clean-d151fd7\src
 cmd /c ""D:\vs2022\BuildTools\VC\Auxiliary\Build\vcvars32.bat" >nul && cmake -S . -B build-clean -G "Visual Studio 17 2022" -A Win32 && cmake --build build-clean --config Release"
 ```
 
+该 worktree 只用于复核构建：回读 hash 与五组验证完成后即 `git worktree remove --force build/clean-d151fd7`
+删除（`build\clean-*` 合计约 200 MB），需要再次复核时按上面命令从提交重建；发布候选 DLL 留在忽略目录
+`build\d3d\`，不依赖 worktree 存在。
+
 Clean proxy SHA-256 为 `0564A518EB3CB2F91CD65D0BDC766B9FC5B8709335CFFE5274C1FED24727834B`，clean
 `yd_japi.dll` SHA-256 为 `3A4C8CD11E54C3E357236468AA7A18D447E3578F98376071AAF3DB366510D53B`，
 `d3d_sdk_contract_test.exe` 为 `87EBB317E9E94AB0F0A333CA55F3F11A384AB937258A68ECF7FFC74A1A2304B6`。
