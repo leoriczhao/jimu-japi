@@ -3,7 +3,7 @@
 > 适用：War3 1.27a + 本项目 proxy（`newD3d9.dll`）+ `yd_japi.dll` 内嵌 Lua 5.4。
 > 状态：D3D Lua SDK 于 2026-11-15 记录为「可用」（发布产物可溯源到提交 `04f6b7e` 的 clean 构建，见
 > [STATUS.md](../STATUS.md) 与设计文档 14.4）；未进入稳定承诺的部分见文末“当前限制”。
-> SDK 版本号当前为 `0.3.0-dev`（`d3d.version()`），原生 ABI 版本 `d3d.abi_version()`。
+> SDK 版本号为 `0.4.0`（`d3d.version()`，`test_d3d_sdk.lua` 断言精确值），原生 ABI 版本 `d3d.abi_version()`。
 > 本文件只描述**已实机验收**的行为；未验收的能力见文末“当前限制”。
 
 ```lua
@@ -21,7 +21,7 @@ local d3d = require "jass.d3d"
 | 函数 | 返回 | 说明 |
 |---|---|---|
 | `d3d.is_available()` | boolean | ABI 协商成功且未 `shutdown` |
-| `d3d.version()` | string | Lua SDK 版本，如 `"0.3.0-dev"` |
+| `d3d.version()` | string | Lua SDK 版本，当前 `"0.4.0"` |
 | `d3d.abi_version()` | integer | 原生 ABI 版本（未就绪为 0） |
 | `d3d.capabilities()` | table | 能力位，见下 |
 | `d3d.status()` | table | 会话/设备诊断，见下 |
