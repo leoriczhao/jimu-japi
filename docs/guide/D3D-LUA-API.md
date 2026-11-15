@@ -1,7 +1,7 @@
 # jass.d3d API 参考
 
 > 适用：War3 1.27a + 本项目 proxy（`newD3d9.dll`）+ `yd_japi.dll` 内嵌 Lua 5.4。
-> 状态：D3D Lua SDK 于 2026-11-15 记录为「可用」（发布产物可溯源到提交 `04f6b7e` 的 clean 构建，见
+> 状态：D3D Lua SDK 于 2026-11-15 记录为「可用」（发布产物可溯源到提交 `d151fd7` 的 clean 构建，见
 > [STATUS.md](../STATUS.md) 与设计文档 14.4）；未进入稳定承诺的部分见文末“当前限制”。
 > SDK 版本号为 `0.4.0`（`d3d.version()`，`test_d3d_sdk.lua` 断言精确值），原生 ABI 版本 `d3d.abi_version()`。
 > 本文件只描述**已实机验收**的行为；未验收的能力见文末“当前限制”。

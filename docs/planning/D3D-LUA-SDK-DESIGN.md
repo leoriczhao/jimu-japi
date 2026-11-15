@@ -3,8 +3,8 @@
 > 状态：P0–P6 已闭环，D3D Lua SDK 记录为「可用」（2026-11-15）。Font/Text/Texture、统一 render queue、
 > D3DXFont/文字 alpha、asset URI/MPQ、加载失败合同、Subscription/统一输入（真实鼠标键盘）、TTL、device
 > 世代/lost/reset 事件、生命周期订阅与地图级 VM 重置均已实机通过；§15 两项门槛（BLP2 实机证据、handler
-> 覆盖）已闭合（handler 54/54，BLP2 raw/palette/DXT1 + 坏编码，结论见 15.8）。发布产物来自提交 `04f6b7e`
-> 的 detached clean worktree，构建、部署与 sidecar hash 一致（见 14.4），因此 §16 的 13 项完成定义全部满足。
+> 覆盖）已闭合（handler 54/54，BLP2 raw/palette/DXT1 + 坏编码，结论见 15.8）。发布产物来自提交 `d151fd7`
+> （SDK 版本 0.4.0）的 detached clean worktree，构建、部署与 sidecar hash 一致（见 14.4），因此 §16 的 13 项完成定义全部满足。
 > 唯一无法在 1.27a 窗口模式观测的是 device_lost 事件本身。
 >
 > 本文是面向地图作者的 D3D Lua SDK 实现契约和验收标准。底层 proxy 的加载、转发、部署与历史验证仍见
@@ -52,7 +52,7 @@ P5 补上 TTL、device 状态诊断（<code>device_generation</code>/<code>lost_
 
 2026-11-15 更新：以上三段描述的是 P2–P5 阶段的状态。此后两套贴图身份统一到 Subscription；地图级 VM 重置
 补齐了自动 session 生命周期（`-TestReboot` 8/8，见 [STATUS.md](../STATUS.md)）；P6 的三份用户文档与
-§15.8 门槛结论已交付；发布产物追溯到提交 `04f6b7e` 的 detached clean worktree，构建、部署与 sidecar hash
+§15.8 门槛结论已交付；发布产物追溯到提交 `d151fd7`（SDK 0.4.0）的 detached clean worktree，构建、部署与 sidecar hash
 一致（14.4）。§15 全部门槛与 §16 的 13 项完成定义均已满足，`STATUS.md` 现记录为「可用」，保留限制见 15.8.4。
 
 本阶段的目标不是再增加几个 bridge handler，而是交付一个稳定、可诊断、可清理、可写进用户文档的
@@ -769,16 +769,21 @@ PNG/alpha/z/鼠标/Shift 验收全部通过，累计 130/130；游戏目录 prox
 <code>build/d3d/5dbcfd4-yd_japi.dll</code>。这完成 P3，但不替代 P4 Subscription 与 P6 文档/最终验收；
 P5 的 TTL 与 device 生命周期见 14.3。
 
-### 14.4 P6 提交态产物溯源（2026-11-15）
+### 14.4 P6 提交态产物溯源（d151fd7 / SDK 0.4.0，2026-11-15）
 
-SDK 的发布产物来自提交 `04f6b7e`（`test(d3d): cover all 54 compatibility handlers and prove BLP2 decoding`）。
-该提交的 detached clean worktree 由 `git worktree add --detach build/clean-04f6b7e 04f6b7e` 建立：
-构建前 `HEAD` 精确等于 `04f6b7e`、`git status --porcelain` 为空、tracked diff 为零，构建后仅新增被忽略的
-`build/` 目录。由于 `src/build.bat` 固定切换到主工作区绝对路径，clean 构建同样使用 vcvars32 环境下的等价命令：
+SDK 的发布产物来自提交 `d151fd7`（`chore(d3d): pin the Lua SDK version at 0.4.0`）。上一版候选 `04f6b7e`
+对外仍报 `d3d.version()` = `0.3.0-dev`（`src/src/lua_engine/lua_engine/libs_d3d.cpp:35`），与「可用」的口径矛盾；
+把版本钉到 `0.4.0` 会改变 `yd_japi.dll` 的字节，所以溯源必须在 `d151fd7` 上重算。`map/tests/test_d3d_sdk.lua:33`
+现在断言精确字符串 `0.4.0`，旧 DLL 不能再被当成发布产物混过去。
+
+该提交的 detached clean worktree 由 `git worktree add --detach build/clean-d151fd7 d151fd7` 建立：
+构建前 `HEAD` 精确等于 `d151fd730fac3d99686ebc4018654bc0095ead21`、`git status --porcelain` 为空、tracked diff 为零，
+构建后仅新增被忽略的 `build/` 目录。由于 `src/build.bat` 固定切换到主工作区绝对路径，clean 构建同样使用
+vcvars32 环境下的等价命令：
 
 ~~~powershell
-git worktree add --detach build\clean-04f6b7e 04f6b7e
-cd build\clean-04f6b7e\src
+git worktree add --detach build\clean-d151fd7 d151fd7
+cd build\clean-d151fd7\src
 cmd /c ""D:\vs2022\BuildTools\VC\Auxiliary\Build\vcvars32.bat" >nul && cmake -S . -B build-clean -G "Visual Studio 17 2022" -A Win32 && cmake --build build-clean --config Release"
 ~~~
 
@@ -786,9 +791,9 @@ cmd /c ""D:\vs2022\BuildTools\VC\Auxiliary\Build\vcvars32.bat" >nul && cmake -S 
 
 | 产物 | 大小 | clean worktree SHA-256 |
 |---|---:|---|
-| `newD3d9.dll`（proxy） | 90112 | `89C41C0F133E17A13C8899E343A27EE9879F60D228F2FBEB9AC92904D896879A` |
-| `yd_japi.dll` | 544768 | `E87148EAB987A23029527909437F6721A0C78FF8872C172F86E87DAD821FE763` |
-| `d3d_sdk_contract_test.exe` | 23040 | `9FF2EEE6FF126149F9AFD0B6D8BD86CDE90AEC784A1D9DC9FD480CB118227526` |
+| `newD3d9.dll`（proxy） | 90112 | `0564A518EB3CB2F91CD65D0BDC766B9FC5B8709335CFFE5274C1FED24727834B` |
+| `yd_japi.dll` | 544768 | `3A4C8CD11E54C3E357236468AA7A18D447E3578F98376071AAF3DB366510D53B` |
+| `d3d_sdk_contract_test.exe` | 23040 | `87EBB317E9E94AB0F0A333CA55F3F11A384AB937258A68ECF7FFC74A1A2304B6` |
 
 这组 clean 产物（不是主工作区产物）实际部署后跑了五组验证：
 
@@ -798,16 +803,30 @@ cmd /c ""D:\vs2022\BuildTools\VC\Auxiliary\Build\vcvars32.bat" >nul && cmake -S 
   canonical=5, fixture=54/54, untested=0`。
 - 普通回归：`116 passed, 0 failed, 116 total`。
 - 交互 D3D：`164 passed, 0 failed, 164 total`，含 `D3D SDK BLP2 memory decode (raw/palette/DXT1)` 与
-  `resize=20 (target 20) lost=0 reset=19`，日志归档 `build/p6-164-clean.log`。
+  `resize=20 (target 20) lost=0 reset=20`，日志归档 `build/p6-164-d151fd7.log`。
 - 地图级 VM 重置：`8 passed, 0 failed, 8 total`。
 
 部署显式传入两份 clean DLL（`-DllPath` 与 `-D3DProxyPath`）。部署后回读游戏目录 `d3d9.dll` 与
-`.japi_d3d_proxy.sha256` 均为 `89C41C0F133E17A13C8899E343A27EE9879F60D228F2FBEB9AC92904D896879A`，
-探针 sidecar `.japi_d3d_probe.sha256` 为 `952B23437A15F2C65AA9C114920533E63D278D1765B70DA0EC5E709D153EAE6B`。
-同一提交在主工作区的构建 hash 不同（proxy `7D3063B6A3C52DC91A084F9002A4AB0678AE2E0D6CBFE2B4ABF63567876986D5`、
-`yd_japi.dll` `57E03E99BCFD6507A9B78EF5447FF611DF9C7787743A15B3F3AA7055440E67BE`），所以"部署用的就是
-clean 产物"以游戏目录回读值为准。发布候选副本保存在忽略目录 `build/d3d/04f6b7e-newD3d9.dll` 与
-`build/d3d/04f6b7e-yd_japi.dll`。
+`.japi_d3d_proxy.sha256` 均为 `0564A518EB3CB2F91CD65D0BDC766B9FC5B8709335CFFE5274C1FED24727834B`，
+探针 sidecar `.japi_d3d_probe.sha256` 仍为 `952B23437A15F2C65AA9C114920533E63D278D1765B70DA0EC5E709D153EAE6B`。
+运行时 `yd_japi.dll` 不取游戏目录里那份（那里是 2026-06-12 的旧文件，hash `590869AAE3D617C34879D4AD3DDA484F50AFF21A7604DF30CBEC41B97B92AF12`，
+不参与运行）：`pack.ps1` 把 `-DllPath` 指定的文件作为地图负载打包，打包日志会打印
+`DLL: ...\build\d3d\d151fd7-yd_japi.dll`，因此注入进程的是 clean 产物。发布候选副本保存在忽略目录
+`build/d3d/d151fd7-newD3d9.dll` 与 `build/d3d/d151fd7-yd_japi.dll`。
+
+交互 D3D 在 `d151fd7` 上前三次尝试先出现了两类失败，都不是产品回归，而是验收夹具的竞态（同二进制、
+同一夹具在上一轮候选曾 164/164）：
+
+- 驱动进程抢不到前台（`SetForegroundWindow` 对后台进程被拒，`AttachThreadInput` 包装也没赢），首个手势被
+  丢弃，gate 1 整段重试又补了一次内侧点击，夹具的 `click == 1` 断言因此永远不成立，表现为
+  `timed out waiting for real mouse/keyboard input`（165/166）。
+- 两个 `TextureRemoveEvent` 用例用全局事件数与绝对基线比较，而另一个夹具事件（Shift 与合成键盘探针）
+  同时注册着，结果取决于哪个先被移除；合成键探针只在每 4 个 tick 重发一次，内侧窗口短时会被吞掉。
+
+夹具修正提交为 `65bceb5`（只改 `tools/drive-interactive-d3d.ps1` 与 `map/tests/test_d3d.lua`，不动 DLL）：
+驱动改用「真实左键点击贴图外区域」夺取前台（后台进程唯一被允许的激活方式）并在每次手势前检查
+`GetForegroundWindow()`；删除断言改成「事件数恰好减一」，与另一个注册无关；合成键改为内侧每 tick 重发。
+修正后用同一份 clean 产物重跑即 164/164。
 
 一个工具差异需要记录：在游戏目录直接跑 `tools/d3d-proxy.ps1 -Verify` 会以
 `D3DX9_42.dll is required: <game dir>\D3DX9_42.dll` 失败，因为该脚本要求游戏目录内有本地 D3DX9_42.dll，
@@ -1040,9 +1059,9 @@ D3D Lua SDK 只有同时满足以下条件才可在 <code>STATUS.md</code> 标�
 任何一项未满足时，只能写“底层链路基本跑通”或“SDK 开发中”，不得写“D3D 可用”。
 
 2026-11-15 状态：13 项全部满足。第 1–12 项的证据见 §15（含 §15.8 的门槛结论）；第 13 项由提交
-<code>04f6b7e</code> 的 detached clean worktree 闭环——构建前 HEAD 精确为该提交且 tracked diff 为零，clean proxy
-SHA-256 为 <code>89C41C0F133E17A13C8899E343A27EE9879F60D228F2FBEB9AC92904D896879A</code>、clean
-<code>yd_japi.dll</code> SHA-256 为 <code>E87148EAB987A23029527909437F6721A0C78FF8872C172F86E87DAD821FE763</code>，
+<code>d151fd7</code>（SDK 0.4.0）的 detached clean worktree 闭环——构建前 HEAD 精确为该提交且 tracked diff 为零，clean proxy
+SHA-256 为 <code>0564A518EB3CB2F91CD65D0BDC766B9FC5B8709335CFFE5274C1FED24727834B</code>、clean
+<code>yd_japi.dll</code> SHA-256 为 <code>3A4C8CD11E54C3E357236468AA7A18D447E3578F98376071AAF3DB366510D53B</code>，
 部署后游戏目录 proxy 与 sidecar 回读同为 clean proxy hash，并用该产物复跑交互 164/164、普通 116/116、
 地图级 VM 重置 8/8（见 14.4）。因此 <code>STATUS.md</code> 将该行记录为“可用”；15.8.4 的保留限制
 （<code>device_lost</code> 不可观测、<code>ShowFpsText</code> 弱断言、覆盖口径）继续有效。
