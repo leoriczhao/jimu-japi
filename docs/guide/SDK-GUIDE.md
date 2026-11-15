@@ -115,7 +115,7 @@ end))
 ### 能做什么
 
 - 标量：`globals.udg_xxx = 1`、`local v = globals.udg_xxx`。
-- 数组：返回 `jarray`，可 `arr[i] = v` / `v = arr[i]` / `#arr`（`#` 恒为 8192，`test_suite.lua:567-571` 实机覆盖）。
+- 数组：返回 `jarray`，可 `arr[i] = v` / `v = arr[i]` / `#arr`（**开局后** `#` 恒为 8192，`test_suite.lua:567-571` 实机覆盖；脚本加载期是 0，见下面的时序小节）。
 - `pairs(globals)` 遍历。
 
 ### 最小用法
@@ -134,6 +134,50 @@ print(#globals.udg_lua_test_array)         -- 8192
 `map/war3map.lua:44` 用一行 `globals.udg_lua_japi_alive = 1` 当「DLL 活着」的探针，
 因为脚本只有 DLL 起来之后才会被加载。
 
+### 时序：数组只能在「地图初始化完成」之后用
+
+这是本模块最容易踩的不对称：**标量**在脚本加载期就能读写，**数组**要到开局后才可用。
+
+| 时机 | `globals.udg_x`（标量） | `globals.some_array` 的元素 / `#arr` |
+|---|---|---|
+| `war3map.lua` 顶层（加载期） | 正常读、正常写 | `#arr == 0`；读元素得 `nil`；写元素**被静默丢弃**（不报错） |
+| 开局后（一次性 timer 1.0 秒就够） | 正常读、正常写 | `#arr == 8192`（`pack.ps1` 预分配过），读写正常 |
+
+```lua
+local jass = require "jass.common"
+local globals = require "jass.globals"
+
+-- 加载期：标量可以，数组不行
+globals.udg_lua_japi_alive = 1                 -- OK：DLL 存活探针（map/war3map.lua:44 就是这么写的）
+print(#globals.udg_lua_test_array)             -- 0，不是 8192
+globals.udg_lua_test_array[5] = 77             -- 被丢弃，没有任何报错
+print(globals.udg_lua_test_array[5])           -- nil
+
+-- 开局后：数组才可用
+local timer = jass.CreateTimer()
+jass.TimerStart(timer, 1.0, false, function()
+    jass.DestroyTimer(timer)
+    print(#globals.udg_lua_test_array)         -- 8192
+    globals.udg_lua_test_array[5] = 77
+    print(globals.udg_lua_test_array[5])       -- 77
+end)
+```
+
+实机证据（2026-11-16，探针地图 `build\scratch\arrprobe`，日志 `build\scratch\arrprobe-deploy.log`）：
+
+```text
+load                len=0    idx5=nil
+load-after-write    len=0    idx5=nil
+1.0s                len=8192 idx5=0
+1.0s-after-write    len=8192 idx5=909
+```
+
+也就是说：加载期写数组是**静默失败**，最坑的是它不报错——`map/tests/test_suite.lua` 的 globals 段全绿，是因为它在 1.0 秒后才跑；
+`examples/06-globals` 之前踩的正是这个坑，现已按同一规则改写成「加载期只写标量、数组 I/O 放进 1.0 秒 timer」，可以直接拿它当可运行版本。
+
+> 还有一个只跟字符串数组有关的细节：即使开局后，**从没写过的字符串槽读出来是 `nil`**（JASS 的空字符串），而整数槽读出来是 `0`。
+> 所以字符串槽永远「先写后读」，否则拼字符串时会报 `attempt to concatenate a nil value`。
+
 ### 坑
 
 | 坑 | 现象 | 怎么办 |
@@ -141,7 +185,9 @@ print(#globals.udg_lua_test_array)         -- 8192
 | 数组没预分配 | 读出来全是 0/写不进 | 用默认 `pack.ps1`（会插 `JapiForceAllocArrays()`）；`-NoArrayPrealloc` 只给回归用 |
 | 整个数组赋值 | `globals.arr = {}` 被忽略，日志里 `[jass.globals] assignment to whole array ignored: ...`（最多打 4 次） | 逐个下标写 |
 | JASS 侧没声明这个全局 | 读 `nil`、写静默无效 | 全局必须在 `war3map.j` 的 `globals` 块里声明；要自己加全局就加在基座地图里 |
-| 非 gaming 期间读写 | 读返回 `nil`、写无效（`libs_globals.cpp`） | 挪到开局后 |
+| **加载期读写数组** | `#arr == 0`、元素读 `nil`、写被**静默丢弃**；同一时刻标量完全正常 | 数组 I/O 放进 `TimerStart(..., 1.0, ...)`，见上面「时序」小节 |
+| 字符串数组槽没写过就读 | 开局后也是 `nil`（不是 `""`），拼接时报 `attempt to concatenate a nil value` | 先写后读 |
+| 非 gaming 期间读写标量 | 读返回 `nil`、写无效（`libs_globals.cpp`） | 挪到开局后 |
 | 下标越界 | 8192 个槽（0..8191） | 用 8191 以内的下标，或改用 hashtable/Lua 表 |
 
 ---
@@ -349,6 +395,58 @@ jass.TriggerRegisterTimerEvent(trigger, 0.10, false)
 
 这段结构就是 `map/tests/bridge_preflight.lua:67-101` 的实测版本（回归里 `Lua sleep resumes in a JASS trigger action` 通过）。
 
+### 实测：一次等待可靠，多段串联不可靠
+
+`sleep()` 的语义是「在这个 JASS 动作线程上挂起一会儿，再从原地继续」。2026-11-16 用 6 个独立探针地图在 1.27a 实机实测（同一份 DLL，SHA-256 `87C83BA1CE0E6E413CEA7B9D6018E9A289259EC9C2F01EE02E7827DAF6661908`；探针在 `build\scratch\probe-*`，不随仓库发布）：
+
+| 探针形态 | 实测结果 |
+|---|---|
+| `sleep(0.05)` ×2，无守卫 | 第一段 0.075 s 恢复，整条链 0.167 s 走完 ✅ |
+| `sleep(0.30)` ×2，无守卫 | 第一段 @0.433 s 恢复；action 又被进入 5 次（约 0.45 s 一次）；`stage3` @3.549 s ✅ |
+| 同上 + 加载期悬挂协程 | `stage3` @2.570 s ✅（悬挂协程单独不致命） |
+| 同上 + 加载期 `pcall(sleep)` | `stage3` @3.100 s ✅ |
+| 同上 + **action 顶部一次性守卫** | 第一段照常恢复（`stage 2` @0.433 s）；entry #2 @0.879 s 被守卫挡掉；**之后 15 s 无恢复，`stage` 永远停在 2** ❌ |
+| 状态机推进（无守卫） | `step 1` 之后 **15 s 没恢复** ❌ |
+| `map/tests/bridge_preflight.lua` 形态（**一段** `sleep(0.30)`） | 每次 122/122 回归都通过 ✅ |
+
+三条结论：
+
+1. **精度够用，但别当计时器**：恢复耗时 ≈ 参数 + 0.1 s 左右（0.05 → 0.075 s、0.30 → 0.433 s），分辨率约 0.1 s。要精确节奏（节拍、逐帧演出）仍用 `CreateTimer` + `TimerStart`。
+2. **多段 `sleep` 串联不可靠**：同一条两连 `sleep` 的探针，一次 3.5 s 跑完、另一次 15 s 都没恢复；而且 action 会被从头重入（某次 3.8 秒内进入 6 次，每次把 `stage` 重置回 1）。→ 多段编排用 timer 链，`sleep` 只用于「等一次再继续」。
+3. **不要给 sleeping action 加一次性守卫**（最容易凭直觉写错的一条）：探针 p6 加上 `if state.started then return end` 之后，第一段恢复、第二段永不恢复（15 s 不动）。挂起后的续跑依赖 action 再次被进入，守卫等于把它掐死。
+
+可靠形态就是 `map/tests/bridge_preflight.lua:67-101`（仓库每次回归都跑它）：
+
+```lua
+local jass = require "jass.common"
+local runtime = require "jass.runtime"
+
+runtime.sleep = true
+local state = { stage = 0 }
+
+local trig = jass.CreateTrigger()
+jass.TriggerAddAction(trig, jass.code(function()
+    state.stage = 1
+    sleep(0.30)              -- 一个 action 里只等一次
+    state.stage = 2
+end))
+jass.TriggerRegisterTimerEvent(trig, 0.10, false)
+
+-- 判定放在独立定时器里轮询：见到 1 记「挂起过」、见到 2 判「恢复了」、3 秒兜底判失败
+local watch, ticks = jass.CreateTimer(), 0
+jass.TimerStart(watch, 0.02, true, jass.code(function()
+    ticks = ticks + 1
+    if state.stage == 2 or ticks > 150 then
+        print(string.format('[sleep] %s after %d ticks', state.stage == 2 and 'resumed' or 'TIMEOUT', ticks))
+        jass.PauseTimer(watch)
+        jass.DestroyTimer(watch)
+        runtime.sleep = false
+    end
+end))
+```
+
+要点：**一个 action 里只 `sleep` 一次**；进度用状态字段表达；判定/自检放在**独立定时器**里轮询；多段节奏用 timer 链（在 `TimerStart` 回调里排下一段），不要连写两个 `sleep`。
+
 ### 坑
 
 | 坑 | 现象 | 怎么办 |
@@ -356,7 +454,9 @@ jass.TriggerRegisterTimerEvent(trigger, 0.10, false)
 | 没开 `runtime.sleep` | `TriggerSleepAction is not available` | 先 `runtime.sleep = true` |
 | 在协程里但不在 trigger/action 线程 | `sleep() must be called from a coroutine` 或永不恢复 | 用 trigger action 承载（不要用裸 timer 回调） |
 | 忘了关 | 一局游戏里一直挂着 sleep 通道 | 用完 `runtime.sleep = false`（`bridge_preflight.lua:58-63`） |
-| 用 `sleep` 做定时 | 精度不如 timer，且会占住动作线程 | 定时用 `CreateTimer` + `TimerStart` |
+| `sleep` 当计时器用 | 恢复耗时 ≈ 参数 + 0.1 s（实测 0.05→0.075 s、0.30→0.433 s），分辨率约 0.1 s | 精确节拍用 `CreateTimer` + `TimerStart`；`sleep` 只表达「等一会儿」 |
+| 一个 action 里连写多个 `sleep` | 同一形态一次 3.5 s 跑完、另一次 15 s 没恢复；action 还会被从头重入（某次 3.8 s 内进 6 次，`stage` 被重置回 1）（2026-11-16，6 个探针地图） | 一个 action 只 `sleep` 一次；多段用 timer 链；进度写状态字段，见上面「实测」小节 |
+| **给 sleeping action 加一次性守卫** | 加了 `if state.started then return end` 后第一段恢复、第二段永不恢复（实测 15 s 不动）——续跑依赖 action 被重新进入 | 不要加守卫；用状态字段 + 独立定时器轮询判定 |
 
 ---
 

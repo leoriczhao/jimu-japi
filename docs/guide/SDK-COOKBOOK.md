@@ -3,6 +3,7 @@
 > **给谁看**：已经按 [SDK-QUICKSTART.md](SDK-QUICKSTART.md) 把地图打包、在游戏里跑出过一次 Results 行的地图作者。
 > 每个配方都是自包含的：只用 jass.* 模块 + 标准 JASS native，不依赖 map/ 里的任何工厂代码，可以整段粘进你自己的 war3map.lua。
 > 每个配方后面都有一行验证方式，以及一张坑表——那些坑都是本仓库实机踩出来的，不是推测。
+> 怎么用：按需要跳读，不要按顺序读；把代码块里标了 `-- 改成你的...` 的常量和名字换掉，就能跑。
 
 | 项目 | 值 |
 |---|---|
@@ -11,8 +12,6 @@
 | 本文档日期 | 2026-11-16 |
 | 验证状态 | 配方 1-12 的 API 全部来自已发布的模块源码；配方 1 与 3/4/5/7 的调用形态在实机回归中覆盖（默认套件 Results: 122 passed, 0 failed, 122 total） |
 | 参考的实机证据 | docs/STATUS.md（2026-11-16）、map/game/demo.lua（垂直切片 11/11）、map/tests/test_suite.lua |
-
-怎么用这份文档：按需要跳读，不要按顺序读。每个配方的代码块替换掉其中标了 `-- 改成你的...` 的常量和名字，就能跑。
 
 ---
 
@@ -23,10 +22,8 @@
 ```powershell
 # 1) 确认没有残留的 war3 进程（1.27a 单实例锁：第二个实例起不来，表现为「日志根本不存在」）
 Get-Process war3 -ErrorAction SilentlyContinue
-
 # 2) 打包 + 部署 + 启动 + 等结果（deploy.ps1 内部会调 pack.ps1）
 .\tools\deploy.ps1 -MapDir build\scratch\hello-sdk -BaseMap build\scratch\hello-sdk\base-map -MapName cookbook -Timeout 180
-
 # 3) 用 UTF-8 读日志，找 Results 行（每次启动前 deploy 会删日志，所以还要看时间戳）
 Get-Content C:\ProgramData\japi_debug.txt -Encoding UTF8 | Select-String 'PASS|FAIL|Results:'
 ```
@@ -435,7 +432,7 @@ print(string.format('[cast] submitted = %s', tostring(cast_ok and submitted)))
 |---|---|
 | 没有选中单位 | `order_*` 内部读的是「当前选中单位」，没有选中就返回 false（不报错）。先 `SelectUnit` 或让玩家点一下。 |
 | 第一秒就施法 | 刚进图的 1 秒内命令提交链还没就绪，`order_point` 会假成功或无效。用配方 2 的 `after(1.5, ...)` 包住。 |
-| 忘了 flags | 本地命令要带 `FLAG_LOCAL_CAST = (1 << 2) | (1 << 5)`；不带 flags 时在网络层语义不同，单机也常常不生效。 |
+| 忘了 flags | 本地命令要带 `FLAG_LOCAL_CAST = (1 << 2) \| (1 << 5)`；不带 flags 时在网络层语义不同，单机也常常不生效。 |
 | 技能 ID 写错 | `jass.OrderId('blizzard')` 是命令字符串，`ability_id` 是 fourcc `AHbz`。两个都要对：一个决定「放什么」，一个决定「英雄会不会」。 |
 | 1.27a 之前的版本 | `order_immediate` / `order_point` / `order_target` 只在 `get_version() >= 1.24e` 时注册，1.27a 满足；别把这套代码拿去做 1.20e 地图。 |
 
@@ -598,29 +595,35 @@ print('[hook] unhooked')
 local jass = require "jass.common"
 local runtime = require "jass.runtime"
 local sleep = require("jass.sleep").sleep
-
--- 1) 打开 sleep 开关（默认 false）
-runtime.sleep = true
-
--- 2) 装错误回调：被测代码里故意 error() 时，日志里能看见原因
-runtime.error_handle = function(message)
-    print('[lua error] ' .. tostring(message))
-end
-
--- 3) sleep 只能用在持久 JASS 线程里：trigger action 才是，裸 timer 回调不是
+runtime.sleep = true          -- 1) 开关默认 false；错误回调的写法见配方 1 的 runtime.error_handle
+-- 2) 一个 action 里只等一次，进度写状态字段，判定交给独立定时器轮询（同 map/tests/bridge_preflight.lua:67-101）
+local state = { stage = 0 }
 local trigger = jass.CreateTrigger()
 jass.TriggerAddAction(trigger, jass.code(function()
-    print('[show] step 1')
-    sleep(0.30)
-    print('[show] step 2')
-    sleep(0.30)
-    print('[show] step 3')
-    runtime.sleep = false        -- 演出结束就关掉，避免别处误用
+    state.stage = 1
+    sleep(0.30)               -- 恢复耗时 ≈ 参数 + 0.1 s，别当秒表
+    state.stage = 2
 end))
 jass.TriggerRegisterTimerEvent(trigger, 0.10, false)
+
+-- 3) 多段节奏用 timer 链（模式同配方 2 的 boot timer），不要连写两个 sleep
+local function later(s, text)
+    local t = jass.CreateTimer()
+    jass.TimerStart(t, s, false, jass.code(function() jass.DestroyTimer(t); print(text) end))
+end
+later(0.10, '[show] step 1'); later(0.40, '[show] step 2'); later(0.70, '[show] step 3')
+
+-- 4) 3 秒内见到 stage == 2 才算恢复；加一次性守卫会让 action 永不恢复
+local watch, ticks = jass.CreateTimer(), 0
+jass.TimerStart(watch, 0.02, true, jass.code(function()
+    ticks = ticks + 1
+    if state.stage == 2 or ticks > 150 then
+        print(string.format('[show] sleep %s after %d ticks', state.stage == 2 and 'resumed' or 'TIMEOUT', ticks)); jass.PauseTimer(watch); jass.DestroyTimer(watch); runtime.sleep = false
+    end
+end))
 ```
 
-**验证方式**：日志按时间顺序出现 `[show] step 1` / `step 2` / `step 3`，间隔约 0.3 秒；`map/tests/bridge_preflight.lua` 用同一套模式断言过「sleep 在 trigger action 里恢复执行且 stage 前进」。
+**验证方式**：日志依次出现 `[show] step 1/2/3` 与 `[show] sleep resumed after N ticks`（打成 `TIMEOUT` 就是没恢复）；`map/tests/bridge_preflight.lua` 用同一形态在每次 122/122 回归里断言 sleep 在 trigger action 里恢复执行。
 
 | 坑 | 说明 |
 |---|---|
@@ -628,7 +631,9 @@ jass.TriggerRegisterTimerEvent(trigger, 0.10, false)
 | 在 timer 回调里 sleep | 报 `sleep() must be called from a coroutine`：裸 timer 回调不是持久线程。要么用 trigger action（如上），要么在 `coroutine` 里。 |
 | sleep(0) | `seconds <= 0` 会被当成 0.001 秒，不是「立刻返回」。 |
 | 睡着时游戏照常跑 | sleep 期间单位会死、地图会切；醒来后先检查句柄是否还有效（`IsUnitType` / `GetUnitTypeId` 兜底）。 |
-| 演出被重入 | 同一个 trigger 被多次 register 会并行跑多份演出；用 `state.running` 之类标志位互斥。 |
+| 拿 sleep 当秒表 | 恢复耗时 ≈ 参数 + 0.1 s（实测 0.05→0.075 s、0.30→0.433 s），分辨率约 0.1 s（2026-11-16，6 个探针地图）；精度要 0.1 秒级就用 `CreateTimer` + `TimerStart`。 |
+| 一个 action 里连写两个 sleep | 同一形态一次 3.5 s 跑完、另一次 15 s 没恢复；action 还会被从头重入（某次 3.8 s 内进 6 次，阶段被打回 1）→ 一个 action 只等一次，多段用上面的 timer 链。 |
+| **给 sleeping action 加一次性守卫** | 加了 `if state.started then return end` 后第一段恢复、第二段永不恢复（实测 15 s 不动）——续跑依赖 action 被重新进入。不要加守卫，判定放独立定时器轮询；见 [SDK-GUIDE.md](SDK-GUIDE.md) 第 7 节「实测」。 |
 
 ---
 
@@ -647,13 +652,10 @@ if not storm.has('war3map.w3i') then
     return
 end
 
-local info = storm.load('war3map.w3i')
-print(string.format('[gate] war3map.w3i = %d bytes, format byte = %d',
-    #info, string.byte(info, 1)))
+local info = storm.load('war3map.w3i'); print(string.format('[gate] war3map.w3i = %d bytes, format byte = %d', #info, string.byte(info, 1)))
 
--- 2) DLL 存活标志：war3map.lua 能跑起来，就说明 DLL 已经加载（见 reference/empty-map/war3map.j:40）
-globals.udg_lua_japi_alive = 1
-print(string.format('[gate] japi alive flag = %s', tostring(globals.udg_lua_japi_alive)))
+-- 2) DLL 存活标志：war3map.lua 能跑起来就说明 DLL 已加载（reference/empty-map/war3map.j:40）。这里只写标量：数组全局要等开局后 1.0 秒（见坑表 / SDK-GUIDE 第 2 节）
+globals.udg_lua_japi_alive = 1; print(string.format('[gate] japi alive flag = %s', tostring(globals.udg_lua_japi_alive)))
 
 -- 3) 版本闸门：SDK 版本是编译期常量，可用来断言「玩家装的 DLL 是不是配套的」
 local d3d = require "jass.d3d"
@@ -671,14 +673,14 @@ end
 | 以为 storm 能写文件 | 只能读：`load()` 返回整段字符串，`has()` 判存在。写文件不在 SDK 范围内。 |
 | 拿 d3d 版本来判断可用性 | `d3d.version()` 是常量，没有 proxy 也返回 0.4.0；可用性看 `d3d.is_available()`。 |
 | 用 globals 存大数组 | 数组全局必须在 JASS 里声明且被预分配（`tools/pack.ps1` 的 `JapiForceAllocArrays`，每数组 32KB）；整数组赋值会被忽略并写日志，只能逐元素写。 |
-| 闸门失败时直接 return | 地图会停在无逻辑状态但不崩——这正是想要的：日志里留下第一条 `[gate]` 失败行，作者一眼能看到原因。 |
+| **在脚本加载期读写数组** | 加载期 `#arr == 0`、元素读 `nil`、写被静默丢弃（同一时刻标量正常），1.0 秒后才恢复；数组 I/O 要放进一次性 `TimerStart(timer, 1.0, false, ...)`，时序表见 [SDK-GUIDE.md](SDK-GUIDE.md) 第 2 节的「时序」小节 |
+| 字符串数组槽没写过就读 | 开局后也返回 `nil`（JASS 空字符串，不是 `""`），所以要先写后读 |
 
-### 发布前把这三条再跑一遍
+### 发布前再确认这几条
 
 | 检查 | 命令 / 判据 |
 |---|---|
-| DLL 是配套的 | `Get-FileHash src\build\bin\Release\yd_japi.dll -Algorithm SHA256`，与 `docs/STATUS.md` 记的哈希对比 |
-| d3d proxy 归属正确 | `Get-FileHash '<游戏目录>\d3d9.dll'` 与 `<游戏目录>\.japi_d3d_proxy.sha256` 里的哈希一致（`tools\d3d-proxy.ps1 -Install` 安装） |
+| DLL 与 d3d proxy 都是配套的 | DLL：`Get-FileHash src\build\bin\Release\yd_japi.dll -Algorithm SHA256` 对 `docs/STATUS.md`；proxy：`Get-FileHash '<游戏目录>\d3d9.dll'` 对 `<游戏目录>\.japi_d3d_proxy.sha256`（`tools\d3d-proxy.ps1 -Install` 装的） |
 
 发布前打包记得给独立的 `-WorkDir` / `-OutFile`（`pack.ps1` 会先清空 `-WorkDir`，第 177 行）。完整发布清单（版本钉法、产物清单、CHANGELOG 约定）见 [../RELEASE.md](../RELEASE.md)。
 
@@ -688,12 +690,10 @@ end
 
 | 想做的事 | 去看 |
 |---|---|
-| 第一次从零跑通一张图 | [SDK-QUICKSTART.md](SDK-QUICKSTART.md) |
+| 第一次从零跑通一张图 | [SDK-QUICKSTART.md](SDK-QUICKSTART.md)，或用脚手架 `tools/new-project.ps1` 生成最小工程（war3map.lua / lib/ / tests/ / base-map/） |
 | 每个模块的完整语义、坑、生命周期 | [SDK-GUIDE.md](SDK-GUIDE.md) |
 | 可直接打包运行的 10 个示例（`01-hello-jass` … `10-getfunc-addr`） | [../../examples/](../../examples/)，清单（若已生成）见 `examples\manifest.json` |
 | D3D 的完整 API 签名 | [D3D-LUA-API.md](D3D-LUA-API.md)、[D3D-LUA-QUICKSTART.md](D3D-LUA-QUICKSTART.md) |
-| 版本历史与发布流程（版本钉法、产物清单） | [../../CHANGELOG.md](../../CHANGELOG.md)、[../RELEASE.md](../RELEASE.md) |
-| 当前完成度与验证强度（唯一权威） | [../STATUS.md](../STATUS.md) |
-| 新项目脚手架 | `tools/new-project.ps1`（生成 war3map.lua / lib/ / tests/ / base-map/ 的最小工程） |
+| 版本历史 / 发布流程 / 当前完成度与验证强度（唯一权威） | [../../CHANGELOG.md](../../CHANGELOG.md)、[../RELEASE.md](../RELEASE.md)、[../STATUS.md](../STATUS.md) |
 
 > 本文件写的每一条 API 都能在 `src/src/lua_engine/lua_engine/libs_*.cpp` 里找到出处；每个「验证方式」都指向本仓库真实跑过的输出格式。发现文档与代码不一致时，以代码和 `docs/STATUS.md` 为准，并请提 issue。

@@ -314,6 +314,8 @@ Get-Content C:\ProgramData\japi_debug.txt -Encoding UTF8
 | pack 报 `JASS syntax check failed: <file>` | 你在地图 JASS 里加了 `native` 声明，位置或名字不对 | 声明必须在**第一个函数之前**，且名字必须已存在于引擎 native 表；细节见 [docs/planning/JASS-NATIVE-DECLARATIONS.md](../planning/JASS-NATIVE-DECLARATIONS.md)。只想验证自己的 Lua 时，打包加 `-SkipJassCheck` |
 | 游戏直接回主菜单，日志一行都没有 | 同上：非法 native 声明（最常见），或声明写在函数之后 | 删掉你自己加的声明，改用 Lua 侧 `japi()` 注册 + JASS 侧 `UnitId` 桥（[SDK-COOKBOOK.md](SDK-COOKBOOK.md) 配方 9） |
 | 日志里 `module 'xxx' not found` | 你的 `require` 没被内联：不是顶格写、或用了单引号 | 改成行首 `require "lib.xxx"`（双引号），重新打包 |
+| 全局数组读出来是 `nil`、`#arr` 是 `0` | 你在脚本加载期碰了数组全局：那一刻数组还没预分配，元素读 `nil`、写被静默丢弃（同一时刻**标量**全局完全正常） | 把数组 I/O 挪进一次性 `TimerStart(timer, 1.0, false, ...)`；时序规则见 [SDK-GUIDE.md](SDK-GUIDE.md) 第 2 节的「时序」小节 |
+| `sleep` 流程跑不完 / 阶段被重置回开头 | 多段 `sleep` 串联不可靠（同一形态一次 3.5 s 跑完、另一次 15 s 没恢复），action 还会被从头重入（某次 3.8 s 内进 6 次，每次把 `state.stage` 重置回 1） | 一个 action 只 `sleep` 一次、进度写状态字段、多段用 timer 链；**不要**加一次性守卫（实测加了之后流程永不恢复，15 s 不动）。见 [SDK-GUIDE.md](SDK-GUIDE.md) 第 7 节「实测」 |
 | `d3d.is_available()` 返回 false | 游戏目录没装 d3d9 proxy | `tools\d3d-proxy.ps1 -Install`；注意 `d3d.version()` 仍会返回 0.4.0，**不能**用它判断可用性 |
 | pack 报 `w3x2lni obj failed` | `tools\w3x2lni\bin\*.dll` 缺失（被 .gitignore 忽略） | 从主 checkout 复制这些 DLL 过来 |
 | 打包/部署结果时好时坏 | 多人/多任务共用 `-WorkDir` 或默认 `build\work` | 每次给独立的 `-WorkDir` 和 `-OutFile` |
