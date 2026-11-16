@@ -57,6 +57,7 @@ war3map.j（干净，只调标准 JASS native）
 | 示例 | `examples/`（`manifest.json` + `tools/verify-examples.ps1`） | 10 个最小可运行示例 |
 | 版本与变更 | `CHANGELOG.md` | SDK 版本策略与历史 |
 | 出包流程 | `docs/RELEASE.md` + `tools/release-sdk.ps1` | 可复现的发布流程 |
+| 自包含作者包 | `build\sdk\<ver>-<sha7>\sdk\README.md`（`release-sdk.ps1 -SdkBundle` 产出） | 文档+示例+脚本+vendor+二进制一体，解压即用 |
 
 `-MapDir` 指向的目录只需要有 `war3map.lua`（入口），其下所有 `*.lua` 会被递归内联，模块名 = 相对路径去掉 `.lua` 并把 `/` 换成 `.`（`lib/util.lua` → `require "lib.util"`）。
 

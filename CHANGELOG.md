@@ -86,6 +86,29 @@ exit 0、干净 worktree 自动创建并删除。`498a308` 那次包内 hash 与
 **`-NoBuild` 只用于验证脚本本身，绝不能当作发布产物**——manifest 里 `built: false`、`artifact_source: "local_worktree"`
 就是给这件事留的记号。
 
+### 新增：地图作者 SDK 分发包（`tools\release-sdk.ps1 -SdkBundle`）
+
+| 文件 | 作用 | 提交 | 验证 |
+|---|---|---|---|
+| `tools/release-sdk.ps1` 的 `-SdkBundle` / `-NoVendor` | 在二进制包旁边再组装一个 `sdk\`：`docs/guide` 6 份 + `STATUS`/`RELEASE`/`planning` 2 份 + `CHANGELOG`、`examples` 10 个、8 个作者脚本 + `pjass.exe` + `callback` + `config.example.ps1`、`reference\empty-map`、3 个注册表源、`tools\w3x2lni` vendor、3 个二进制；另出 `sdk\README.md` 与 `sdk\SHA256SUMS.txt`，manifest 增 `sdk_bundle` 段 | 本轮 | 静态 + 仓库外自包含实跑（见下） |
+| `tools/sdk-bundle/README.template.md` | 包内入口 README 模板（`@@VERSION@@` / `@@ARTIFACTROWS@@` / `@@TREEFILES@@` 等占位符）：包里有什么、三分钟上手、怎么验证包、脚本清单、7 条必读坑、版本与来源 | 本轮 | 文档；渲染后残留占位符会 `throw` |
+| `docs/RELEASE.md` §8.5 | 出包流程补上作者包：内容来源的两个例外、注册表源为何要进包、自包含门槛、实测数字 | 本轮 | 文档 |
+| `docs/guide/SDK-QUICKSTART.md`、`AGENT.md` | 入口指向 `sdk\README.md` | 本轮 | 文档 |
+
+为什么要多这一层：`release-sdk.ps1` 原来只产出 3 个二进制 + 清单，作者拿到手还得自己找文档、示例、脚手架和 `w3x2lni` 运行时。而所有作者脚本都用 `$Root = Split-Path -Parent $PSScriptRoot` 推仓库根 —— **按同样的仓库子集布局塞进 `sdk\`，它就能当仓库根用，脚本一行不用改**。
+
+自包含验证（2026-11-16，`build\sdk\0.4.0-1da154c\sdk\` 整个拷到 `%TEMP%\sdk-standalone-1da154c`，完全脱离仓库）：
+
+- `tools\verify-examples.ps1`（静态+打包）：`Examples: 10 passed, 0 failed, 10 total`。首轮是 9/10 —— 示例 09（`pack.ps1 -WithJassWrappers`）报 `handler registry not found`，补上 `gen-jass-wrappers.ps1` 要扫的 3 份注册表源（`src\src\extensions\ex_natives\Initialize.cpp`、`src\src\lua_engine\lua_engine\libs_message.cpp`、`src\src\d3d9\handler_manifest.json`）后 10/10。
+- `tools\new-project.ps1 -Name Smoke -Path …` → `tools\pack.ps1`：`Done -> build\Smoke.w3x`（275638 字节，`Bundled 5 Lua files`、`JASS syntax check OK`）。
+- 包体积 683 文件 / 90.2 MB（vendor 615 文件 / 88.7 MB，其中 19 个 `bin\*.dll` 被 `.gitignore` 排除、由出包机本地 checkout 覆盖，manifest `sdk_bundle.vendor.overlaid_files` 记录）。`[skip] luac not found` 属预期：包里没有 Lua 源码与 gcc，打包与 `-Live` 不受影响。
+- **未做**：包内实机 `deploy`。出包机当时被另一个会话的 `deploy.ps1 -Demo -Hold` 占着（1.27a 单实例锁 + 共享日志），没抢到窗口；包内二进制 hash 与本轮实机验证过的 `87C83BA1…` 相同，但仍按「未验证」记。
+
+写脚本时踩到的两个坑（都真的把逻辑跑没了）：
+
+- `release-sdk.ps1` 一旦内嵌中文就必须存成 UTF-8 **带 BOM**。它原来是纯 ASCII 无 BOM，加中文后 PS 5.1 按 ANSI 解码，解析直接报「意外的标记」；改存带 BOM 后正常（`tools\new-project.ps1` 本来就是 BOM 先例）。任何工具重写该文件都可能把 BOM 丢掉，改完确认前 3 字节是 `EF BB BF`。
+- PowerShell 变量名**不区分大小写**：`[switch]$SdkBundle` 与本地 `$sdkBundle = $null` 是同一个变量，开关刚被读就被置空，Step5 整段静默跳过（首跑 summary 里连 bundle 行都没有）。改名 `$bundleInfo` 后才跑通。这是本会话第二次踩同类坑（第一次是 `verify-examples.ps1` 的 `$live` vs `[switch]$Live`）：**开关名不要当同名局部变量复用**。
+
 ### 验证（2026-11-16 实机，本地构建 `yd_japi.dll` = `87C83BA1CE0E6E413CEA7B9D6018E9A289259EC9C2F01EE02E7827DAF6661908`）
 
 | 组 | 命令 | `Results:` 行 |

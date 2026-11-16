@@ -1,4 +1,4 @@
-# tools/release-sdk.ps1
+﻿# tools/release-sdk.ps1
 # Cut a reproducible SDK release package from a pinned commit.
 #
 # What it does
@@ -10,13 +10,23 @@
 #      or with -NoBuild copy the already-built files from src\build\bin\Release
 #   4. copy yd_japi.dll, newD3d9.dll and d3d_sdk_contract_test.exe into
 #      build\sdk\<version>-<sha7>\ together with SHA256SUMS.txt and manifest.json
-#   5. remove the clean worktree again unless -Keep is passed
+#   5. with -SdkBundle also assemble build\sdk\<version>-<sha7>\sdk\ : the author-facing
+#      package (docs, examples, scaffold/pack/deploy scripts, the empty base map, the three
+#      binaries and the w3x2lni vendor runtime) in the same repository shape the author
+#      scripts expect, plus its own README.md and SHA256SUMS.txt
+#   6. remove the clean worktree again unless -Keep is passed
 #
 # Usage:
 #   .\tools\release-sdk.ps1                                    # release HEAD with a real clean build
 #   .\tools\release-sdk.ps1 -Commit 498a308                     # release an explicit commit
 #   .\tools\release-sdk.ps1 -Commit 498a308 -NoBuild            # package local artifacts (smoke test only)
 #   .\tools\release-sdk.ps1 -Commit 498a308 -NoBuild -Keep      # keep build\clean-<sha7> for inspection
+#   .\tools\release-sdk.ps1 -SdkBundle                          # + the author SDK bundle (sdk\)
+#   .\tools\release-sdk.ps1 -SdkBundle -NoVendor                # + the bundle without tools\w3x2lni
+#
+# Bundle content (docs, examples, tools, base map) is read from the clean worktree, i.e.
+# from the released commit. Only tools\sdk-bundle\README.template.md and the gitignored
+# tools\w3x2lni\bin\*.dll come from this local checkout (see docs\RELEASE.md).
 #
 # This script never launches War3 and never runs the regression suites. The live
 # verification described in docs/RELEASE.md has to be done by hand.
@@ -29,7 +39,9 @@ param(
     [string]$Version = '',
     [string]$OutDir = '',
     [switch]$NoBuild,
-    [switch]$Keep
+    [switch]$Keep,
+    [switch]$SdkBundle,
+    [switch]$NoVendor
 )
 
 $ErrorActionPreference = 'Stop'
@@ -83,6 +95,77 @@ function Get-Sha256([string]$Path) {
 function Write-Step([string]$Text) {
     Write-Host ''
     Write-Host ('== ' + $Text) -ForegroundColor Cyan
+}
+
+# --- sdk bundle helpers (only used with -SdkBundle) ---------------------------
+function Copy-FileTo {
+    param([string]$Source, [string]$Destination, [string]$Label)
+    if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
+        throw ('sdk bundle source missing: ' + $Source + '  [' + $Label + ']')
+    }
+    $parent = Split-Path -Parent $Destination
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force
+}
+
+function Copy-DirTo {
+    param([string]$Source, [string]$Destination, [string]$Label)
+    if (-not (Test-Path -LiteralPath $Source -PathType Container)) {
+        throw ('sdk bundle source missing: ' + $Source + '  [' + $Label + ']')
+    }
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    foreach ($item in @(Get-ChildItem -LiteralPath $Source -Force)) {
+        Copy-Item -LiteralPath $item.FullName -Destination $Destination -Recurse -Force
+    }
+}
+
+function Get-TreeStats {
+    param([string]$Path)
+    $files = @(Get-ChildItem -LiteralPath $Path -Recurse -File -Force)
+    $bytes = [int64]0
+    foreach ($file in $files) { $bytes += $file.Length }
+    return [pscustomobject]@{ Files = [int64]$files.Count; Bytes = $bytes }
+}
+
+function Format-MB {
+    param([int64]$Bytes)
+    return ('{0:N1}' -f ($Bytes / 1MB))
+}
+
+# <hash>  <path relative to $Dir, forward slashes> - the same shape sha256sum writes,
+# so the README snippet and any external tool can verify the bundle.
+function Write-TreeChecksums {
+    param([string]$Dir, [string]$OutName)
+    $outPath = Join-Path $Dir $OutName
+    $files = @(Get-ChildItem -LiteralPath $Dir -Recurse -File -Force |
+        Where-Object { $_.FullName -ne $outPath } | Sort-Object FullName)
+    $lines = @()
+    foreach ($file in $files) {
+        $relative = $file.FullName.Substring($Dir.Length + 1).Replace('\', '/')
+        $lines += ((Get-Sha256 $file.FullName) + '  ' + $relative)
+    }
+    [System.IO.File]::WriteAllText($outPath, (($lines -join [char]10) + [char]10), (New-Object System.Text.ASCIIEncoding))
+    return [pscustomobject]@{ Path = $outPath; Count = [int64]$files.Count }
+}
+
+function New-BundleTokens {
+    param([hashtable]$Base, [int64]$Files, [string]$Megabytes)
+    $tokens = $Base.Clone()
+    $tokens['@@TREEFILES@@'] = [string]$Files
+    $tokens['@@TREEMB@@'] = $Megabytes
+    $tokens['@@HASHCOUNT@@'] = [string]$Files
+    return $tokens
+}
+
+function Write-BundleReadme {
+    param([string]$Template, [string]$Target, [hashtable]$Tokens)
+    $text = $Template
+    foreach ($key in $Tokens.Keys) { $text = $text.Replace([string]$key, [string]$Tokens[$key]) }
+    $leftover = [regex]::Match($text, '@@[A-Z0-9_]+@@')
+    if ($leftover.Success) { throw ('sdk bundle README has an unreplaced token: ' + $leftover.Value) }
+    [System.IO.File]::WriteAllText($Target, $text, (New-Object System.Text.UTF8Encoding($false)))
 }
 
 # Read the CMake generator/arch/config out of src\build.bat so that this script
@@ -281,6 +364,207 @@ $sumPath = Join-Path $OutDir 'SHA256SUMS.txt'
 [System.IO.File]::WriteAllText($sumPath, (($sumLines -join [char]10) + [char]10), (New-Object System.Text.ASCIIEncoding))
 Write-Host ('  wrote   : ' + $sumPath)
 
+$builtAtUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+
+# -SdkBundle: the author-facing package. It mirrors the subset of the repository layout
+# that the author scripts walk up to ($Root = <bundle>\: tools\..., reference\empty-map,
+# src\build\bin\Release, examples\, docs\guide), which is what lets pack.ps1, deploy.ps1,
+# new-project.ps1 and verify-examples.ps1 run unmodified, with their default arguments,
+# from inside the bundle.
+$bundleInfo = $null
+if ($SdkBundle) {
+    Write-Step '5. Assemble the author SDK bundle'
+    $bt = [char]96
+    $sdkDir = Join-Path $OutDir 'sdk'
+    New-Item -ItemType Directory -Path $sdkDir -Force | Out-Null
+    Write-Host ('  layout  : ' + $sdkDir)
+    Write-Host '  content : docs/examples/tools/base map from the clean worktree (the released commit)'
+    $bundleSrc = $workPath
+
+    $guideNames = @(
+        'SDK-QUICKSTART.md', 'SDK-GUIDE.md', 'SDK-COOKBOOK.md',
+        'D3D-LUA-QUICKSTART.md', 'D3D-LUA-API.md', 'D3D-LUA-MIGRATION.md'
+    )
+    foreach ($name in $guideNames) {
+        Copy-FileTo -Source (Join-Path $bundleSrc ('docs\guide\' + $name)) -Destination (Join-Path $sdkDir ('docs\guide\' + $name)) -Label ('docs/guide/' + $name)
+    }
+    # DOCS the guides link to themselves (../STATUS.md, ../RELEASE.md, ../planning/...), so the
+    # bundle docs are not full of dead links. Everything else under docs\ stays in the repo.
+    $extraDocs = @(
+        'docs/STATUS.md',
+        'docs/RELEASE.md',
+        'docs/planning/JASS-NATIVE-DECLARATIONS.md',
+        'docs/planning/D3D-LUA-SDK-DESIGN.md',
+        'CHANGELOG.md'
+    )
+    foreach ($relative in $extraDocs) {
+        Copy-FileTo -Source (Join-Path $bundleSrc $relative) -Destination (Join-Path $sdkDir $relative) -Label $relative
+    }
+    Write-Host ('  docs    : ' + ($guideNames.Count + $extraDocs.Count) + ' markdown files (6 guides + STATUS + RELEASE + 2 planning docs + CHANGELOG)')
+
+    Copy-DirTo -Source (Join-Path $bundleSrc 'examples') -Destination (Join-Path $sdkDir 'examples') -Label 'examples'
+    $exampleDirs = @(Get-ChildItem -LiteralPath (Join-Path $sdkDir 'examples') -Directory -Force | Where-Object { $_.Name -match '^[0-9][0-9]-' })
+    foreach ($dir in $exampleDirs) {
+        if (-not (Test-Path -LiteralPath (Join-Path $dir.FullName 'war3map.lua'))) {
+            throw ('sdk bundle: example without war3map.lua: ' + $dir.FullName)
+        }
+    }
+    if ($exampleDirs.Count -ne 10) {
+        throw ('sdk bundle: expected 10 examples, found ' + $exampleDirs.Count)
+    }
+    Write-Host ('  examples: ' + $exampleDirs.Count + ' directories + manifest.json + README.md')
+
+    Copy-DirTo -Source (Join-Path $bundleSrc 'reference\empty-map') -Destination (Join-Path $sdkDir 'reference\empty-map') -Label 'reference/empty-map'
+    $baseMapFiles = @(Get-ChildItem -LiteralPath (Join-Path $sdkDir 'reference\empty-map') -Recurse -File -Force).Count
+    if ($baseMapFiles -lt 10) {
+        throw ('sdk bundle: reference/empty-map looks incomplete (' + $baseMapFiles + ' files)')
+    }
+    Write-Host ('  base map: reference\empty-map  ' + $baseMapFiles + ' files (unpacked directory, the default -BaseMap)')
+
+    $bundleBin = Join-Path $sdkDir 'src\build\bin\Release'
+    foreach ($name in $ExpectedArtifacts) {
+        Copy-FileTo -Source (Join-Path $OutDir $name) -Destination (Join-Path $bundleBin $name) -Label ('artifact ' + $name)
+    }
+    Write-Host '  binaries: src\build\bin\Release\  (the default -DllPath / -D3DProxyPath of pack.ps1 and deploy.ps1)'
+
+    # pack.ps1 -WithJassWrappers (and therefore example 09) runs tools\gen-jass-wrappers.ps1,
+    # which regex-scans three registry sources under src\. They are read as data - no
+    # compiler is involved - so shipping just these three keeps src\src\ out of the bundle
+    # without breaking the wrapper path.
+    $registryFiles = @(
+        'src\src\extensions\ex_natives\Initialize.cpp',
+        'src\src\lua_engine\lua_engine\libs_message.cpp',
+        'src\src\d3d9\handler_manifest.json'
+    )
+    foreach ($relative in $registryFiles) {
+        Copy-FileTo -Source (Join-Path $bundleSrc $relative) -Destination (Join-Path $sdkDir $relative) -Label $relative
+    }
+    Write-Host ('  registry: ' + $registryFiles.Count + ' registry sources for gen-jass-wrappers.ps1 (pack.ps1 -WithJassWrappers, example 09)')
+
+    $toolNames = @(
+        'new-project.ps1', 'pack.ps1', 'deploy.ps1', 'verify-examples.ps1',
+        'build-luac.ps1', 'd3d-proxy.ps1', 'drive-interactive-d3d.ps1',
+        'gen-jass-wrappers.ps1', 'config.example.ps1', 'pjass.exe', 'callback'
+    )
+    foreach ($name in $toolNames) {
+        Copy-FileTo -Source (Join-Path $bundleSrc ('tools\' + $name)) -Destination (Join-Path $sdkDir ('tools\' + $name)) -Label ('tools/' + $name)
+    }
+    Write-Host ('  tools   : ' + $toolNames.Count + ' files (release-sdk.ps1, tools\debugger and tools\core stay in the repo)')
+
+    $vendor = [ordered]@{ included = $false; files = [int64]0; bytes = [int64]0; overlaid_files = [int64]0; source = ''; note = '' }
+    if ($NoVendor) {
+        Write-Host '  -NoVendor: tools\w3x2lni left out; the bundle cannot pack maps until one is supplied.' -ForegroundColor Yellow
+        $vendor['source'] = 'omitted (-NoVendor)'
+        $vendor['note'] = 'pack.ps1 needs the w3x2lni runtime; pass -W3x2Lni <dir> and it works'
+    } else {
+        $vendorSource = Join-Path $bundleSrc 'tools\w3x2lni'
+        $vendorTarget = Join-Path $sdkDir 'tools\w3x2lni'
+        Copy-DirTo -Source $vendorSource -Destination $vendorTarget -Label 'tools/w3x2lni'
+        # The repository .gitignore excludes "*.dll", so the clean worktree has the
+        # w3x2lni launcher but not its 19 runtime DLLs. Overlay whatever is missing
+        # from this checkout; they are hashed like every other bundle file.
+        $overlaid = [int64]0
+        $localVendor = Join-Path $Root 'tools\w3x2lni'
+        if (Test-Path -LiteralPath $localVendor -PathType Container) {
+            foreach ($file in @(Get-ChildItem -LiteralPath $localVendor -Recurse -File -Force)) {
+                $relative = $file.FullName.Substring($localVendor.Length + 1)
+                if ($relative -like 'log\*') { continue }
+                $destination = Join-Path $vendorTarget $relative
+                if (-not (Test-Path -LiteralPath $destination)) {
+                    Copy-FileTo -Source $file.FullName -Destination $destination -Label ('vendor overlay ' + $relative)
+                    $overlaid++
+                }
+            }
+        }
+        $vendorStats = Get-TreeStats $vendorTarget
+        $vendor['included'] = $true
+        $vendor['files'] = $vendorStats.Files
+        $vendor['bytes'] = $vendorStats.Bytes
+        $vendor['overlaid_files'] = $overlaid
+        $vendor['source'] = 'clean worktree at the released commit, + ' + $overlaid + ' gitignored files from ' + $localVendor
+        $vendor['note'] = 'tools/w3x2lni/bin/*.dll is excluded by the repository .gitignore (*.dll): a clean worktree cannot supply the runtime, so those files come from the local checkout and are hashed with the rest of the bundle'
+        Write-Host ('  vendor  : tools\w3x2lni  ' + $vendorStats.Files + ' files / ' + (Format-MB $vendorStats.Bytes) + ' MB  (' + $overlaid + ' gitignored DLLs overlaid from the local checkout)')
+        $launcher = Join-Path $vendorTarget 'bin\w3x2lni-lua.exe'
+        if (-not (Test-Path -LiteralPath $launcher)) {
+            throw ('sdk bundle: vendor launcher missing: ' + $launcher + ' (the bundle would not be able to pack maps)')
+        }
+    }
+
+    # sdk\README.md - the entry point of the package. The template lives next to this
+    # script (generator asset), the content it describes comes from the released commit.
+    $templatePath = Join-Path $Root 'tools\sdk-bundle\README.template.md'
+    if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) {
+        throw ('sdk bundle: README template missing: ' + $templatePath)
+    }
+    $template = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
+    if (-not $template.Contains('@@VERSION@@')) {
+        throw ('sdk bundle: README template does not look like a template: ' + $templatePath)
+    }
+
+    if ($NoVendor) {
+        $vendorStatus = ('**未包含**（出包时用了 ' + $bt + '-NoVendor' + $bt + '）。' + $bt + 'pack.ps1' + $bt + ' 默认从这里找 ' + $bt + 'w3x2lni-lua.exe' + $bt + '，没有它就没法把 Lua 打成 MPQ；自备一份后传 ' + $bt + '-W3x2Lni <目录>' + $bt + ' 即可。')
+    } else {
+        $vendorStatus = ($bt + 'w3x2lni' + $bt + ' 运行时（vendor，' + $vendor['files'] + ' 个文件 / ' + (Format-MB ([int64]$vendor['bytes'])) + ' MB）：' + $bt + 'pack.ps1' + $bt + ' 靠它写 MPQ，删掉就没法打包。其中 ' + $vendor['overlaid_files'] + ' 个 ' + $bt + 'bin\*.dll' + $bt + ' 被仓库 ' + $bt + '.gitignore' + $bt + ' 的 ' + $bt + '*.dll' + $bt + ' 规则排除，来自出包机本地 checkout。')
+    }
+
+    if ($built) {
+        $buildKind = ('二进制由本脚本在干净 worktree（' + $bt + 'build\clean-' + $sha7 + $bt + '）上用 ' + $Generator + ' -A ' + $Arch + ' --config ' + $Config + ' 现场构建，与提交严格对应。')
+        $draftWarning = ''
+    } else {
+        $buildKind = '**二进制来自本地 -NoBuild 拷贝，不可复现**'
+        $draftWarning = ('> **本包不是可发布产物。** 二进制由 ' + $bt + '-NoBuild' + $bt + ' 从本地 checkout 拷贝，无法证明与提交 ' + $sha7 + ' 的源码对应。仅供内部验证，不要对外分发。')
+    }
+
+    $artifactRows = @()
+    foreach ($artifact in $artifacts) {
+        $artifactRows += ('| ' + $bt + $artifact['name'] + $bt + ' | ' + $artifact['bytes'] + ' | ' + $bt + $artifact['sha256'] + $bt + ' |')
+    }
+
+    $baseTokens = @{
+        '@@VERSION@@' = $Version
+        '@@COMMIT7@@' = $sha7
+        '@@COMMIT@@' = $commitSha
+        '@@COMMITDATE@@' = $commitDate
+        '@@BUILTAT@@' = $builtAtUtc
+        '@@BUILDKIND@@' = $buildKind
+        '@@DRAFTWARNING@@' = $draftWarning
+        '@@VENDORSTATUS@@' = $vendorStatus
+        '@@ARTIFACTROWS@@' = ($artifactRows -join [char]10)
+    }
+
+    # Two passes: the file/byte counts the README quotes have to include the README
+    # itself, so write it once, measure, then rewrite with the measured numbers.
+    $readmePath = Join-Path $sdkDir 'README.md'
+    $estimate = Get-TreeStats $sdkDir
+    Write-BundleReadme -Template $template -Target $readmePath -Tokens (New-BundleTokens -Base $baseTokens -Files ($estimate.Files + 1) -Megabytes (Format-MB ($estimate.Bytes + 10000)))
+    $sdkStats = Get-TreeStats $sdkDir
+    Write-BundleReadme -Template $template -Target $readmePath -Tokens (New-BundleTokens -Base $baseTokens -Files $sdkStats.Files -Megabytes (Format-MB $sdkStats.Bytes))
+    $sdkStats = Get-TreeStats $sdkDir
+    Write-Host ('  README  : ' + $readmePath + '  (template: tools\sdk-bundle\README.template.md)')
+
+    $sdkSums = Write-TreeChecksums -Dir $sdkDir -OutName 'SHA256SUMS.txt'
+    Write-Host ('  wrote   : ' + $sdkSums.Path + '  (' + $sdkSums.Count + ' files hashed)')
+
+    $bundleInfo = [ordered]@{
+        path = 'sdk'
+        files = $sdkStats.Files
+        bytes = $sdkStats.Bytes
+        hashed_files = $sdkSums.Count
+        readme = 'sdk/README.md'
+        readme_template = 'tools/sdk-bundle/README.template.md'
+        sha256sums = 'sdk/SHA256SUMS.txt'
+        docs = @($guideNames | ForEach-Object { 'docs/guide/' + $_ }) + @($extraDocs)
+        examples = @($exampleDirs | ForEach-Object { 'examples/' + $_.Name })
+        tools = @($toolNames | ForEach-Object { 'tools/' + $_ })
+        base_map = 'reference/empty-map (' + $baseMapFiles + ' files)'
+        binaries = @($ExpectedArtifacts | ForEach-Object { 'src/build/bin/Release/' + $_ })
+        registries = @($registryFiles | ForEach-Object { $_ -replace '\\', '/' })
+        vendor = $vendor
+        layout = 'repository subset: the author scripts resolve $Root = Split-Path -Parent $PSScriptRoot and use default paths, so sdk\ works as a stand-alone repository root'
+    }
+    Write-Host ('  bundle  : ' + $sdkStats.Files + ' files / ' + (Format-MB $sdkStats.Bytes) + ' MB')
+}
+
 $regressions = @(
     [ordered]@{ name = 'default'; expected = '122 passed, 0 failed, 122 total'; recorded_date = '2026-11-15'; command = '.\tools\deploy.ps1' },
     [ordered]@{ name = 'with-jass-wrappers'; expected = '125 passed, 0 failed, 125 total'; recorded_date = '2026-11-15'; command = '.\tools\deploy.ps1 -WithJassWrappers' },
@@ -312,7 +596,7 @@ $manifest = [ordered]@{
     built = $built
     artifact_source = $artifactSource
     local_worktree_dirty = $localDirty
-    built_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    built_at = $builtAtUtc
     build_command = $buildCommand
     artifacts = $artifacts
     regressions_source = 'docs/STATUS.md (header table, read 2026-11-16)'
@@ -335,12 +619,15 @@ $manifest = [ordered]@{
         host = [Environment]::MachineName
     }
 }
+if ($bundleInfo) { $manifest['sdk_bundle'] = $bundleInfo }
+
+Write-Step '6. Write manifest.json'
 $manifestPath = Join-Path $OutDir 'manifest.json'
 $json = ($manifest | ConvertTo-Json -Depth 8)
 [System.IO.File]::WriteAllText($manifestPath, ($json + [Environment]::NewLine), (New-Object System.Text.UTF8Encoding($false)))
 Write-Host ('  wrote   : ' + $manifestPath)
 
-Write-Step '5. Summary'
+Write-Step '7. Summary'
 Write-Host ('  version : ' + $Version)
 Write-Host ('  commit  : ' + $sha7 + '  (' + $commitDate + ')')
 Write-Host ('  built   : ' + $built + '  [' + $artifactSource + ']')
@@ -348,6 +635,14 @@ foreach ($artifact in $artifacts) {
     Write-Host ('  ' + $artifact['name'].PadRight(26) + $artifact['bytes'].ToString().PadLeft(8) + ' B  ' + $artifact['sha256'])
 }
 Write-Host ('  package : ' + $OutDir)
+if ($bundleInfo) {
+    Write-Host ('  bundle  : ' + (Join-Path $OutDir 'sdk') + '  (' + $bundleInfo['files'] + ' files / ' + (Format-MB ([int64]$bundleInfo['bytes'])) + ' MB, ' + $bundleInfo['hashed_files'] + ' hashed)')
+    if ($bundleInfo['vendor']['included']) {
+        Write-Host ('            tools\w3x2lni ' + $bundleInfo['vendor']['files'] + ' files / ' + (Format-MB ([int64]$bundleInfo['vendor']['bytes'])) + ' MB, ' + $bundleInfo['vendor']['overlaid_files'] + ' gitignored DLLs from the local checkout')
+    } else {
+        Write-Host '            tools\w3x2lni NOT bundled (-NoVendor): pack.ps1 needs -W3x2Lni' -ForegroundColor Yellow
+    }
+}
 Write-Host ''
 Write-Host 'Next steps (full procedure: docs\RELEASE.md):'
 Write-Host ('  1. re-read the checksums:  Get-FileHash "' + $OutDir + '\*.dll", "' + $OutDir + '\*.exe" -Algorithm SHA256')
@@ -359,6 +654,17 @@ Write-Host ('       .\tools\deploy.ps1 -InteractiveD3D   -DllPath "' + $OutDir +
 Write-Host ('       .\tools\deploy.ps1 -TestReboot       -DllPath "' + $OutDir + '\yd_japi.dll" -D3DProxyPath "' + $OutDir + '\newD3d9.dll"')
 Write-Host '  3. record the confirmed "Results:" lines plus this SHA-256 table in docs\STATUS.md, CHANGELOG.md'
 Write-Host '     and manifest.json (regressions_verified: true).'
+if ($bundleInfo) {
+    $tempDir = [System.IO.Path]::GetTempPath()
+    $scratch = Join-Path $tempDir ('sdk-standalone-' + $sha7)
+    $smokeProject = Join-Path $tempDir ('japi-smoke-' + $sha7)
+    Write-Host ''
+    Write-Host '  4. author SDK bundle: prove it is self-contained by using it outside this repository:'
+    Write-Host ('       Copy-Item "' + (Join-Path $OutDir 'sdk') + '" "' + $scratch + '" -Recurse -Force')
+    Write-Host ('       cd "' + $scratch + '"; .\tools\verify-examples.ps1            # static + pack, expect 10/10')
+    Write-Host ('       cd "' + $scratch + '"; .\tools\new-project.ps1 -Name Smoke -Path "' + $smokeProject + '" -Force')
+    Write-Host '     then pack/deploy the scaffolded project from the bundle (sdk\README.md section 3).'
+}
 
 if ($worktreeAdded) {
     if ($Keep) {

@@ -290,7 +290,7 @@ D3DX9_42.dll is required: <game dir>\D3DX9_42.dll
 
 ## 8. 步骤 6：打包发行包
 
-> **脚本化**：`tools/release-sdk.ps1`（PowerShell 5.1，纯 ASCII 文件）。
+> **脚本化**：`tools/release-sdk.ps1`（PowerShell 5.1）。文件存成 UTF-8 **带 BOM**：它内嵌中文文案，PS 5.1 读无 BOM 的 UTF-8 会按 ANSI 解码并解析失败（踩过）。改完文件顺手确认前 3 字节是 `EF BB BF`。
 
 ### 8.1 命令
 
@@ -303,6 +303,10 @@ D3DX9_42.dll is required: <game dir>\D3DX9_42.dll
 
 # 保留干净 worktree 现场（默认会删）
 .\tools\release-sdk.ps1 -Commit 498a308 -Keep
+
+# 额外组装地图作者包 sdk\（详见 8.5）
+.\tools\release-sdk.ps1 -SdkBundle
+.\tools\release-sdk.ps1 -SdkBundle -NoVendor      # 不带 tools\w3x2lni（小 88.7 MB，作者没法打包）
 ```
 
 | 参数 | 默认 | 说明 |
@@ -312,6 +316,8 @@ D3DX9_42.dll is required: <game dir>\D3DX9_42.dll
 | `-OutDir` | `<repo>\build\sdk\<version>-<sha7>` | 必须在 `<repo>\build` 之下，否则脚本拒绝执行 |
 | `-NoBuild` | 关 | 不构建，从 `src\build\bin\Release` 复制；manifest 标 `built=false` |
 | `-Keep` | 关 | 打包后保留 `build\clean-<sha7>` |
+| `-SdkBundle` | 关 | 额外组装地图作者包 `sdk\`（内容见 8.5），并在 manifest 里加 `sdk_bundle` 段 |
+| `-NoVendor` | 关 | 仅配合 `-SdkBundle`：跳过 `tools\w3x2lni` vendor（包从 90 MB 降到 ~1.5 MB，但作者无法 `pack`） |
 
 ### 8.2 输出结构
 
@@ -321,7 +327,18 @@ build\sdk\0.4.0-498a308\
 ├── newD3d9.dll
 ├── d3d_sdk_contract_test.exe
 ├── SHA256SUMS.txt          # <64 位大写 hash> + 两个空格 + 文件名，LF 换行
-└── manifest.json           # 版本/提交/工具链/产物 hash/回归基准/文档锚点
+├── manifest.json           # 版本/提交/工具链/产物 hash/回归基准/文档锚点
+└── sdk\                    # 只有 -SdkBundle 才有：地图作者包（整体拷走即自包含）
+    ├── README.md           # 由 tools\sdk-bundle\README.template.md 渲染
+    ├── SHA256SUMS.txt      # 包内全部文件（含 vendor）的 SHA-256
+    ├── CHANGELOG.md
+    ├── docs\               # guide 6 份 + STATUS/RELEASE + planning 2 份
+    ├── examples\           # 10 个示例 + manifest.json + README.md
+    ├── tools\              # 8 个脚本 + config.example.ps1 + pjass.exe + callback + w3x2lni\
+    ├── reference\empty-map\
+    └── src\
+        ├── build\bin\Release\   # 3 个二进制 = pack/deploy 的默认 -DllPath / -D3DProxyPath
+        └── src\                 # 仅 3 个注册表源，供 gen-jass-wrappers.ps1
 ```
 
 ### 8.3 `manifest.json` 字段
@@ -341,6 +358,7 @@ build\sdk\0.4.0-498a308\
 | `regressions_source` / `regressions_verified` / `regressions[]` | 回归基准来源（`docs/STATUS.md` 头部表）、是否本次实测、5 组 `{name, expected, recorded_date, command}` |
 | `docs[]` | 相关文档锚点 `{path, anchor}` |
 | `toolchain` | `{generator, arch, config, vcvars32, cmake, powershell, host}` |
+| `sdk_bundle` | 仅 `-SdkBundle`：`{path, files, bytes, hashed_files, readme, readme_template, sha256sums, docs[], examples[], tools[], base_map, binaries[], registries[], vendor{included, files, bytes, overlaid_files, source, note}, layout}` |
 
 ### 8.4 脚本的失败条件（fail loudly）
 
@@ -350,6 +368,32 @@ build\sdk\0.4.0-498a308\
 | 干净 worktree `HEAD` 不对，或 `git status --porcelain` 非空 | `throw`（源码不可溯源） |
 | `-OutDir` 不在 `<repo>\build` 之下 | `throw`（避免往仓库里写产物） |
 | `git worktree add` 失败（目录已存在/被占用） | 透传 `git` 的 stderr 并终止 |
+| `-SdkBundle`：文档/示例/基座/二进制/工具任一缺失 | `throw`（逐文件 `Copy-FileTo`，缺了就停） |
+| `-SdkBundle`：示例不是 10 个、某示例没有 `war3map.lua`、`reference\empty-map` 少于 10 个文件 | `throw` |
+| `-SdkBundle`：README 渲染后仍残留 `@@…@@` 占位符 | `throw`（说明模板与脚本的 token 表脱节） |
+| `-SdkBundle`（不加 `-NoVendor`）：`tools\w3x2lni\bin\w3x2lni-lua.exe` 不存在 | `throw`（没有运行时，作者打不了包） |
+
+### 8.5 地图作者包（`-SdkBundle`）
+
+给「只想写地图、不碰 C++」的作者用：把文档、示例、脚手架与打包脚本、空白基座、`w3x2lni` vendor、3 个二进制按**仓库子集布局**放进 `sdk\`。作者脚本一律靠 `$Root = Split-Path -Parent $PSScriptRoot` 推仓库根，所以把 `sdk\` 当根用、**脚本一行不改**就能 `new-project` → `pack` → `deploy`。
+
+- **内容来源**：默认全部取自干净 worktree（发布提交）。两个例外：`tools\sdk-bundle\README.template.md`（模板本身，属生成器资产）和 `tools\w3x2lni\bin\*.dll`（19 个，被仓库 `.gitignore` 的 `*.dll` 排除，干净 worktree 拿不到；没有它们作者打不了包）。覆盖数量记在 manifest 的 `sdk_bundle.vendor.overlaid_files`。
+- **`sdk\src\src\` 只放 3 个注册表源**：`extensions\ex_natives\Initialize.cpp`、`lua_engine\lua_engine\libs_message.cpp`、`d3d9\handler_manifest.json`。`pack.ps1 -WithJassWrappers`（示例 09 用它）要 regex 扫这三份文本生成 JASS wrapper；只当数据读，不参与编译 —— 漏掉它们时示例 09 的 `[pack]` 会以 `handler registry not found` 失败（实测踩过）。
+- **入口是 `sdk\README.md`**：包里有什么 / 三分钟上手 / 怎么验证包（含 `SHA256SUMS.txt` 校验片段）/ 脚本清单 / 7 条必读坑 / 版本与来源。模板在 `tools\sdk-bundle\README.template.md`，占位符 `@@VERSION@@`、`@@ARTIFACTROWS@@`、`@@TREEFILES@@` 等由脚本填充，残留未替换的占位符会 `throw`。
+- **不放进包**：`src/src/` 其余源码、`map/`、`docs/architecture|analysis/`、`tools\debugger\`、`tools\release-sdk.ps1` 自身（需要现场编译）。README 里明说这些链接打不开属预期。
+- **自包含门槛（必须做，否则不许发）**：把 `sdk\` 整个拷到仓库外，①`tools\verify-examples.ps1` 静态+打包 **10/10**；②`tools\new-project.ps1` 生成空工程后 `tools\pack.ps1` 必须出图；③能抢到 War3 就再 `tools\deploy.ps1` 实机一次。
+
+2026-11-16 实测（`build\sdk\0.4.0-1da154c\sdk\` 拷到 `%TEMP%\sdk-standalone-1da154c`）：
+
+| 项 | 结果 |
+|---|---|
+| 包体积 | 683 文件 / 90.2 MB（vendor 615 文件 / 88.7 MB），`sdk\SHA256SUMS.txt` 683 行 |
+| `tools\verify-examples.ps1`（静态+打包） | `Examples: 10 passed, 0 failed, 10 total`；`[skip] luac not found` 属预期（包内没有 Lua 源码与 gcc） |
+| `tools\new-project.ps1 -Name Smoke -Path …` | 25 个文件（17 基座 + 8 脚手架） |
+| `tools\pack.ps1 … -OutFile build\Smoke.w3x` | `Done -> build\Smoke.w3x`，275638 B，`JASS syntax check OK` |
+| 实机 `deploy` | **未跑**：出包机被另一个会话的 `deploy.ps1 -Demo -Hold` 占着（单实例锁 + 共享日志）；包内二进制 hash 与本轮实机验证过的 `87C83BA1…` 相同，但不算跑过 |
+
+> `-SdkBundle -NoBuild` 产出的 `sdk\` 同样**不可发布**：二进制来自本地 checkout。且 vendor 里的 19 个 DLL 只能来自出包机，换台机器出包必须先补 `tools\w3x2lni\bin\*.dll`。
 
 ---
 
@@ -378,6 +422,10 @@ build\sdk\0.4.0-498a308\
 | `tools/release-sdk.ps1 -NoBuild` 端到端 | **已验证** | exit 0；产出 3 产物 + `SHA256SUMS.txt` + `manifest.json`；包内 hash 与 `src\build\bin\Release` 源文件逐一对齐；清单可被 `ConvertFrom-Json` 解析；干净 worktree 已自动删除 |
 | 同上，在全部工具链/示例/文档提交之后复跑（`9347b12`，以及最后一次改动 `tools\`/`examples\` 的 `b2e11ab`） | **已验证**（lead 复跑两次） | 两次都 exit 0；干净 worktree 自动创建并删除；产出 `build\sdk\0.4.0-b2e11ab\`（另有 `0.4.0-9347b12\`）`{SHA256SUMS.txt, manifest.json}`；`yd_japi.dll` `87C83BA1CE0E6E413CEA7B9D6018E9A289259EC9C2F01EE02E7827DAF6661908`（547328 B）、`newD3d9.dll` `7D3063B6A3C52DC91A084F9002A4AB0678AE2E0D6CBFE2B4ABF63567876986D5`（90112 B）、`d3d_sdk_contract_test.exe` `8E0A3E5D341B9FCD97FCBF612E0060FFDFAA4350E14C8E88186D9A028987B458`（23040 B），三者与独立 `Get-FileHash` 一致 |
 | `-NoBuild` 产物 hash 不等于 0.4.0 干净 hash | **已验证**（预期差异） | 本机 `87C83BA1…`/`7D3063B6…`/`8E0A3E5D…` vs 干净 `3A4C8CD1…`/`0564A518…`/`87EBB317…` |
+| `tools/release-sdk.ps1 -NoBuild -SdkBundle` 组装 `sdk\` | **已验证** | `build\sdk\0.4.0-1da154c\sdk\` 683 文件 / 90.2 MB；`sdk\SHA256SUMS.txt` 683 行；manifest `sdk_bundle` 段含 `files/hashed_files/vendor.overlaid_files=19`；`sdk\README.md` 无残留 `@@…@@` |
+| `sdk\` 自包含·静态+打包（仓库外） | **已验证** | 拷到 `%TEMP%\sdk-standalone-1da154c` 后 `tools\verify-examples.ps1` → `Examples: 10 passed, 0 failed, 10 total`（首轮曾因缺 3 个注册表源让示例 09 `fail`，补齐后 10/10） |
+| `sdk\` 自包含·脚手架+打包 | **已验证** | `tools\new-project.ps1` → 25 文件；`tools\pack.ps1` → `build\Smoke.w3x` 275638 B |
+| `sdk\` 自包含·实机 deploy | **未验证** | 出包机当时被另一个会话的 `deploy.ps1 -Demo -Hold` 占用（单实例锁 + 共享日志） |
 | 脚本的 **完整构建分支**（`vcvars32` + `cmake`） | **未验证** | 本轮未跑完整构建（约 10 分钟，复用 lead 预构建产物）；命令串已逐字对照 `src/build.bat` / `CMakeLists.txt` / §14.4 |
 | 0.4.0 干净 hash 复现 | **未验证**（本轮未重建 `d151fd7`） | 数值引自 `docs/STATUS.md` §4 与 `docs/planning/D3D-LUA-SDK-DESIGN.md` §14.4 |
 | 五组回归数字（122 / 125 / 126 / 9 / 170） | **已验证**（由 lead 在 2026-11-15/16 实机复跑，本文档作者未跑） | `docs/STATUS.md` 头部表；交互 D3D 2026-11-16 为 170（= 122 + 48） |
@@ -394,6 +442,9 @@ git status --porcelain; git rev-parse --short HEAD
 
 # 1. 打包（完整构建 + 3 产物 + SHA256SUMS + manifest）
 .\tools\release-sdk.ps1 -Commit <sha>
+
+# 1b. 顺手出地图作者包 sdk\（可选，见 8.5）
+.\tools\release-sdk.ps1 -Commit <sha> -SdkBundle
 
 # 2. 回读核对 hash
 Get-Content build\sdk\<version>-<sha7>\SHA256SUMS.txt

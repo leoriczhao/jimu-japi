@@ -3,6 +3,7 @@
 > **给谁看**：会写一点 Lua、想在自己的 WAR3 1.27a 地图里跑脚本的地图作者。不需要 C++，不需要改 DLL。
 > **读完你会得到**：一个自己的工程目录、一条可复现的打包命令、一条可复现的部署命令，游戏里出现一片 `[PASS]` 和一行 `Results: 3 passed, 0 failed, 3 total`。
 > **前提**：Windows；Warcraft III 1.27a 已安装；本仓库已 clone 且能 `src\build.bat` 编译出 `src\build\bin\Release\yd_japi.dll`；没有别的 war3.exe 在跑。
+> **如果你拿到的是 `sdk\` 分发包**：不用 clone 仓库、不用编译 DLL。解压后先读包根目录的 `README.md`（三分钟上手），再 `cd` 到包根执行下面同样的命令——包内 `tools\`、`reference\empty-map`、`src\build\bin\Release` 都已就位。
 
 | 项目 | 值 |
 |---|---|
