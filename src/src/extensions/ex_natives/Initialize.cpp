@@ -32,6 +32,8 @@ namespace warcraft3::japi {
 	uint32_t EXSetUnitCollisionType_handler(const uint32_t* args, size_t nargs);
 	uint32_t EXSetUnitMoveType_handler(const uint32_t* args, size_t nargs);
 	uint32_t EXSetUnitFacing_handler(const uint32_t* args, size_t nargs);
+	uint32_t EXGetUnitState_handler(const uint32_t* args, size_t nargs);
+	uint32_t EXSetUnitState_handler(const uint32_t* args, size_t nargs);
 
 	uint32_t EXGetUnitAbility_handler(const uint32_t* args, size_t nargs);
 	uint32_t EXGetUnitAbilityByIndex_handler(const uint32_t* args, size_t nargs);
@@ -109,6 +111,10 @@ namespace warcraft3::japi {
 		register_cpp_handler("EXSetUnitCollisionType", "(BII)V", EXSetUnitCollisionType_handler);
 		register_cpp_handler("EXSetUnitMoveType",      "(II)V",  EXSetUnitMoveType_handler);
 		register_cpp_handler("EXSetUnitFacing",        "(IR)V",  EXSetUnitFacing_handler);
+		// Extended GetUnitState/SetUnitState (YDWE enum: armor, attack damage,
+		// attack interval, rate of fire, ...). Standard states fall through.
+		register_cpp_handler("EXGetUnitState",         "(II)R",  EXGetUnitState_handler);
+		register_cpp_handler("EXSetUnitState",         "(IIR)V", EXSetUnitState_handler);
 
 		// Ability state
 		register_cpp_handler("EXGetUnitAbility",       "(II)I",  EXGetUnitAbility_handler);

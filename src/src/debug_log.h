@@ -42,6 +42,44 @@ inline void sync_write(const char* msg) {
 }
 }
 
+namespace japi_log {
+// ── Black-box recorder ──────────────────────────────────────────────
+// The last few JASS natives dispatched from Lua. A crash caused by a bad
+// argument leaves no trace in the log (the call never returns), so the crash
+// handler dumps this ring instead. Kept dependency-free on purpose: it is
+// compiled in both debug and release, and only ever touched on the game thread.
+struct RecEntry {
+    uintptr_t address;
+    uint32_t  args[4];
+    uint32_t  nargs;
+};
+static const int REC_RING = 48;
+
+inline RecEntry* rec_ring()
+{
+    static RecEntry ring[REC_RING];
+    return ring;
+}
+
+inline LONG* rec_pos()
+{
+    static LONG pos = 0;
+    return &pos;
+}
+
+inline void record_native_call(uintptr_t address, const uintptr_t* args, size_t nargs)
+{
+    LONG i = (*rec_pos() + 1) % REC_RING;
+    *rec_pos() = i;
+    RecEntry& e = rec_ring()[i];
+    e.address = address;
+    e.nargs = (uint32_t)nargs;
+    for (int k = 0; k < 4; ++k) {
+        e.args[k] = (args && (size_t)k < nargs) ? (uint32_t)args[k] : 0u;
+    }
+}
+}
+
 #ifdef JAPI_DEBUG
 
 #include <windows.h>

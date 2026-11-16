@@ -53,6 +53,13 @@ namespace warcraft3::lua_engine::japi {
 			lua_pushcclosure(L, jass_call_closure, 1);
 			return 1;
 		}
+		// Fall back to the bridge handler table: EX*/message/D3D entry points are
+		// registered as UnitId RPC handlers, never as natives, so japi_func()
+		// cannot see them. Maps written for YDWE call them as
+		// `jass.japi.EXSetAbilityDataReal(...)`, which has to work here too.
+		if (bridge::push_cpp_handler(L, name)) {
+			return 1;
+		}
 		lua_pushnil(L);
 		return 1;
 	}

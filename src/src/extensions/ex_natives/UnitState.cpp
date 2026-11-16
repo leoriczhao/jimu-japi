@@ -11,6 +11,7 @@
 #include <warcraft3/war3_searcher.h>
 #include <warcraft3/version.h>
 #include <warcraft3/jass.h>
+#include <warcraft3/jass/func_value.h>
 #include <cassert>
 #include <warcraft3/hashtable.h>
 #include "StringPool.h"
@@ -874,23 +875,38 @@ namespace warcraft3::japi {
 		}
 	}
 
+	// The fake implementations forward every state they do not extend to the
+	// game's own GetUnitState/SetUnitState, so those addresses have to be known
+	// before the first call (RealGetUnitState/RealSetUnitState start out null).
+	void resolve_real_unit_state()
+	{
+		if (!RealGetUnitState) {
+			jass::func_value const* nf = jass::jass_func("GetUnitState");
+			if (nf && nf->is_valid()) {
+				RealGetUnitState = nf->get_address();
+			}
+		}
+		if (!RealSetUnitState) {
+			jass::func_value const* nf = jass::jass_func("SetUnitState");
+			if (nf && nf->is_valid()) {
+				RealSetUnitState = nf->get_address();
+			}
+		}
+	}
+
 	void InitializeUnitState()
 	{
-		// NOTE: GetUnitState/SetUnitState hooks disabled — japi_hook modifies
-		// existing JASS natives which conflicts with callback exploit hooks.
-		// Use EXGetUnit* functions instead.
-		jass::japi_add((uintptr_t)EXGetUnitString,        "EXGetUnitString",        "(II)S");
-		jass::japi_add((uintptr_t)EXSetUnitString,        "EXSetUnitString",        "(IIS)B");
-		jass::japi_add((uintptr_t)EXGetUnitReal,          "EXGetUnitReal",          "(II)R");
-		jass::japi_add((uintptr_t)EXSetUnitReal,          "EXSetUnitReal",          "(IIR)B");
-		jass::japi_add((uintptr_t)EXGetUnitInteger,       "EXGetUnitInteger",       "(II)I");
-		jass::japi_add((uintptr_t)EXSetUnitInteger,       "EXSetUnitInteger",       "(III)B");
-		jass::japi_add((uintptr_t)EXGetUnitArrayString,   "EXGetUnitArrayString",   "(III)S");
-		jass::japi_add((uintptr_t)EXSetUnitArrayString,   "EXSetUnitArrayString",   "(IIIS)B");
-		jass::japi_add((uintptr_t)EXPauseUnit,            "EXPauseUnit",            "(Hunit;B)V");
-		jass::japi_add((uintptr_t)EXSetUnitCollisionType, "EXSetUnitCollisionType", "(BHunit;I)V");
-		jass::japi_add((uintptr_t)EXSetUnitMoveType,      "EXSetUnitMoveType",      "(Hunit;I)V");
-		jass::japi_add((uintptr_t)EXSetUnitFacing,        "EXSetUnitFacing",        "(Hunit;R)V");
+		// NOTE: the GetUnitState/SetUnitState *hooks* stay disabled — japi_hook
+		// rewrites existing JASS natives, which conflicts with the callback
+		// exploit's own hooks.
+		//
+		// The fake implementations are exposed as the EXGetUnitState /
+		// EXSetUnitState bridge handlers instead (handler section at the bottom
+		// of this file + initialize_ex_natives()). They are deliberately *not*
+		// added with jass::japi_add: a JASS native carrying an EX* name would
+		// collide with the war3map.j wrappers that tools/gen-jass-wrappers.ps1
+		// derives from the very same handler registry.
+		resolve_real_unit_state();
 	}
 
 	// Bridge dispatch handlers
@@ -933,5 +949,18 @@ namespace warcraft3::japi {
 	}
 	uint32_t EXSetUnitFacing_handler(const uint32_t* a, size_t) {
 		EXSetUnitFacing(a[0], (jass::jreal_t*)&a[1]); return 0;
+	}
+
+	// GetUnitState/SetUnitState with the extended state enum (YDWE semantics:
+	// 0x10..0x12 attack damage, 0x20 armor, 0x25 attack interval, 0x51 rate of
+	// fire, ...). Standard states fall through to the real natives.
+	uint32_t EXGetUnitState_handler(const uint32_t* a, size_t) {
+		resolve_real_unit_state();
+		return FakeGetUnitState(a[0], a[1]);
+	}
+	uint32_t EXSetUnitState_handler(const uint32_t* a, size_t) {
+		resolve_real_unit_state();
+		FakeSetUnitState(a[0], a[1], (uint32_t*)&a[2]);
+		return 0;
 	}
 }

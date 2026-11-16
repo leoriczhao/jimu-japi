@@ -18,6 +18,7 @@
 #include <lua.hpp>
 #include <map>
 #include <string>
+#include <vector>
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -523,6 +524,109 @@ namespace warcraft3::lua_engine::bridge {
 
         return invoke_cpp_handler_safely(
             it->second.cpp_fn, args, nargs, result);
+    }
+
+    // ── Lua → C++ handler dispatch (jass.japi fallback) ────────────
+    //
+    // Every EX*/message/D3D entry point is registered here as a bridge handler,
+    // not as a JASS native, so the native name table has no such symbol: without
+    // this path `jass.japi.EXSetAbilityDataReal` is simply nil. The closure
+    // marshals Lua arguments into the handler ABI (uint32 slots, reals kept as
+    // float bits, strings as jstring_t) and converts the result back.
+
+    static void push_handler_result(lua_State* L, char ret, uint32_t result) {
+        switch (ret) {
+            case 'I':
+                lua_pushinteger(L, (lua_Integer)(int32_t)result);
+                break;
+            case 'B':
+                lua_pushboolean(L, result != 0);
+                break;
+            case 'R':
+                jassbind::push_real(L, result);
+                break;
+            case 'S': {
+                // Handlers disagree on the string ABI: natives return a string
+                // *id* (small int, resolved through the string table) while the
+                // EX* helpers hand back a fresh jstring_t *handle* (heap
+                // pointer). Pick by magnitude; both live in low memory on 32-bit.
+                const char* s = nullptr;
+                if (result >= 0x10000u) {
+                    s = jass::from_string((jass::jstring_t)result);
+                }
+                else if (result) {
+                    s = jass::from_stringid(result);
+                }
+                lua_pushstring(L, s ? s : "");
+                break;
+            }
+            case 'H':
+                jassbind::push_handle(L, (jass::jhandle_t)result);
+                break;
+            default:
+                break;
+        }
+    }
+
+    static int cpp_handler_call(lua_State* L) {
+        const char* name = lua_tostring(L, lua_upvalueindex(1));
+        if (!name) return 0;
+
+        auto it = g_handlers.find(name);
+        if (it == g_handlers.end() || !it->second.cpp_fn) {
+            return luaL_error(L, "jass.japi: handler '%s' is no longer registered", name);
+        }
+
+        parsed_spec spec = parse_spec(it->second.spec.c_str());
+        uint32_t args[16] = {0};
+        jass::string_fake string_args[16];   // S params: keep the fake jstring alive
+        size_t nargs = spec.params.size();
+        if (nargs > 16) nargs = 16;
+
+        for (size_t i = 0; i < nargs; ++i) {
+            int index = (int)i + 1;
+            switch (spec.params[i].type) {
+                case 'I':
+                    args[i] = (uint32_t)lua_tointeger(L, index);
+                    break;
+                case 'B':
+                    args[i] = lua_toboolean(L, index) ? 1u : 0u;
+                    break;
+                case 'R':
+                    args[i] = (uint32_t)jassbind::read_real(L, index);
+                    break;
+                case 'S': {
+                    const char* s = lua_tostring(L, index);
+                    string_args[i] = jass::to_string(s ? s : "");
+                    args[i] = (uint32_t)(jass::jstring_t)string_args[i];
+                    break;
+                }
+                case 'H':
+                    args[i] = read_lua_handle(L, index);
+                    break;
+                default:
+                    args[i] = (uint32_t)lua_tointeger(L, index);
+                    break;
+            }
+        }
+
+        uint32_t result = 0;
+        if (!invoke_cpp_handler_safely(it->second.cpp_fn, args, nargs, &result)) {
+            return luaL_error(L, "jass.japi: handler '%s' raised a native exception", name);
+        }
+
+        if (spec.ret == 'V' || spec.ret == 0) return 0;
+        push_handler_result(L, spec.ret, result);
+        return 1;
+    }
+
+    bool push_cpp_handler(lua_State* L, const char* name) {
+        if (!name) return false;
+        auto it = g_handlers.find(name);
+        if (it == g_handlers.end() || !it->second.cpp_fn) return false;
+        lua_pushstring(L, name);
+        lua_pushcclosure(L, cpp_handler_call, 1);
+        return true;
     }
 
     void initialize() {
