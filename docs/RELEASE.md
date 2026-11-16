@@ -381,17 +381,20 @@ build\sdk\0.4.0-498a308\
 - **`sdk\src\src\` 只放 3 个注册表源**：`extensions\ex_natives\Initialize.cpp`、`lua_engine\lua_engine\libs_message.cpp`、`d3d9\handler_manifest.json`。`pack.ps1 -WithJassWrappers`（示例 09 用它）要 regex 扫这三份文本生成 JASS wrapper；只当数据读，不参与编译 —— 漏掉它们时示例 09 的 `[pack]` 会以 `handler registry not found` 失败（实测踩过）。
 - **入口是 `sdk\README.md`**：包里有什么 / 三分钟上手 / 怎么验证包（含 `SHA256SUMS.txt` 校验片段）/ 脚本清单 / 7 条必读坑 / 版本与来源。模板在 `tools\sdk-bundle\README.template.md`，占位符 `@@VERSION@@`、`@@ARTIFACTROWS@@`、`@@TREEFILES@@` 等由脚本填充，残留未替换的占位符会 `throw`。
 - **不放进包**：`src/src/` 其余源码、`map/`、`docs/architecture|analysis/`、`tools\debugger\`、`tools\release-sdk.ps1` 自身（需要现场编译）。README 里明说这些链接打不开属预期。
-- **自包含门槛（必须做，否则不许发）**：把 `sdk\` 整个拷到仓库外，①`tools\verify-examples.ps1` 静态+打包 **10/10**；②`tools\new-project.ps1` 生成空工程后 `tools\pack.ps1` 必须出图；③能抢到 War3 就再 `tools\deploy.ps1` 实机一次。
+- **自包含门槛（必须做，否则不许发）**：把 `sdk\` 整个拷到仓库外，①`tools\verify-examples.ps1` 静态+打包 **10/10**；②`tools\new-project.ps1` 生成空工程后 `tools\pack.ps1` 必须出图；③`tools\deploy.ps1` 实机一次（2026-11-16 已做到：`Results: 9 passed, 0 failed, 9 total (0 skipped)`）。
 
-2026-11-16 实测（`build\sdk\0.4.0-1da154c\sdk\` 拷到 `%TEMP%\sdk-standalone-1da154c`）：
+2026-11-16 实测（`build\sdk\0.4.0-c14b043\sdk\` 整个拷到 `%TEMP%\sdk-standalone-c14b043`，全程在仓库外执行）：
 
 | 项 | 结果 |
 |---|---|
-| 包体积 | 683 文件 / 90.2 MB（vendor 615 文件 / 88.7 MB），`sdk\SHA256SUMS.txt` 683 行 |
+| 包体积 | 683 文件 / 90.3 MB（94637720 B；vendor 615 文件 / 88.7 MB），`sdk\SHA256SUMS.txt` 683 行 |
+| 校验和回读 | `SHA256SUMS.txt` 683 条逐条 `Get-FileHash` → **683/683 一致**，无缺失 |
 | `tools\verify-examples.ps1`（静态+打包） | `Examples: 10 passed, 0 failed, 10 total`；`[skip] luac not found` 属预期（包内没有 Lua 源码与 gcc） |
 | `tools\new-project.ps1 -Name Smoke -Path …` | 25 个文件（17 基座 + 8 脚手架） |
-| `tools\pack.ps1 … -OutFile build\Smoke.w3x` | `Done -> build\Smoke.w3x`，275638 B，`JASS syntax check OK` |
-| 实机 `deploy` | **未跑**：出包机被另一个会话的 `deploy.ps1 -Demo -Hold` 占着（单实例锁 + 共享日志）；包内二进制 hash 与本轮实机验证过的 `87C83BA1…` 相同，但不算跑过 |
+| `tools\pack.ps1 … -OutFile build\Smoke.w3x` | `Done -> build\Smoke.w3x`，275636 B，`JASS syntax check OK` |
+| 实机 `deploy` | 包内 `tools\deploy.ps1 -MapDir … -BaseMap … -MapName Smoke.w3x` → 日志 `Results: 9 passed, 0 failed, 9 total (0 skipped)` + `ALL CHECKS PASSED (9/9)`，exit 0 |
+| `tools\verify-examples.ps1 -Live`（实机 10 例） | 一轮跑完：`01 5/5`、`02 8/8`、`03 6/6`、`04 5/5`、`05 6/6`、`06 5/5`、`07 5/5`、`08 7/7`、`09 6/6`、`10 6/6`，末行 `Examples: 10 passed, 0 failed, 10 total`（仓库内那次被别的会话挤成两批，这是首次一次跑完） |
+| manifest 交叉核对 | `sdk_bundle.{files,hashed_files,bytes}` = `683/683/94637720`；`vendor.overlaid_files=19`；`docs=11 examples=10 tools=11 registries=3 binaries=3` |
 
 > `-SdkBundle -NoBuild` 产出的 `sdk\` 同样**不可发布**：二进制来自本地 checkout。且 vendor 里的 19 个 DLL 只能来自出包机，换台机器出包必须先补 `tools\w3x2lni\bin\*.dll`。
 
@@ -422,10 +425,12 @@ build\sdk\0.4.0-498a308\
 | `tools/release-sdk.ps1 -NoBuild` 端到端 | **已验证** | exit 0；产出 3 产物 + `SHA256SUMS.txt` + `manifest.json`；包内 hash 与 `src\build\bin\Release` 源文件逐一对齐；清单可被 `ConvertFrom-Json` 解析；干净 worktree 已自动删除 |
 | 同上，在全部工具链/示例/文档提交之后复跑（`9347b12`，以及最后一次改动 `tools\`/`examples\` 的 `b2e11ab`） | **已验证**（lead 复跑两次） | 两次都 exit 0；干净 worktree 自动创建并删除；产出 `build\sdk\0.4.0-b2e11ab\`（另有 `0.4.0-9347b12\`）`{SHA256SUMS.txt, manifest.json}`；`yd_japi.dll` `87C83BA1CE0E6E413CEA7B9D6018E9A289259EC9C2F01EE02E7827DAF6661908`（547328 B）、`newD3d9.dll` `7D3063B6A3C52DC91A084F9002A4AB0678AE2E0D6CBFE2B4ABF63567876986D5`（90112 B）、`d3d_sdk_contract_test.exe` `8E0A3E5D341B9FCD97FCBF612E0060FFDFAA4350E14C8E88186D9A028987B458`（23040 B），三者与独立 `Get-FileHash` 一致 |
 | `-NoBuild` 产物 hash 不等于 0.4.0 干净 hash | **已验证**（预期差异） | 本机 `87C83BA1…`/`7D3063B6…`/`8E0A3E5D…` vs 干净 `3A4C8CD1…`/`0564A518…`/`87EBB317…` |
-| `tools/release-sdk.ps1 -NoBuild -SdkBundle` 组装 `sdk\` | **已验证** | `build\sdk\0.4.0-1da154c\sdk\` 683 文件 / 90.2 MB；`sdk\SHA256SUMS.txt` 683 行；manifest `sdk_bundle` 段含 `files/hashed_files/vendor.overlaid_files=19`；`sdk\README.md` 无残留 `@@…@@` |
+| `tools/release-sdk.ps1 -NoBuild -SdkBundle` 组装 `sdk\` | **已验证** | `build\sdk\0.4.0-c14b043\sdk\` 683 文件 / 90.3 MB（早先 `1da154c` 同为 683 文件 / 90.2 MB）；`sdk\SHA256SUMS.txt` 683 行；manifest `sdk_bundle` 段含 `files/hashed_files/vendor.overlaid_files=19`；`sdk\README.md` 无残留 `@@…@@` |
 | `sdk\` 自包含·静态+打包（仓库外） | **已验证** | 拷到 `%TEMP%\sdk-standalone-1da154c` 后 `tools\verify-examples.ps1` → `Examples: 10 passed, 0 failed, 10 total`（首轮曾因缺 3 个注册表源让示例 09 `fail`，补齐后 10/10） |
 | `sdk\` 自包含·脚手架+打包 | **已验证** | `tools\new-project.ps1` → 25 文件；`tools\pack.ps1` → `build\Smoke.w3x` 275638 B |
-| `sdk\` 自包含·实机 deploy | **未验证** | 出包机当时被另一个会话的 `deploy.ps1 -Demo -Hold` 占用（单实例锁 + 共享日志） |
+| `sdk\` 自包含·实机 deploy | **已验证** | 包内 `tools\deploy.ps1` 部署脚手架工程 → 日志 `Results: 9 passed, 0 failed, 9 total (0 skipped)` + `ALL CHECKS PASSED (9/9)`，exit 0（早先是另一个会话的 `-Demo -Hold` 占着单实例锁，等它退出后补跑） |
+| `sdk\` 自包含·实机 `-Live`（10 例一轮） | **已验证** | 包内 `tools\verify-examples.ps1 -Live` → `Examples: 10 passed, 0 failed, 10 total`，每例 `[live] ok`（合计 59 条检查）；此前仓库内 `-Live` 被单实例锁挤成两批 |
+| `sdk\` 最终包复跑（HEAD `c14b043`） | **已验证** | `build\sdk\0.4.0-c14b043\sdk\` 683 文件：`SHA256SUMS.txt` 683 条全部 `Get-FileHash` 一致；静态+打包 10/10；脚手架打包 `build\Smoke.w3x` 275636 B；`manifest.json` 的 `sdk_bundle` = 683 文件 / 683 校验和 / 94637720 字节 |
 | 脚本的 **完整构建分支**（`vcvars32` + `cmake`） | **未验证** | 本轮未跑完整构建（约 10 分钟，复用 lead 预构建产物）；命令串已逐字对照 `src/build.bat` / `CMakeLists.txt` / §14.4 |
 | 0.4.0 干净 hash 复现 | **未验证**（本轮未重建 `d151fd7`） | 数值引自 `docs/STATUS.md` §4 与 `docs/planning/D3D-LUA-SDK-DESIGN.md` §14.4 |
 | 五组回归数字（122 / 125 / 126 / 9 / 170） | **已验证**（由 lead 在 2026-11-15/16 实机复跑，本文档作者未跑） | `docs/STATUS.md` 头部表；交互 D3D 2026-11-16 为 170（= 122 + 48） |

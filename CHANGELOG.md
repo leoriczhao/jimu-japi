@@ -102,7 +102,9 @@ exit 0、干净 worktree 自动创建并删除。`498a308` 那次包内 hash 与
 - `tools\verify-examples.ps1`（静态+打包）：`Examples: 10 passed, 0 failed, 10 total`。首轮是 9/10 —— 示例 09（`pack.ps1 -WithJassWrappers`）报 `handler registry not found`，补上 `gen-jass-wrappers.ps1` 要扫的 3 份注册表源（`src\src\extensions\ex_natives\Initialize.cpp`、`src\src\lua_engine\lua_engine\libs_message.cpp`、`src\src\d3d9\handler_manifest.json`）后 10/10。
 - `tools\new-project.ps1 -Name Smoke -Path …` → `tools\pack.ps1`：`Done -> build\Smoke.w3x`（275638 字节，`Bundled 5 Lua files`、`JASS syntax check OK`）。
 - 包体积 683 文件 / 90.2 MB（vendor 615 文件 / 88.7 MB，其中 19 个 `bin\*.dll` 被 `.gitignore` 排除、由出包机本地 checkout 覆盖，manifest `sdk_bundle.vendor.overlaid_files` 记录）。`[skip] luac not found` 属预期：包里没有 Lua 源码与 gcc，打包与 `-Live` 不受影响。
-- **未做**：包内实机 `deploy`。出包机当时被另一个会话的 `deploy.ps1 -Demo -Hold` 占着（1.27a 单实例锁 + 共享日志），没抢到窗口；包内二进制 hash 与本轮实机验证过的 `87C83BA1…` 相同，但仍按「未验证」记。
+- **包内实机**（2026-11-16，`build\sdk\0.4.0-c14b043\sdk\` → `%TEMP%\sdk-standalone-c14b043`）：`tools\deploy.ps1` 把脚手架生成的工程打进游戏，日志 `Results: 9 passed, 0 failed, 9 total (0 skipped)` + `ALL CHECKS PASSED (9/9)`，`deploy` exit 0（之前这一项记「未验证」是因为出包机被另一个会话的 `deploy.ps1 -Demo -Hold` 占着 1.27a 单实例锁；等对方退出后补跑）。
+- 最终包 `build\sdk\0.4.0-c14b043\`（HEAD `c14b043`）整套复跑：`SHA256SUMS.txt` 683 条逐条 `Get-FileHash` 回读 **683/683 一致**、静态+打包 `10 passed, 0 failed`、脚手架打包 `build\Smoke.w3x` 275636 字节。
+- **包内 `-Live` 一轮跑完 10/10**（2026-11-16，`tools\verify-examples.ps1 -Live`，仓库外）：每例 `[live] ok` —— 01 `5/5`、02 `8/8`、03 `6/6`、04 `5/5`、05 `6/6`、06 `5/5`、07 `5/5`、08 `7/7`、09 `6/6`、10 `6/6`，末行 `Examples: 10 passed, 0 failed, 10 total`。此前仓库内的 `-Live` 被另一会话的单实例锁挤成两批，这是**第一次一次跑完**，也是最强的「作者拿到包就能用」证据。
 
 写脚本时踩到的两个坑（都真的把逻辑跑没了）：
 

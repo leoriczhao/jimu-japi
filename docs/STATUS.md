@@ -13,7 +13,7 @@
 - D3D 实机回归：`170 passed, 0 failed, 170 total`（2026-11-16 复跑；普通基线 122 项 + D3D 48 项 = 170，**D3D 夹具数量没变**（2026-11-15 的 `164 = 116 + 48` 是同一批夹具配旧 116 基线）：公共 SDK 功能 8 组 + 底层 bridge 13 组 + P4 Subscription 真实输入 1 组 + P5 生命周期 7 项 + shutdown 1 组 + §15.8 覆盖补齐 17 项（handler 往返 10 + 事件回调 3 + 交互期探针 3 + BLP2 实机 1）；handler 兼容面 54/54 已全部触达，仍不等于 164 个 API）
 - 地图级 VM 重启回归：`9 passed, 0 failed, 9 total`（2026-11-16 复跑同一数字；同一进程内换图后旧 Lua VM 关闭、新图脚本重载、旧 session 资源归零；新增断言证明 `SaveFunc` 锚点与 `func_bind` 标签表随地图启动被清空）
 - D3D 发布产物溯源：提交 `d151fd7`（SDK 0.4.0）的 detached clean worktree 构建（HEAD 精确一致、tracked diff 为零）用同一产物实跑交互 `164/164`、普通 `116/116`、地图级 VM 重置 `8/8`，游戏目录 proxy 与 sidecar 回读等于 clean proxy hash（2026-11-15；交互回归使用夹具修正提交 `65bceb5`，见第 4 节）。该记录保留当时口径：`164 = 116 + 48`、VM 重置夹具 8 项；2026-11-16 用 HEAD `498a308` 的同一条命令复跑为 `170 = 122 + 48` 与 `9/9`（见下条与第 4 节）
-- 地图作者 SDK 包：`docs/guide/SDK-QUICKSTART.md` / `SDK-GUIDE.md` / `SDK-COOKBOOK.md` 三份中文阶梯文档、`examples/` 十个最小示例（静态 + 打包 10/10 通过；`-Live` 10 个全部实机 `0 failed`，分两批跑完，见 §4）、`tools/new-project.ps1` 脚手架（生成的空工程实机 `Results: 9 passed, 0 failed, 9 total (0 skipped)`）、`CHANGELOG.md`（SDK 版本口径 = `jass.d3d` 的 `kVersion`）、`docs/RELEASE.md` + `tools/release-sdk.ps1`（clean worktree 出包；`-NoBuild` 实测 `build\sdk\0.4.0-498a308` 的 `SHA256SUMS.txt` 与独立 `Get-FileHash` 一致）、`tools/release-sdk.ps1 -SdkBundle` 另出 `sdk\` 自包含作者包（683 文件 / 90.2 MB，按仓库子集布局组装，作者脚本不用改路径就能当仓库根用；仓库外拷出后静态+打包 `10 passed, 0 failed`、脚手架生成的工程能直接 pack；实机 deploy 待在空闲机器上补，见 §4）
+- 地图作者 SDK 包：`docs/guide/SDK-QUICKSTART.md` / `SDK-GUIDE.md` / `SDK-COOKBOOK.md` 三份中文阶梯文档、`examples/` 十个最小示例（静态 + 打包 10/10 通过；`-Live` 10 个全部实机 `0 failed`，分两批跑完，见 §4）、`tools/new-project.ps1` 脚手架（生成的空工程实机 `Results: 9 passed, 0 failed, 9 total (0 skipped)`）、`CHANGELOG.md`（SDK 版本口径 = `jass.d3d` 的 `kVersion`）、`docs/RELEASE.md` + `tools/release-sdk.ps1`（clean worktree 出包；`-NoBuild` 实测 `build\sdk\0.4.0-498a308` 的 `SHA256SUMS.txt` 与独立 `Get-FileHash` 一致）、`tools/release-sdk.ps1 -SdkBundle` 另出 `sdk\` 自包含作者包（683 文件 / 90.2 MB，按仓库子集布局组装，作者脚本不用改路径就能当仓库根用；仓库外拷出后静态+打包 `10 passed, 0 failed`、脚手架生成的工程能直接 pack、包内 `deploy.ps1` 实机 `9/9`、包内 `-Live` 十例一轮跑完，见 §4）
 - 默认测试场景：64×64 平坦空图，无基地、野怪、树木或预放物件；最终仅保留 1 个 10 级英雄火枪手 `Hrif`（2026-07-31）
 - 验收入口：先运行 `src\build.bat`，再按第 4 节选择普通或交互模式
 
@@ -348,8 +348,8 @@ Clean proxy SHA-256 为 `0564A518EB3CB2F91CD65D0BDC766B9FC5B8709335CFFE5274C1FED
 想直接拿一份**自带全部依赖**的包（对方不 clone 仓库、不编译 DLL）：`-SdkBundle` 会在二进制包旁边再组装 `build\sdk\<ver>-<sha7>\sdk\`，
 入口是包内 `README.md`——文档、10 个示例、8 个作者脚本、`pjass.exe`、`callback`、`reference\empty-map`、
 `tools\w3x2lni` 运行时与三个二进制都在里面（683 文件 / 90.2 MB）；布局刻意镜像仓库子集，所以包内命令与仓库内逐字一致。
-仓库外自包含验证：静态+打包 `Examples: 10 passed, 0 failed, 10 total`、`new-project` 生成的工程打包 275638 字节；
-实机 deploy 未做（出包机被另一个会话的单实例锁占用）。流程与实测数字见 [RELEASE.md](RELEASE.md) §8.5。
+仓库外自包含验证（包内 `SHA256SUMS.txt` 683 条全部回读一致）：静态+打包 `Examples: 10 passed, 0 failed, 10 total`、`new-project` 生成的工程打包 275638 字节、
+包内 `deploy.ps1` 实机跑通 `Results: 9 passed, 0 failed, 9 total (0 skipped)` + `ALL CHECKS PASSED (9/9)`、包内 `verify-examples.ps1 -Live` 十例一轮跑完（每例 `[live] ok`，合计 59 条检查）。流程与实测数字见 [RELEASE.md](RELEASE.md) §8.5。
 
 ```powershell
 .\tools\new-project.ps1 -Name MyMap -Path build\scratch     # 生成可打包工程（25 个文件）
