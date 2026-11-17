@@ -1,0 +1,305 @@
+# 变更日志（CHANGELOG）
+
+> 适用：War3 1.27a（`GetGameVersion()` = `6374`）+ `yd_japi.dll`（内嵌 Lua 5.4）+ `newD3d9.dll`（D3D9 proxy）。
+> 版本号唯一来源：`src/src/lua_engine/lua_engine/libs_d3d.cpp:35` 的 `constexpr const char* kVersion`；
+> 只有 **Lua 侧 `jass.d3d` 对外 API 变化**时才递增，工具链 / 文档 / 示例 / 脚手架改动一律不递增。
+> 发布流程见 [docs/RELEASE.md](docs/RELEASE.md)；当前实现、验证强度与缺口以 [docs/STATUS.md](docs/STATUS.md) 为唯一权威。
+> 最后更新：2026-11-17（记录 `0.4.0` 与之后的 `[Unreleased]` 改动）。
+
+约定：
+
+- 每条改动都带**验证状态**：`实机` = 真机跑过回归；`静态` = 只做了构建/静态合同校验；`未验证` = 只有代码或设计依据。
+- 日期是**提交日期**（`git show -s --format=%ad --date=short`）或明确标出的实测日期，不是本文档的编辑日期。
+- 发布产物必须可溯源到某个提交的 detached clean worktree 构建（做法见 [docs/RELEASE.md](docs/RELEASE.md) 步骤 1、6）。
+
+---
+
+## 版本线
+
+| 版本 | 时间 | 锚点提交 | 状态 | 一句话 |
+|---|---|---|---|---|
+| `0.4.0` | 2026-11-15 | `d151fd7` | **已发布**（clean 构建可溯源） | D3D Lua SDK 记为「可用」，首个有发布产物的版本 |
+| `0.3.0-dev` | 2026-11-14 → 2026-11-15 | `a9e1d21` 起 | 开发版，未发布 | P4 订阅、真实输入、P5 生命周期、VM 重置、54 handler 覆盖 |
+| `0.2.0-dev` | 2026-08-03 起 | `50ebb0f` | 开发版，未发布 | 首版带 `kVersion`：版本化 ABI、typed 资源 SDK、MPQ 贴图 |
+| （无版本号） | 2026-06-04 → 2026-08-03 | `7e3bac7` 起 | 早期 | 还没有 `jass.d3d` 与 `kVersion` |
+
+> `-dev` 后缀表示「实现完成但未做发布级验收」，不承诺任何行为；`0.4.0` 是第一个去掉了 `-dev` 的版本。
+> 版本号只在 **`kVersion` 字面量** 变化的提交里递增：`-S'kVersion = "'` 的完整结果是
+> `50ebb0f`（`0.2.0-dev`）→ `a9e1d21`（`0.3.0-dev`）→ `d151fd7`（`0.4.0`），之后再没变过。
+
+---
+
+## [Unreleased]
+
+### 新增：接口一致性测试台（`tests/conformance/`，2026-11-17）
+
+把「引擎到底实现了什么」变成一张会失败的表格 —— 一张独立最小地图，不依赖 `map\` 的 demo，也不依赖任何移植层 shim，只用引擎：
+
+| 文件 | 作用 |
+|---|---|
+| `tests/conformance/war3map.lua` | 测试本体：夹具（步兵 `hfoo` + 技能 `AHbz`）+ 十三组断言（A 模块 / B `jass.common` / C handler 存在性 / D 返回类型 / E 语义往返 / F slk / G message / H storm / I 外部图的 16 个 EX 使用点 / J EX* 真 native / K console+log / L bignum / M setter 返回值） |
+| `tests/conformance/gen-manifest.mjs` → `manifest.lua` | **生成物**：从 `src/` 剥注释后抽 `register_cpp_handler`（可被 Lua 调用的 handler，66 个）与 `jass::japi_add`（声明的 native，39 个）；注册表多一个 handler，C 组自动多一行 |
+| `tests/conformance/run.ps1` | 一条命令：语法校验 → 独占 war3 → 打包部署 → 过滤 `[PASS]/[FAIL]/[SKIP]` → 打印两行汇总与 exit code |
+| `tests/conformance/check-syntax.lua` | `w3x2lni-lua` 的 `loadfile` 校验（打包器原样拼接，语法错在游戏里只有一行 FATAL） |
+| `tests/conformance/README.md` | 断言分组、怎么加用例、边界、已捕获缺陷 |
+
+**实机结果**（`yd_japi.dll` 633856 B，`816E5F347743538A9458B49431381A8B803B011697B41E6A19557215DBD44D26`）：`Conformance: 170 passed, 0 failed, 4 skipped` / `Results: 170 passed, 0 failed, 170 total`，deploy exit 0。
+
+### 新增：`jass.console` / `jass.log` / `jass.bignum` / `jass.storm.save` / `slk.misc`（2026-11-17）
+
+这几个模块 builtin-japi 有、我们此前没有；外部 YDWE 谱系图全靠它们，所以补成真实现（不再靠假 shim）：
+
+| 模块 | 实现 | 验证 |
+|---|---|---|
+| `jass.console` | 新 `src/src/lua_engine/lua_engine/libs_console.cpp`：`enable`/`write`/`flush`/`clear` 写 `debug_log.h` 的 `AllocConsole` 控制台并镜像 `OutputDebugString`（没有控制台时也能看见） | conformance K 组 |
+| `jass.log` | 新 `libs_log.cpp`：真写 `<游戏目录>\<log.path>log-YYYYMMDD.log`，一行一次调用；路径按 UTF-16 处理（1.27a 是 ANSI 进程，脚本串是 UTF-8），默认 `logs\map\` | K 组 + 实机真的落盘 |
+| `jass.bignum` | 新 `libs_bignum.cpp`：32 位 limb 大数（`new`/`bin`/`powmod`）+ 自写 SHA-1；`tostring`/`sha1` 都是小写十六进制、不补零（与上游 RSA 校验同口径） | L 组往返 |
+| `jass.storm.save` | `libs_storm.cpp` 新增：把 Lua 串写进地图目录下的真实文件；`storm.load` 在 MPQ 未命中时回落读同目录 | H 组 `save → has → load` 往返 |
+| `slk.misc` | `libs_slk.cpp` 第 8 张表：`ObjectManager` 的 misc 数据 + 地图 `war3mapmisc.txt` 合并（`DefenseArmor` 等） | F 组 |
+
+### 修复：bridge 字符串返回 ABI；41 个 EX* 变成真 JASS native（2026-11-17）
+
+| 问题 | 根因与修法 | 验证 |
+|---|---|---|
+| 所有 EX* 字符串 getter 返回垃圾（读 `AHbz` 的提示得到 `playerevent`） | `jass::create_string()` 返回的是 **JASS 字符串句柄索引**（实测 `create_string("Blizzard") == 0x30`），必须 `vm->string_table->get(idx)` 拿节点再 `jass::from_string()`；原实现按「`>=0x10000` 当句柄、否则当脚本 string id」猜，小值全走错。`bridge_dispatch.cpp` 新增 `resolve_string_result()`：句柄表优先、脚本 string id 回落且检查 `reverse_table::size` | conformance E 组转绿；探针打印 `203=暴风雪 / 204=…\BTNBlizzard.blp / 215=暴风雪(…)` |
+| 41 个 EX* 名字在 JASS 里不存在 | 根因：`initialize_ex_natives()` 只 `register_cpp_handler`，从不调 6 个 `Initialize*` ⇒ 那些 `jass::japi_add` 全是死代码。新增 `register_real_ex_natives()` 依次调用 `InitializeAbilityState`/`ItemState`/`Effect`/`EventDamageData`/`GameInfo`/`DisplayChat` | conformance J 组；**`-WithJassWrappers` 仍 125/125**（同名 native 会与 `gen-jass-wrappers.ps1` 生成的 wrapper 撞名，实测没撞） |
+| bridge 的 `V`（void）setter 返回 `nil`，与 UjAPI 的谓词语义不符 | `bridge_dispatch.cpp`：`spec.ret == 'V'` 时推 `true`（18 个 setter 受影响） | conformance M 组 |
+| `EXGetUnitState`/`EXSetUnitState` 调不到 | `UnitState.cpp` 新增 `resolve_real_unit_state()`：用 `jass::jass_func("GetUnitState"/"SetUnitState")->get_address()` 填 `RealGetUnitState`/`RealSetUnitState`（原本一直是空指针），再注册两个 bridge handler | conformance E 组 |
+| `EXGetAbilityString`/`EXSetAbilityString` 缺失 | 按共享的 per-type ability UI 表（`CAbilityUIDef`）实现，按 rawcode 而不是单位上的 ability handle 寻址 | conformance E 组 |
+| 外来图的物编查不到（`slk.unit` 空、`slk.destructable[整数]` 崩） | `libs_slk.cpp`：7 张表改 `mgr.load(::slk::ROBJECT_TYPE::…, table)`（带地图物编合并；地图没有该表时 `ObjectManager` 自己回落基表），失败才回落原来的纯基表；`type_index` 接受数字 rawcode（大端 `'YTfb' == 0x59546662`） | conformance F 组 |
+| Lua 侧调不到只经 `register_cpp_handler` 注册的 handler | 新增 `bridge::push_cpp_handler`，`libs_japi.cpp` 的 `japi_index` 在 `jass::japi_func` 取不到时回落它 ⇒ 66 个 bridge handler 全部可当 native 调用，且不动 JASS 命名空间 | conformance C 组（66 条） |
+
+自 `0.4.0`（`d151fd7`，2026-11-15）以来的改动。**SDK 版本号仍是 `0.4.0`**：`jass.d3d` 的 Lua 侧 API 没有变化，
+本轮加的是 JASS 侧通道、工具链、示例、文档与脚手架。日后若动 `jass.d3d` 的对外行为，按 `0.5.0` 递增。
+
+### 新增：JASS 侧通道（面向 JASS 地图作者）
+
+| 能力 | 提交 | 验证 |
+|---|---|---|
+| `GetFuncAddr(code)`：内置 JAPI 的 JASS 函数取址链（`SaveFunc` / `func_bind_trigger_name`） | `164ae1a` | 实机 `126 passed, 0 failed, 126 total`（`deploy.ps1 -WithGetFuncAddr`） |
+| 每个 bridge handler 自动生成内置 JAPI 形状的五部曲 JASS wrapper（`EXGetUnitAbility(...)` 可直接 `call`） | `61a23c5` | 实机 `125 passed, 0 failed, 125 total`（`deploy.ps1 -WithJassWrappers`） |
+| `SaveFunc` / `func_bind_trigger_name` 代码标签表 | `cb6f5cb` | 实机（含在 126/126 的 `-WithGetFuncAddr` 组里） |
+
+默认打包不含这两批 JASS 注入，对应小节打印 `[SKIP]`：不开开关就是 `122 passed, 0 failed, 122 total`。
+
+### 新增：Lua 侧
+
+| 能力 | 提交 | 验证 |
+|---|---|---|
+| JASS 数组全局预分配（打包器插入 `JapiForceAllocArrays`，每数组 8192×4 = 32 KB），`jass.globals` 从此可在任意下标读写 | `1f07e56` | 实机（默认 `122/122`；`-NoArrayPrealloc` 时不预分配，数组写入相关断言会失败，`docs/planning/JASS-NATIVE-DECLARATIONS.md` 的 T10 记为 `121 passed, 1 failed`） |
+
+### 工具链、示例与文档（本轮，已提交）
+
+| 文件 | 作用 | 提交 | 验证 |
+|---|---|---|---|
+| `tools/release-sdk.ps1` | 从指定提交的 clean worktree 构建并打包 SDK 发布件（`yd_japi.dll` / `newD3d9.dll` / `d3d_sdk_contract_test.exe` + `SHA256SUMS.txt` + `manifest.json`） | `c4cf647` | 静态 + `-NoBuild` 冒烟实跑（见下） |
+| `docs/RELEASE.md` | 发布流程 runbook（前置条件、步骤 0–7、坑表、版本号确认） | `c4cf647` | 文档，未做发布级复跑 |
+| `CHANGELOG.md` | 本文件 | `c4cf647` | 文档 |
+| `tools/pack.ps1` / `tools/deploy.ps1` 新开关 | `-WorkDir` 打包隔离、`-MapDir`/`-MapName` 工程目录部署、日志守卫与退出判定、`-Hold` 等 | `4d4a5eb` | 实机（`-MapDir`/`-MapName` 端到端；`-Hold` + `drive-interactive-d3d.ps1`） |
+| `examples/` + `tools/verify-examples.ps1` | 10 个可直接打包的最小工程 + 静态/打包/实机三档校验脚本 | `9dc7177` | 静态 + 打包 **10/10 通过**；实机 `-Live` **10/10 全部 0 failed**（逐条数字见下） |
+| `tools/new-project.ps1` | 地图脚手架：生成一个可打包、可部署的空工程（自带 9 项冒烟断言） | `87f9086` | 实机（脚手架空工程 `-MapDir build\scratch\proj\MyMap`：` Results: 9 passed, 0 failed, 9 total (0 skipped)` + `ALL CHECKS PASSED (9/9)`，2026-11-16 lead 实测） |
+| `docs/guide/SDK-QUICKSTART.md` / `SDK-GUIDE.md` / `SDK-COOKBOOK.md` | 使用者文档（快速上手 / 综合指南 / 常见配方） | `0c07e6d` | 文档；数字口径以 `docs/STATUS.md` 为准 |
+| `AGENT.md` 作者工作流 | 新 agent 上手：作者工作流与新增开关 | `9347b12` | 文档 |
+
+`examples/` 的实机 `-Live` 结果（2026-11-16，同一份 `yd_japi.dll` `87C83BA1…`，`-Timeout 120`）：
+
+| 示例 | `Results:` 行 | 示例 | `Results:` 行 |
+|---|---|---|---|
+| 01-hello-jass | `5 passed, 0 failed, 5 total` | 06-globals | `5 passed, 0 failed, 5 total` |
+| 02-input-hook | `8 passed, 0 failed, 8 total` | 07-slk | `5 passed, 0 failed, 5 total` |
+| 03-d3d-hud | `6 passed, 0 failed, 6 total` | 08-d3d-subscription | `7 passed, 0 failed, 7 total` |
+| 04-create-unit-order | `5 passed, 0 failed, 5 total` | 09-jass-wrappers | `6 passed, 0 failed, 6 total` |
+| 05-sleep-sequence | `6 passed, 0 failed, 6 total` | 10-getfunc-addr | `6 passed, 0 failed, 6 total` |
+
+10 个示例**每一个都有实机 0 failed 的记录**，但没有一批把 10 个一次跑完：同一台机器上另一个会话在跑
+`deploy.ps1 -Demo -Hold`，1.27a 的单实例锁加上共享的 `C:\ProgramData\japi_debug.txt` 造成两次撞车
+（`war3.exe is already running`；以及 `no fresh Results line` 但该示例的 `[PASS]` 行都在——对方 deploy 的
+`Remove-Item` 重建了日志，我们的 `Results:` 写进了已 unlink 的旧句柄）。判定与规避写在 `examples/README.md` 的
+「`-Live` 撞车」一节，逐例的日志来源写进 `docs/STATUS.md` §4。
+
+`release-sdk.ps1` 的 `-NoBuild` 冒烟（2026-11-16）：先在 `-Commit 498a308` 上跑通，随后在 HEAD `9347b12` 复跑，最后在本轮最后一次改动 `tools\`/`examples\` 的提交 `b2e11ab` 上复跑第三次，三次都是
+exit 0、干净 worktree 自动创建并删除。`498a308` 那次包内 hash 与 `src\build\bin\Release` 源文件逐字节一致；`9347b12` 与 `b2e11ab`
+两次产出 `build\sdk\0.4.0-9347b12\`、`build\sdk\0.4.0-b2e11ab\`，三份产物的 SHA-256 与独立 `Get-FileHash` 一致，且
+换 HEAD 后 hash 不变——本轮改动全在 `tools\`、`examples\`、`docs\`，没有碰 DLL 与 Lua 引擎源码。
+**`-NoBuild` 只用于验证脚本本身，绝不能当作发布产物**——manifest 里 `built: false`、`artifact_source: "local_worktree"`
+就是给这件事留的记号。
+
+### 新增：地图作者 SDK 分发包（`tools\release-sdk.ps1 -SdkBundle`）
+
+| 文件 | 作用 | 提交 | 验证 |
+|---|---|---|---|
+| `tools/release-sdk.ps1` 的 `-SdkBundle` / `-NoVendor` | 在二进制包旁边再组装一个 `sdk\`：`docs/guide` 6 份 + `STATUS`/`RELEASE`/`planning` 2 份 + `CHANGELOG`、`examples` 10 个、8 个作者脚本 + `pjass.exe` + `callback` + `config.example.ps1`、`reference\empty-map`、3 个注册表源、`tools\w3x2lni` vendor、3 个二进制；另出 `sdk\README.md` 与 `sdk\SHA256SUMS.txt`，manifest 增 `sdk_bundle` 段 | 本轮 | 静态 + 仓库外自包含实跑（见下） |
+| `tools/sdk-bundle/README.template.md` | 包内入口 README 模板（`@@VERSION@@` / `@@ARTIFACTROWS@@` / `@@TREEFILES@@` 等占位符）：包里有什么、三分钟上手、怎么验证包、脚本清单、7 条必读坑、版本与来源 | 本轮 | 文档；渲染后残留占位符会 `throw` |
+| `docs/RELEASE.md` §8.5 | 出包流程补上作者包：内容来源的两个例外、注册表源为何要进包、自包含门槛、实测数字 | 本轮 | 文档 |
+| `docs/guide/SDK-QUICKSTART.md`、`AGENT.md` | 入口指向 `sdk\README.md` | 本轮 | 文档 |
+
+为什么要多这一层：`release-sdk.ps1` 原来只产出 3 个二进制 + 清单，作者拿到手还得自己找文档、示例、脚手架和 `w3x2lni` 运行时。而所有作者脚本都用 `$Root = Split-Path -Parent $PSScriptRoot` 推仓库根 —— **按同样的仓库子集布局塞进 `sdk\`，它就能当仓库根用，脚本一行不用改**。
+
+自包含验证（2026-11-16，`build\sdk\0.4.0-1da154c\sdk\` 整个拷到 `%TEMP%\sdk-standalone-1da154c`，完全脱离仓库）：
+
+- `tools\verify-examples.ps1`（静态+打包）：`Examples: 10 passed, 0 failed, 10 total`。首轮是 9/10 —— 示例 09（`pack.ps1 -WithJassWrappers`）报 `handler registry not found`，补上 `gen-jass-wrappers.ps1` 要扫的 3 份注册表源（`src\src\extensions\ex_natives\Initialize.cpp`、`src\src\lua_engine\lua_engine\libs_message.cpp`、`src\src\d3d9\handler_manifest.json`）后 10/10。
+- `tools\new-project.ps1 -Name Smoke -Path …` → `tools\pack.ps1`：`Done -> build\Smoke.w3x`（275638 字节，`Bundled 5 Lua files`、`JASS syntax check OK`）。
+- 包体积 683 文件 / 90.2 MB（vendor 615 文件 / 88.7 MB，其中 19 个 `bin\*.dll` 被 `.gitignore` 排除、由出包机本地 checkout 覆盖，manifest `sdk_bundle.vendor.overlaid_files` 记录）。`[skip] luac not found` 属预期：包里没有 Lua 源码与 gcc，打包与 `-Live` 不受影响。
+- **包内实机**（2026-11-16，`build\sdk\0.4.0-c14b043\sdk\` → `%TEMP%\sdk-standalone-c14b043`）：`tools\deploy.ps1` 把脚手架生成的工程打进游戏，日志 `Results: 9 passed, 0 failed, 9 total (0 skipped)` + `ALL CHECKS PASSED (9/9)`，`deploy` exit 0（之前这一项记「未验证」是因为出包机被另一个会话的 `deploy.ps1 -Demo -Hold` 占着 1.27a 单实例锁；等对方退出后补跑）。
+- 最终包 `build\sdk\0.4.0-c14b043\`（HEAD `c14b043`）整套复跑：`SHA256SUMS.txt` 683 条逐条 `Get-FileHash` 回读 **683/683 一致**、静态+打包 `10 passed, 0 failed`、脚手架打包 `build\Smoke.w3x` 275636 字节。
+- **包内 `-Live` 一轮跑完 10/10**（2026-11-16，`tools\verify-examples.ps1 -Live`，仓库外）：每例 `[live] ok` —— 01 `5/5`、02 `8/8`、03 `6/6`、04 `5/5`、05 `6/6`、06 `5/5`、07 `5/5`、08 `7/7`、09 `6/6`、10 `6/6`，末行 `Examples: 10 passed, 0 failed, 10 total`。此前仓库内的 `-Live` 被另一会话的单实例锁挤成两批，这是**第一次一次跑完**，也是最强的「作者拿到包就能用」证据。
+
+写脚本时踩到的两个坑（都真的把逻辑跑没了）：
+
+- `release-sdk.ps1` 一旦内嵌中文就必须存成 UTF-8 **带 BOM**。它原来是纯 ASCII 无 BOM，加中文后 PS 5.1 按 ANSI 解码，解析直接报「意外的标记」；改存带 BOM 后正常（`tools\new-project.ps1` 本来就是 BOM 先例）。任何工具重写该文件都可能把 BOM 丢掉，改完确认前 3 字节是 `EF BB BF`。
+- PowerShell 变量名**不区分大小写**：`[switch]$SdkBundle` 与本地 `$sdkBundle = $null` 是同一个变量，开关刚被读就被置空，Step5 整段静默跳过（首跑 summary 里连 bundle 行都没有）。改名 `$bundleInfo` 后才跑通。这是本会话第二次踩同类坑（第一次是 `verify-examples.ps1` 的 `$live` vs `[switch]$Live`）：**开关名不要当同名局部变量复用**。
+
+### 修复：调试控制台乱码 + 关不掉的孤儿 War3
+
+| 问题 | 修法 | 验证 |
+|---|---|---|
+| 控制台满屏乱码（日志文件本身是合法 UTF-8，`chcp` = 936） | `src/src/debug_log.h` 的 `init_console()`：`AllocConsole()` 后加 `SetConsoleOutputCP(CP_UTF8)`/`SetConsoleCP(CP_UTF8)`，并用 `CONSOLE_FONT_INFOEX` 把字体换成 TrueType 中文字体（光栅 Terminal 字体没有 CJK 字形）。字体名必须写成 C++ universal character names（`L"\u65b0\u5b8b\u4f53"`）：.h 是 UTF-8 而 MSVC 按 936 编译，直接写中文报 C2001 | 实机：控制台 `[log.debug] 日志系统装载完毕,向着星辰大海出击!` 正常（`a5dff44`） |
+| 游戏成了孤儿进程就再也杀不掉 | 根因：1.27a 发布版的 `Game.dll` 启动时给自身进程对象装 `DENY 0x001FFFFF \Everyone`（导入表有 `AddAccessDeniedAce`/`SetSecurityInfo`），但进程 owner 隐式持有 `READ_CONTROL`+`WRITE_DAC` ⇒ 不用提权：`OpenProcess(READ_CONTROL\|WRITE_DAC)` → `SetSecurityInfo` 写回「`SYSTEM` + 当前用户 `PROCESS_ALL_ACCESS`」的 DACL → 正常 `TerminateProcess`。封装在新增的 `tools/_war3ctl.ps1`（dot-source 库，含 Toolhelp 判活、DACL 修复、Job Object），命令行入口是新增的 `tools/kill-war3.ps1`（无参数 = 关掉所有 `war3.exe`，`-DryRun` 只看能否打开）；`tools/deploy.ps1` 收尾改走 `Stop-War3Process`（先创建句柄，失败再「修复 DACL + Terminate」，逐轮重试），并新增 `-Job` 把游戏放进 `KILL_ON_JOB_CLOSE` 的 Job Object，启动器被强杀时由内核收尸 | 实机（2026-11-16，`yd_japi.dll` `26D1FA3D…`）：默认回归 `122 passed, 0 failed, 122 total`；`-Job` + `Stop-Process` 掉启动器 → 4 s 内游戏消失；无 `-Job` 强杀启动器 → 孤儿存活（`terminateAccess=False`），`tools\kill-war3.ps1` → `pid 35708 closed (dacl repair + terminate)`；外部 PowerShell 单独起的游戏同样能关 |
+| `verify-examples.ps1 -Live` 可能在已有游戏运行时开跑 | 它用 `Get-Process -Name war3` 判活，而 .NET 的进程枚举会**静默跳过**拒绝访问的游戏进程（DACL 生效后正是这种情况）⇒ 4 处判活改走 `tools\_war3ctl.ps1` 的 CIM/tasklist 查询（`Get-War3ProcessId`） | 静态 `10 passed, 0 failed, 10 total`；`-Live -Filter 01-hello-jass` → `[live] ok (5/5 passed)` |
+| `tools\release-sdk.ps1` 在 Windows PowerShell 5.1 下直接语法报错（`Unexpected token 'pack.ps1' + $bt ...` @ line 506） | 文件是**无 BOM 的 UTF-8**，5.1 按 ANSI（936）解码，中文串里映射不到的字节被吞成 `?`、把引号吃掉 ⇒ 加 UTF-8 BOM（与 `new-project.ps1` 一致；PowerShell 7 不受影响） | 5.1 下 `-NoBuild -SdkBundle` 跑通：685 文件 / 90.3 MB / 685 hashed，`tools` 13 个（含 `_war3ctl.ps1`、`kill-war3.ps1`） |
+
+原「DLL exit watch」方案（`japi_install_exit_watch()` 轮询 `JAPI_EXIT_MARKER`/`JAPI_PARENT_PID` 后 `ExitProcess`）**已回滚**：给 DLL 加一个只为关进程而存在的方法并不合适，`JAPI_EXIT_*` 约定随之取消，`deploy.ps1` 不再导出这些环境变量（`src/src/extensions/dllmain.cpp` 删掉整段 watch 线程与非零退出前的 `DeleteFileA` 分支）。
+
+⇒ **不需要用管理员权限启动 DSH**：任何以当前用户运行的进程都能修 DACL 再关游戏（owner 隐式权限恒定）。注意游戏**启动早期会二次安装 deny ACE**（实测 t=6.5 s 修好后 `OpenProcess(PROCESS_TERMINATE)` 又变 `win32=5`，到 t=10.5 s 才稳定），所以 `Stop-War3Process` 是「修复 + Terminate 紧挨着」并逐轮重试；启动完成后不会再装回（实测 10 s 后 DACL 仍是我们的两条 ALLOW）。`-Job` 是「启动器被强杀、来不及收尾」时的额外保险；`tools\kill-war3.ps1` 用于清历史孤儿或外部起的游戏。
+
+### 验证（2026-11-16 实机，本地构建 `yd_japi.dll` = `87C83BA1CE0E6E413CEA7B9D6018E9A289259EC9C2F01EE02E7827DAF6661908`）
+
+| 组 | 命令 | `Results:` 行 |
+|---|---|---|
+| 普通 | `tools\deploy.ps1` | `122 passed, 0 failed, 122 total` |
+| JASS wrapper | `tools\deploy.ps1 -WithJassWrappers` | `125 passed, 0 failed, 125 total` |
+| GetFuncAddr | `tools\deploy.ps1 -WithGetFuncAddr` | `126 passed, 0 failed, 126 total` |
+| 交互 D3D | `tools\deploy.ps1 -InteractiveD3D -Hold` + `tools\drive-interactive-d3d.ps1` | `170 passed, 0 failed, 170 total` |
+| 地图级 VM 重置 | `tools\deploy.ps1 -TestReboot` | `9 passed, 0 failed, 9 total` |
+
+口径说明（别把两次数字混着用）：
+
+- `170 = 122`（普通基线）`+ 48`（D3D 夹具）。`0.4.0` 当时是 `164 = 116 + 48`：D3D 夹具数没变，是普通基线长大了。
+- `126` 比 `125` 多的一条就是 `GetFuncAddr` 组本身；`125` 比 `122` 多的三条属于 wrapper 组。
+- 这些行目前只有 `122 / 125 / 126 / 9` 写在 [docs/STATUS.md](docs/STATUS.md) 头部表里；`170/170` 是本轮新记录，
+  `docs/STATUS.md` §4 仍写着 `164/164`（0.4.0 口径），两者不矛盾，看的是不同日期的基线。
+
+### 未完成 / 已知缺口
+
+| 项 | 现状 | 影响 |
+|---|---|---|
+| `GetPluginVersion()` | 返回硬编码 `"1.0.0"`（`src/src/extensions/ex_natives/GameInfo.cpp:42`），**不跟 `kVersion` 联动** | 不能用它判断 SDK 版本，见下面「版本号对照」 |
+| `jass.runtime.version` | 返回硬编码 `"1.0.0.0"`（`src/src/lua_engine/lua_engine/libs_runtime.cpp:245`），也不跟 `kVersion` 联动 | 同上 |
+| `jass_temp` 的语义 | 仍是待验证假设（`498a308` 把原来的断言降级为假设） | 不要在文档里当结论引用 |
+| `docs/STATUS.md` §4 的 `116/116` | 该段正文里的旧数字（同文件头部表是 `122/122`） | 引用时以头部表与本文件为准 |
+
+---
+
+## [0.4.0] — 2026-11-15
+
+`chore(d3d): pin the Lua SDK version at 0.4.0`（`d151fd7`）。这是**第一个可交付的版本**：D3D Lua SDK 从「实现完成」
+升为「可用」，并且发布产物能从提交重新构建出来。
+
+### 变更
+
+- 把 `kVersion` 从 `"0.3.0-dev"` 钉成 `"0.4.0"`（`libs_d3d.cpp:35`），`map/tests/test_d3d_sdk.lua:33` 从
+  「只断言非空字符串」改成断言精确值 `assert(d3d.version() == "0.4.0")`。
+  动因：上一版候选 `04f6b7e` 对外仍报 `0.3.0-dev`，却已被文档记为「可用」，口径自相矛盾；
+  钉版本会改变 `yd_japi.dll` 字节，所以溯源必须在 `d151fd7` 上重算（设计文档 14.4 有完整记录）。
+- 文档同步：`docs/guide/D3D-LUA-API.md` 的 `d3d.version()` 说明改为「当前 `"0.4.0"`」。
+
+这一版之前已合入、因此包含在 `0.4.0` 里的能力（都属 `0.3.0-dev` 期间完成）：P4 真实鼠标/键盘输入与统一输入事件、
+P5 生命周期（TTL / 设备状态 / 生命周期事件）、地图级 VM 重置（每次地图启动关闭并重建 Lua VM）、
+54/54 兼容 handler 覆盖 + BLP2 实机解码、文字改 UTF-16、快速上手/API/迁移三份文档。
+
+### 发布产物（clean worktree 构建，`d151fd7`）
+
+| 产物 | 大小（字节） | SHA-256 |
+|---|---:|---|
+| `newD3d9.dll`（proxy） | 90112 | `0564A518EB3CB2F91CD65D0BDC766B9FC5B8709335CFFE5274C1FED24727834B` |
+| `yd_japi.dll` | 544768 | `3A4C8CD11E54C3E357236468AA7A18D447E3578F98376071AAF3DB366510D53B` |
+| `d3d_sdk_contract_test.exe` | 23040 | `87EBB317E9E94AB0F0A333CA55F3F11A384AB937258A68ECF7FFC74A1A2304B6` |
+
+与 `docs/STATUS.md` §4、`docs/planning/D3D-LUA-SDK-DESIGN.md` §14.4 的表逐字一致。
+注意：主工作区 / `src/build/bin/Release` 里同一提交附近构建出来的 `yd_japi.dll` **不是**这组 hash，
+发布/回归一律用 clean 产物，别拿本地构建冒充。
+
+### 验证（全部使用上面的 clean 产物）
+
+| 组 | 结果 |
+|---|---|
+| 原生 ABI 合同 | `D3D SDK contract PASS: ABI v1, sessions, generation handles, dependencies, alpha/z/assets/input capabilities, failure counters, stress=1000` |
+| handler 静态合同（clean worktree 内跑 `src\src\d3d9\verify_contract.ps1`） | `D3D contract PASS: surface=54, proxy=49, canonical=5, fixture=54/54, untested=0` |
+| 普通回归 | `116 passed, 0 failed, 116 total` |
+| 交互 D3D | `164 passed, 0 failed, 164 total`（含 `D3D SDK BLP2 memory decode (raw/palette/DXT1)`、`resize=20 (target 20) lost=0 reset=20`） |
+| 地图级 VM 重置 | `8 passed, 0 failed, 8 total` |
+
+上表是 `0.4.0` 当时的验收口径；普通回归与重启回归后来因为新增测试长成了 `122` 与 `9`（见 `[Unreleased]`）。
+结论与保留限制（`device_lost` 在 1.27a 窗口模式不可观测、`ShowFpsText` 为弱断言）记录在 `docs/STATUS.md` 与设计文档 15.8.4。
+
+---
+
+## [0.3.0-dev] — 2026-11-14
+
+`feat(d3d): P4 texture subscriptions and unified input events`（`a9e1d21`）把版本从 `0.2.0-dev` 推到 `0.3.0-dev`。
+该版本线一直延续到 `d151fd7` 之前，期间合入：
+
+- P4：贴图订阅（`TextureRemoveEvent` 等）与文字/贴图统一的 `enter/leave/click` 输入事件（`a9e1d21`）。
+- 文字渲染从 ANSI 改 UTF-16（`1be5583`），中文不再乱码。
+- P4 真实输入：窗口消息 + 异步状态（`96d90f2`）。
+- P5 生命周期：TTL、设备状态、生命周期事件（`2a5b46a`）。
+- 地图级 VM 重置：每次地图启动关闭并重建 Lua VM，`func_bind` 标签表随启动清空（`252d0c4`）。
+- 54/54 兼容 handler 覆盖 + BLP2 raw/palette/DXT1 实机解码（`04f6b7e`）。
+- 用户文档三件套：`docs/guide/D3D-LUA-QUICKSTART.md`、`D3D-LUA-API.md`、`D3D-LUA-MIGRATION.md`（`c53c005`）。
+
+### 验证
+
+这些改动各自的实机记录散在 `docs/STATUS.md` §3/§4 与设计文档 §14、§15.8；本版本**没有**独立发布产物
+（`-dev` 后缀即此意），不建议任何人按 `0.3.0-dev` 对外承诺行为。
+
+---
+
+## [0.2.0-dev] — 2026-08-03
+
+`feat(d3d): add typed Lua resource SDK`（`50ebb0f`）首次引入 `kVersion`，值为 `"0.2.0-dev"`。
+同一批次（2026-08-03）合入：
+
+- 版本化 session 资源 ABI（`D3D_SDK_ABI_VERSION_1`，`d3d.abi_version()` 返回 `1`）（`b3f4da8`）。
+- typed 资源 SDK：`Context` / `Texture` / `Subscription` 三类 userdata 与 `__gc`/`__close`（`50ebb0f`）。
+- 文字与贴图统一到同一条渲染队列（`49dccfc`）。
+- 从 MPQ 读贴图资源（`5dbcfd4`）。
+
+### 验证
+
+仅当年的静态/构建校验与局部实机记录，无发布产物。**不要**把它当作可依赖的版本。
+
+---
+
+## 早期（无版本号）— 2026-06-04 → 2026-08-03
+
+`7e3bac7`（2026-06-04）起的第一阶段：DLL 注入链（callback exploit）、Lua 引擎接入、`jass.common`/`globals`/
+`japi`/`hook`/`runtime`/`message`/`debug`/`slk`/`sleep`/`storm` 等模块、D3D9 proxy 雏形（`ed2168f`、`cd9a9b0`）。
+这段时间没有 `jass.d3d`，也没有任何版本字符串，历史行为以 `docs/STATUS.md` 与逆向文档为准。
+
+---
+
+## 附录 A：版本号对照（哪个才是「SDK 版本」）
+
+| 表面 | 怎么读 | 当前值 | 代码位置 | 跟 `kVersion` 联动？ |
+|---|---|---|---|---|
+| SDK 版本 | `require("jass.d3d").version()` | `"0.4.0"` | `src/src/lua_engine/lua_engine/libs_d3d.cpp:35` | **是**（唯一来源） |
+| D3D ABI 版本 | `require("jass.d3d").abi_version()` | `1` | `D3D_SDK_ABI_VERSION_1` | 独立编号，与 SDK 版本无关 |
+| 引擎适配层 | `require("jass.runtime").version` | `"1.0.0.0"` | `src/src/lua_engine/lua_engine/libs_runtime.cpp:245`（字面量） | 否 |
+| 插件 native | `GetPluginVersion()`（JASS/Lua 均可调） | `"1.0.0"` | `src/src/extensions/ex_natives/GameInfo.cpp:42`（字面量） | 否 |
+| 引擎版本 | `GetGameVersion()` | `6374`（1.27a） | `src/src/extensions/ex_natives/GameInfo.cpp:33-36` | 否（War3 自己的版本） |
+| 二进制身份 | `(Get-FileHash <已加载模块> -Algorithm SHA256).Hash` | 视构建而定 | 文件本身 | 间接（唯一能证明「跑的是哪份文件」） |
+
+推论：**判断 SDK 版本只能看 `jass.d3d.version()`**。`GetPluginVersion()` 与 `jass.runtime.version` 是历史遗留的
+硬编码字符串，同一份 `0.4.0` 和 `0.3.0-dev` 都会报 `"1.0.0"` / `"1.0.0.0"`，没有区分能力。
+游戏内如何一步步确认，见 [docs/RELEASE.md](docs/RELEASE.md) 的「怎么确认你在跑哪个版本」。
+
+## 附录 B：0.4.0 的构建命令（可复现）
+
+~~~powershell
+git worktree add --detach build\clean-d151fd7 d151fd7
+cd build\clean-d151fd7\src
+cmd /c ""D:\vs2022\BuildTools\VC\Auxiliary\Build\vcvars32.bat" >nul && cmake -S . -B build-clean -G "Visual Studio 17 2022" -A Win32 && cmake --build build-clean --config Release"
+~~~
+
+不能直接用 `src\build.bat`：它第 3 行硬编码 `cd /d "<主工作区绝对路径>\src"`，在 detached worktree 里跑会去编译主工作区。
+现在这条流程已脚本化为 `tools/release-sdk.ps1`（见 [docs/RELEASE.md](docs/RELEASE.md)）。

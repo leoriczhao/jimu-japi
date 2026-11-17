@@ -20,6 +20,7 @@
 #include "../lua_engine/lua_engine/bridge_dispatch.h"
 #include "debug_log.h"
 #include "ex_natives/FuncBind.h"
+#include <warcraft3/jass/func_value.h>
 
 // Forward declarations
 namespace warcraft3::lua_engine::lua_loader {
@@ -45,6 +46,133 @@ namespace warcraft3::lua_engine::bridge {
 }
 
 static bool g_initialized = false;
+
+// ── Crash diagnostics ────────────────────────────────────────────────────
+// DBG_LOG goes through an async ring buffer that dies with the process, so a
+// hard crash loses exactly the lines we need. Everything here writes through
+// japi_log::sync_write() instead (one CreateFile per line, always flushed).
+//
+// japi_sync.log then holds: the module base of yd_japi.dll (so an absolute
+// address from the Windows crash dialog can be turned into a DLL offset) plus,
+// for every first-chance AV, the exception record and a raw stack walk.
+static void japi_resolve_addr(const void* addr, char* out, size_t n)
+{
+    HMODULE mod = nullptr;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)addr, &mod)) {
+        char path[MAX_PATH] = { 0 };
+        GetModuleFileNameA(mod, path, MAX_PATH);
+        const char* name = strrchr(path, '\\');
+        name = name ? name + 1 : path;
+        _snprintf_s(out, n, _TRUNCATE, "0x%08X[%s+0x%X]", (unsigned)(uintptr_t)addr,
+                    name, (unsigned)((uintptr_t)addr - (uintptr_t)mod));
+    } else {
+        _snprintf_s(out, n, _TRUNCATE, "0x%08X[?]", (unsigned)(uintptr_t)addr);
+    }
+}
+
+// Turn a recorded native address back into the name the map called. Linear on
+// purpose: this runs at crash time, where allocation is not an option.
+static const char* japi_name_of_native(uintptr_t addr)
+{
+    for (auto const& kv : warcraft3::jass::japi_function) {
+        if (kv.second.get_address() == addr) return kv.first.c_str();
+    }
+    for (auto const& kv : warcraft3::jass::jass_function) {
+        if (kv.second.get_address() == addr) return kv.first.c_str();
+    }
+    return nullptr;
+}
+
+static void japi_dump_native_ring()
+{
+    japi_log::RecEntry* ring = japi_log::rec_ring();
+    LONG pos = *japi_log::rec_pos();
+    char buf[400];
+    for (int k = 0; k < japi_log::REC_RING; ++k) {
+        int i = (int)((pos + 1 + k) % japi_log::REC_RING);
+        const japi_log::RecEntry& e = ring[i];
+        if (!e.address) continue;
+        const char* name = japi_name_of_native(e.address);
+        snprintf(buf, sizeof(buf),
+                 "[veh]   rec %s(0x%08X) a=0x%08X,0x%08X,0x%08X,0x%08X",
+                 name ? name : "?", (unsigned)e.address,
+                 e.args[0], e.args[1], e.args[2], e.args[3]);
+        japi_log::sync_write(buf);
+    }
+}
+
+static LONG CALLBACK japi_crash_veh(EXCEPTION_POINTERS* info)
+{
+    EXCEPTION_RECORD* er = info->ExceptionRecord;
+    if (er->ExceptionCode != EXCEPTION_ACCESS_VIOLATION &&
+        er->ExceptionCode != EXCEPTION_ILLEGAL_INSTRUCTION &&
+        er->ExceptionCode != EXCEPTION_PRIV_INSTRUCTION &&
+        er->ExceptionCode != EXCEPTION_STACK_OVERFLOW) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    char buf[512], a[96], b[96];
+    japi_resolve_addr(er->ExceptionAddress, a, sizeof(a));
+    unsigned op = er->NumberParameters > 0 ? (unsigned)er->ExceptionInformation[0] : 0u;
+    unsigned tgt = er->NumberParameters > 1 ? (unsigned)er->ExceptionInformation[1] : 0u;
+    snprintf(buf, sizeof(buf), "[veh] code=0x%08X at %s op=%u target=0x%08X",
+             (unsigned)er->ExceptionCode, a, op, tgt);
+    japi_log::sync_write(buf);
+
+    CONTEXT* c = info->ContextRecord;
+    snprintf(buf, sizeof(buf),
+             "[veh] eip=0x%08X esp=0x%08X ebp=0x%08X eax=0x%08X ebx=0x%08X "
+             "ecx=0x%08X edx=0x%08X esi=0x%08X edi=0x%08X",
+             (unsigned)c->Eip, (unsigned)c->Esp, (unsigned)c->Ebp, (unsigned)c->Eax,
+             (unsigned)c->Ebx, (unsigned)c->Ecx, (unsigned)c->Edx,
+             (unsigned)c->Esi, (unsigned)c->Edi);
+    japi_log::sync_write(buf);
+
+    void* frames[48];
+    USHORT n = RtlCaptureStackBackTrace(0, 48, frames, nullptr);
+    for (USHORT i = 0; i < n; ++i) {
+        japi_resolve_addr(frames[i], b, sizeof(b));
+        snprintf(buf, sizeof(buf), "[veh]   #%02u %s", (unsigned)i, b);
+        japi_log::sync_write(buf);
+        if (i >= 40) break;
+    }
+
+    // Raw EBP chain as a second opinion (RtlCaptureStackBackTrace can give up).
+    unsigned* ebp = (unsigned*)c->Ebp;
+    for (int i = 0; i < 16 && ebp; ++i) {
+        if ((uintptr_t)ebp < 0x10000 || (uintptr_t)ebp >= 0x7FFFFFFF) break;
+        unsigned ret = 0;
+        __try { ret = ebp[1]; } __except (EXCEPTION_EXECUTE_HANDLER) { break; }
+        if (!ret) break;
+        japi_resolve_addr((const void*)ret, b, sizeof(b));
+        snprintf(buf, sizeof(buf), "[veh]   ebp#%02d %s", i, b);
+        japi_log::sync_write(buf);
+        unsigned* next = nullptr;
+        __try { next = (unsigned*)ebp[0]; } __except (EXCEPTION_EXECUTE_HANDLER) { break; }
+        if (next <= ebp) break;
+        ebp = next;
+    }
+
+    japi_dump_native_ring();
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+static void japi_install_crash_diagnostics()
+{
+    static bool installed = false;
+    if (installed) return;
+    installed = true;
+    AddVectoredExceptionHandler(1, japi_crash_veh);
+
+    char a[96];
+    japi_resolve_addr((const void*)&japi_install_crash_diagnostics, a, sizeof(a));
+    char buf[256];
+    snprintf(buf, sizeof(buf), "[japi] yd_japi %s exe=0x%08X", a,
+             (unsigned)(uintptr_t)GetModuleHandleA(nullptr));
+    japi_log::sync_write(buf);
+}
 
 static bool __cdecl read_rect_bounds(uint32_t rect, float* min_x, float* min_y,
                                      float* max_x, float* max_y)
@@ -207,6 +335,14 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
         // CreateFile under the loader lock risk deadlocking the game during LoadLibrary.
         DBG_INIT();
         SYNC_LOG("Initialize() START");
+        // Crash diagnostics are opt-in (JAPI_CRASH_DIAG=1): the vectored
+        // handler dumps a symbolised stack of the faulting thread to
+        // C:\ProgramData\japi_sync.log. Off by default so a shipped DLL never
+        // installs an extra exception handler.
+        char diag_flag[8] = {0};
+        DWORD diag_len = GetEnvironmentVariableA("JAPI_CRASH_DIAG", diag_flag, sizeof(diag_flag));
+        if (diag_len > 0 && diag_flag[0] == '1')
+            japi_install_crash_diagnostics();
         sweep_stale_pid_dlls();
     } else {
         SYNC_LOG("Initialize() again: map boot, resetting the Lua VM");

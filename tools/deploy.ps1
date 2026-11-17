@@ -7,6 +7,8 @@
 #   .\tools\deploy.ps1 -DllPath "path\to\yd_japi.dll"   # custom DLL
 #   .\tools\deploy.ps1 -NoKill                          # leave War3 running after tests
 #   .\tools\deploy.ps1 -Hold                            # keep the session: waits for build\war3.kill, then closes War3
+#   .\tools\deploy.ps1 -Job                             # put War3 in a kill-on-close job (survives launcher death)
+#   .\tools\kill-war3.ps1                               # close a War3 that was left behind (also as an orphan)
 #   .\tools\deploy.ps1 -InteractivePoint                # require a real Q key for LocalPointOrder
 #   .\tools\deploy.ps1 -InteractiveUi                   # verify hover target and ability button UI
 #   .\tools\deploy.ps1 -InteractiveD3D                  # deploy proxy + run visual D3D probe
@@ -14,15 +16,18 @@
 #   .\tools\deploy.ps1 -TestReboot                      # deploy proxy + verify the Lua VM resets on map boot
 #   .\tools\deploy.ps1 -WithJassWrappers                # generate JASS wrappers for every bridge handler
 #   .\tools\deploy.ps1 -WithGetFuncAddr                 # expose builtin-style GetFuncAddr(code) in the map
+#   .\tools\deploy.ps1 -MapDir "examples\01-hello-jass"  # pack a project tree instead of map\
 param(
     [string]$DllPath = "",
     [string]$D3DProxyPath = "",
     [string]$BaseMap = "",
+    [string]$MapDir = "",
     [string]$LogFile = "",
     [string]$MapName = "",
     [int]$Timeout    = 120,
     [switch]$NoKill,
     [switch]$Hold,
+    [switch]$Job,
     [switch]$InteractivePoint,
     [switch]$InteractiveUi,
     [switch]$InteractiveD3D,
@@ -32,6 +37,9 @@ param(
     [switch]$WithJassWrappers,
 [switch]$WithGetFuncAddr
 )
+
+# Shared War3 process control (DACL repair, kill-on-close job): tools\_war3ctl.ps1.
+. (Join-Path $PSScriptRoot '_war3ctl.ps1')
 
 $Root     = Split-Path -Parent $PSScriptRoot
 $War3Dir  = "D:\Warcraft III Frozen Throne 1.27a publish"
@@ -43,6 +51,14 @@ $D3DTarget = "$War3Dir\d3d9.dll"
 $D3DProbeTarget = "$War3Dir\japi_d3d_visual_probe.bmp"
 
 if (-not $LogFile) { $LogFile = "C:\ProgramData\japi_debug.txt" }
+# The DLL hardwires its log path (src/src/debug_log.h init_file: C:\ProgramData\japi_debug.txt,
+# plus a per-pid fallback next to it). There is no env/CLI override, so any other -LogFile makes
+# this script wait on a file nobody writes and time out after a perfectly healthy run.
+if ($LogFile -notlike "C:\ProgramData\japi_debug*") {
+    Write-Host "  WARNING: -LogFile $LogFile is not where the DLL writes."
+    Write-Host "           The DLL always logs to C:\ProgramData\japi_debug.txt (per-pid fallback: japi_debug_<pid>.txt);"
+    Write-Host "           this run will time out even if the map passes. Drop -LogFile or point it under C:\ProgramData."
+}
 if (($InteractivePoint -or $InteractiveUi -or $InteractiveD3D) -and -not $PSBoundParameters.ContainsKey("Timeout")) {
     $Timeout = 3660
 }
@@ -55,6 +71,15 @@ if ($DllPath) {
     if (-not [System.IO.Path]::IsPathRooted($DllPath)) {
         $DllPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PWD.Path, $DllPath))
     }
+}
+# Resolve MapDir (a project tree with its own war3map.lua) if provided.
+# pack.ps1 resolves relative paths against its own $PWD, which is the caller's
+# PWD here, so anchoring it to $PWD keeps -MapDir symmetric with pack.ps1.
+if ($MapDir -and -not [System.IO.Path]::IsPathRooted($MapDir)) {
+    $MapDir = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PWD.Path, $MapDir))
+}
+if ($MapDir -and -not (Test-Path "$MapDir\war3map.lua")) {
+    throw "MapDir has no war3map.lua: $MapDir"
 }
 if (-not $D3DProxyPath) {
     $D3DProxyPath = "$Root\src\build\bin\Release\newD3d9.dll"
@@ -137,6 +162,7 @@ Write-Host "[1/4] Packing map..."
 $packArgs = @{}
 if ($DllPath) { $packArgs["DllPath"] = $DllPath }
 if ($BaseMap) { $packArgs["BaseMap"] = $BaseMap }
+if ($MapDir) { $packArgs["MapDir"] = $MapDir }
 if ($InteractivePoint) { $packArgs["InteractivePoint"] = $true }
 if ($InteractiveUi) { $packArgs["InteractiveUi"] = $true }
 if ($InteractiveD3D) { $packArgs["InteractiveD3D"] = $true }
@@ -183,12 +209,40 @@ if ($InteractiveD3D) {
 
 # ── Step 3: Launch War3 ────────────────────────────────────────
 Write-Host "[3/4] Launching War3..."
+# War3 1.27a's Game.dll installs a deny-only DACL on its own process object, so
+# only this launcher's creation handle may terminate the game (details and the
+# repair path: tools\_war3ctl.ps1). Cleanup prefers that creation handle and
+# falls back to rewriting the DACL; tools\kill-war3.ps1 does the same from any
+# other shell, which is what makes a leftover or orphaned game closable.
+# -Job adds a belt: the game joins a job with KILL_ON_JOB_CLOSE, so Windows
+# closes it as soon as this launcher's handle goes away - even on a force kill.
+$killFile = "$Root\build\war3.kill"   # touch it to close this session (also during -Hold)
+Remove-Item $killFile -Force -ErrorAction SilentlyContinue   # never let a stale marker kill this run
 Remove-Item $LogFile -Force -ErrorAction SilentlyContinue
 $stalePrimary = Test-Path $LogFile
 if ($stalePrimary) {
     Write-Host "  NOTE: $LogFile is locked by a stale instance; per-pid log will be used by the DLL."
 }
 $war3 = Start-Process -FilePath $War3Exe -WorkingDirectory $War3Dir -ArgumentList "-window", "-loadfile", "$TestMap" -PassThru
+$jobObject = $null
+if ($Job -and $NoKill) {
+    Write-Host "  NOTE: -Job is ignored with -NoKill (closing the job would close the game)."
+} elseif ($Job) {
+    $jobObject = New-War3Job
+    if ($jobObject.Error -ne 0) {
+        Write-Host "  WARNING: cannot create the kill-on-close job (win32 error $($jobObject.Error)); the game is not guarded."
+        $jobObject = $null
+    } else {
+        $assignError = Add-War3ProcessToJob -Job $jobObject.Handle -ProcessHandle $war3.Handle
+        if ($assignError -ne 0) {
+            Write-Host "  WARNING: cannot put War3 into the job (win32 error $assignError); the game is not guarded."
+            [void](Close-War3Job -Job $jobObject.Handle)
+            $jobObject = $null
+        } else {
+            Write-Host "  War3 runs in a kill-on-close job: if this launcher dies, Windows closes the game."
+        }
+    }
+}
 $launchTime = Get-Date
 $altLogFile = "C:\ProgramData\japi_debug_$($war3.Id).txt"
 # Watch both, but ONLY match a "Results:" line in a file whose mtime is after
@@ -229,7 +283,7 @@ while ($elapsed -lt $Timeout) {
                 $mtime = (Get-Item $cand).LastWriteTime
                 if ($mtime -lt $launchTime.AddSeconds(-2)) { continue }  # stale
                 Copy-Item $cand $tmpLog -Force -ErrorAction Stop
-                $log = Get-Content $tmpLog -Raw -ErrorAction SilentlyContinue
+                $log = Get-Content $tmpLog -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
                 if ($log -and $log -match "Results:.*total") {
                     $ready = $true
                     $LogFile = $cand
@@ -239,16 +293,21 @@ while ($elapsed -lt $Timeout) {
         }
     }
     if ($ready) { break }
+    if (Test-Path $killFile) {
+        Write-Host "  build\war3.kill appeared; closing War3."
+        Remove-Item $killFile -Force -ErrorAction SilentlyContinue
+        break
+    }
     Start-Sleep -Seconds 3
     $elapsed += 3
 }
 
 # ── Cleanup ─────────────────────────────────────────────────────
-# Only the process that launched War3 holds its creation handle; a fresh shell
-# cannot OpenProcess a War3 that runs at a higher integrity level. -Hold keeps
-# this launcher alive so the session can be closed later by touching the kill
-# file, instead of leaving an unkillable orphan behind.
-$killFile = "$Root\build\war3.kill"
+# War3 1.27a denies PROCESS_TERMINATE to every process that did not create it,
+# so this launcher's creation handle is the normal path; when it is refused, the
+# DACL repair in tools\_war3ctl.ps1 takes over (a process may rewrite the DACL of
+# a process it owns, no admin rights involved). If this launcher is killed
+# outright, nothing here runs - that is what -Job and tools\kill-war3.ps1 are for.
 if ($Hold) {
     Remove-Item $killFile -Force -ErrorAction SilentlyContinue
     Write-Host "  Holding War3 session; touch $killFile to close it"
@@ -259,13 +318,24 @@ if ($Hold) {
 }
 
 if (-not $NoKill) {
-    if (-not $war3.HasExited) {
-        $war3.Kill()
-        Start-Sleep -Seconds 1
+    if (-not (Test-War3ProcessAlive -ProcessId $war3.Id)) {
+        Write-Host "  War3 terminated"
+    } else {
+        $stop = Stop-War3Process -ProcessId $war3.Id -Process $war3 -TimeoutSeconds 20
+        if ($stop.Ok) {
+            Write-Host "  War3 terminated ($($stop.Method))"
+        } else {
+            Write-Host "  ERROR: War3 (pid $($war3.Id)) is still running: $($stop.Note)"
+            $killTool = Join-Path $PSScriptRoot 'kill-war3.ps1'
+            Write-Host ('         Close it with: powershell -ExecutionPolicy Bypass -File "' + $killTool + '"')
+        }
     }
-    Write-Host "  War3 terminated"
+    if ($jobObject) {
+        [void](Close-War3Job -Job $jobObject.Handle)
+        $jobObject = $null
+    }
 } else {
-    Write-Host "  War3 left running (-NoKill)"
+    Write-Host "  War3 left running (-NoKill); touch $killFile to close it"
 }
 
 # Read final log
@@ -273,7 +343,7 @@ Start-Sleep -Seconds 1
 if (Test-Path $LogFile) {
     try {
         Copy-Item $LogFile $tmpLog -Force -ErrorAction SilentlyContinue
-        $log = Get-Content $tmpLog -Raw -ErrorAction SilentlyContinue
+        $log = Get-Content $tmpLog -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
     } catch {}
 }
 
@@ -292,3 +362,15 @@ if ($log) {
     }
 }
 Remove-Item $tmpLog -Force -ErrorAction SilentlyContinue
+
+# Machine-checkable verdict: a run that observed failed > 0 is a hard failure.
+# A timeout stays exit 0 (documented behaviour: the map may legitimately still be
+# running, e.g. interactive suites); callers that need a strict verdict (CI, release
+# runs, tools/verify-examples.ps1) must also require a Results line themselves.
+if ($log) {
+    $verdict = [regex]::Match($log, 'Results:\s*(\d+)\s+passed,\s*(\d+)\s+failed,\s*(\d+)\s+total')
+    if ($verdict.Success -and [int]$verdict.Groups[2].Value -gt 0) {
+        Write-Host "  FAILED: $($verdict.Groups[2].Value) check(s) failed out of $($verdict.Groups[3].Value) — see the Results line above"
+        exit 1
+    }
+}

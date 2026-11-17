@@ -40,6 +40,13 @@ namespace warcraft3::lua_engine::bridge {
     bool invoke_cpp_handler(const char* name, const uint32_t* args,
                             size_t nargs, uint32_t* result);
 
+    // Push a Lua closure that calls the registered C++ handler `name` directly
+    // (no JASS call, no hashtable round-trip, no native registered in the game's
+    // name table). jass.japi uses this so Lua can reach EX*/message/D3D handlers
+    // by name, which is the YDWE contract: `jass.japi.EXSetAbilityDataReal(...)`.
+    // Returns false when `name` has no C++ handler.
+    bool push_cpp_handler(lua_State* L, const char* name);
+
     // Initialize the UnitId hook. Called from lua_loader::initialize().
     void initialize();
 

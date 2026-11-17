@@ -14,6 +14,7 @@
 #include <warcraft3/hashtable.h>
 #include <array>
 #include <string>
+#include <cstring>
 #include "StringPool.h"
 
 namespace warcraft3::japi {
@@ -934,5 +935,17 @@ namespace warcraft3::japi {
 	}
 	uint32_t EXSetBuffDataString_handler(const uint32_t* a, size_t) {
 		return EXSetBuffDataString(a[0], a[1], a[2]);
+	}
+
+	// EXSetAbilityString / EXGetAbilityString address the *shared* per-type
+	// ability ui table (CAbilityUIDef) by rawcode instead of by an ability
+	// handle taken from a unit. External YDWE-style maps write icons and
+	// tooltips exclusively through this pair, so it has to exist.
+	uint32_t EXGetAbilityString_handler(const uint32_t* a, size_t) {
+		return EXGetAbilityString(a[0], a[1], a[2]);
+	}
+
+	uint32_t EXSetAbilityString_handler(const uint32_t* a, size_t) {
+		return EXSetAbilityString(a[0], a[1], a[2], a[3]);
 	}
 }

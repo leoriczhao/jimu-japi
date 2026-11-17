@@ -12,6 +12,7 @@
 #include <slk/ObjectManager.hpp>
 #include <slk/storm_adapter.hpp>
 #include <slk/table/SlkTable.hpp>
+#include <cstdint>
 #include <string>
 #include <memory>
 #include <cstdio>
@@ -43,11 +44,12 @@ enum slk_type_index {
 	SLK_UPGRADE,
 	SLK_DOODAD,
 	SLK_DESTRUCTABLE,
+	SLK_MISC,
 	SLK_TYPE_COUNT
 };
 
 static const char* slk_type_names[SLK_TYPE_COUNT] = {
-	"ability", "buff", "unit", "item", "upgrade", "doodad", "destructable"
+	"ability", "buff", "unit", "item", "upgrade", "doodad", "destructable", "misc"
 };
 
 // ── Cached SlkTable per type ───────────────────────────────────
@@ -76,30 +78,70 @@ static ::slk::SlkTable* get_or_load_table(lua_State* L, int type_idx)
 	auto& mgr = get_object_manager();
 	std::unique_ptr<::slk::SlkTable> table(new ::slk::SlkTable);
 
+	// Prefer the object-aware load: base game data merged with the map's own
+	// war3map.w3* object data (ObjectManagerLoadObjectTable falls back to the
+	// base tables alone when the map ships no object files, e.g. foreign maps).
+	bool loaded = true;
 	switch (type_idx) {
 	case SLK_ABILITY:
-		mgr.load_ability(*table);
+		loaded = mgr.load(::slk::ROBJECT_TYPE::ABILITY, *table);
 		break;
 	case SLK_BUFF:
-		mgr.load_buff(*table);
+		loaded = mgr.load(::slk::ROBJECT_TYPE::BUFF, *table);
 		break;
 	case SLK_UNIT:
-		mgr.load_unit(*table);
+		loaded = mgr.load(::slk::ROBJECT_TYPE::UNIT, *table);
 		break;
 	case SLK_ITEM:
-		mgr.load_item(*table);
+		loaded = mgr.load(::slk::ROBJECT_TYPE::ITEM, *table);
 		break;
 	case SLK_UPGRADE:
-		mgr.load_upgrde(*table);
+		loaded = mgr.load(::slk::ROBJECT_TYPE::UPGRADE, *table);
 		break;
 	case SLK_DOODAD:
-		mgr.load_doodad(*table);
+		loaded = mgr.load(::slk::ROBJECT_TYPE::DOODAD, *table);
 		break;
 	case SLK_DESTRUCTABLE:
-		mgr.load_destructable(*table);
+		loaded = mgr.load(::slk::ROBJECT_TYPE::DESTRUCTABLE, *table);
+		break;
+	case SLK_MISC:
+		// MiscData.txt + MiscData_Units.txt + MiscGameData.txt + the map's own
+		// war3mapmisc.txt merged on top: slk.misc.Misc.DefenseArmor etc.
+		loaded = mgr.load(::slk::ROBJECT_TYPE::MISC, *table);
 		break;
 	default:
 		return nullptr;
+	}
+
+	if (!loaded) {
+		// Object data path failed: retry with the plain base-table loaders.
+		table.reset(new ::slk::SlkTable);
+		switch (type_idx) {
+		case SLK_ABILITY:
+			mgr.load_ability(*table);
+			break;
+		case SLK_BUFF:
+			mgr.load_buff(*table);
+			break;
+		case SLK_UNIT:
+			mgr.load_unit(*table);
+			break;
+		case SLK_ITEM:
+			mgr.load_item(*table);
+			break;
+		case SLK_UPGRADE:
+			mgr.load_upgrde(*table);
+			break;
+		case SLK_DOODAD:
+			mgr.load_doodad(*table);
+			break;
+		case SLK_DESTRUCTABLE:
+			mgr.load_destructable(*table);
+			break;
+		case SLK_MISC:
+			mgr.load_misc(*table);
+			break;
+		}
 	}
 
 	::slk::SlkTable* raw = table.release();
@@ -153,7 +195,24 @@ static int type_index(lua_State* L)
 		return 1;
 	}
 
-	const char* obj_id = luaL_checkstring(L, 2);
+	// Object keys may be passed either as a 4-char id string ('hfoo') or as the
+	// integer rawcode returned by natives such as GetDestructableTypeId /
+	// GetUnitTypeId. Accept both, matching the YDWE slk library behaviour.
+	char id_buf[8] = { 0 };
+	const char* obj_id = nullptr;
+	if (lua_type(L, 2) == LUA_TNUMBER) {
+		uint32_t raw = (uint32_t)lua_tointeger(L, 2);
+		// Rawcodes are big-endian in their integer form: 'YTfb' == 0x59546662.
+		id_buf[0] = (char)((raw >> 24) & 0xFF);
+		id_buf[1] = (char)((raw >> 16) & 0xFF);
+		id_buf[2] = (char)((raw >> 8) & 0xFF);
+		id_buf[3] = (char)((raw) & 0xFF);
+		id_buf[4] = '\0';
+		obj_id = id_buf;
+	}
+	else {
+		obj_id = luaL_checkstring(L, 2);
+	}
 
 	::slk::SlkTable* table = get_or_load_table(L, type_idx);
 	if (!table) {

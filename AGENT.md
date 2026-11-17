@@ -9,6 +9,9 @@
 | **DLL 编译** | `src/src/**/*.cpp` | `src/build/bin/Release/yd_japi.dll` | `src/build.bat` |
 | **地图打包** | `map/*.lua` + 基座地图 + DLL | `build/output.w3x` | `tools/pack.ps1` |
 | **部署测试** | `build/output.w3x` | War3 日志 | `tools/deploy.ps1` |
+| **新建地图项目（作者）** | 项目名 + 基座地图 | 可打包的项目目录 | `tools/new-project.ps1` |
+| **示例验证（作者）** | `examples/**` | 每个示例的 `Results:` 行 | `tools/verify-examples.ps1` |
+| **接口一致性（引擎）** | `src/src/**` 里的注册表 | 每个 native 的 `[PASS]`/`[FAIL]`/`[SKIP]` + `Conformance:` 汇总行 | `tests/conformance/run.ps1` |
 
 ## 架构
 
@@ -29,6 +32,35 @@ war3map.j（干净，只调标准 JASS native）
 - **war3map.j**：干净的 JASS 代码，只调 `UnitId`/`SaveStr`/`LoadReal` 等标准 native
 - **callback**：exploit 代码，通过 `StartCampaignAI` 加载（AI 脚本不走 JASS 检测）
 - **DLL**：inline hook `UnitId` 做 JASS→Lua 分发（哈希表传参）；Lua VM 在首次 ExecuteFunc 时惰性创建（对齐内置 JAPI）
+
+---
+
+## 工作流 0：SDK 使用者（地图作者）
+
+地图作者的入口不是 `map/`（那是本仓库的回归工程），而是「一个地图项目目录 + `-MapDir`」：
+
+```powershell
+# 1. 生成项目（war3map.lua + lib/ + tests/ + config + base-map + README）
+.\tools\new-project.ps1 -Name MyMap -Path ..\my-maps
+
+# 2. 打包（项目目录自带基座地图，不依赖 reference/empty-map）
+.\tools\pack.ps1 -MapDir ..\my-maps\MyMap -BaseMap ..\my-maps\MyMap\base-map -OutFile build\MyMap.w3x
+
+# 3. 打包 + 部署 + 等结果（日志：C:\ProgramData\japi_debug.txt）
+.\tools\deploy.ps1 -MapDir ..\my-maps\MyMap -BaseMap ..\my-maps\MyMap\base-map -MapName MyMap.w3x
+```
+
+| 资源 | 路径 | 说明 |
+|------|------|------|
+| 上手文档 | `docs/guide/SDK-QUICKSTART.md` | 30 分钟从零到第一个玩法 |
+| 模块指南 | `docs/guide/SDK-GUIDE.md` | 按 `jass.*` 模块讲怎么用 |
+| 玩法配方 | `docs/guide/SDK-COOKBOOK.md` | 可直接粘贴的代码片段 |
+| 示例 | `examples/`（`manifest.json` + `tools/verify-examples.ps1`） | 10 个最小可运行示例 |
+| 版本与变更 | `CHANGELOG.md` | SDK 版本策略与历史 |
+| 出包流程 | `docs/RELEASE.md` + `tools/release-sdk.ps1` | 可复现的发布流程 |
+| 自包含作者包 | `build\sdk\<ver>-<sha7>\sdk\README.md`（`release-sdk.ps1 -SdkBundle` 产出） | 文档+示例+脚本+vendor+二进制一体，解压即用 |
+
+`-MapDir` 指向的目录只需要有 `war3map.lua`（入口），其下所有 `*.lua` 会被递归内联，模块名 = 相对路径去掉 `.lua` 并把 `/` 换成 `.`（`lib/util.lua` → `require "lib.util"`）。
 
 ---
 
@@ -146,7 +178,7 @@ cd src; .\build.bat; cd ..
 
 ## 配置管理
 
-**当前实现**：War3 安装路径在 `tools/deploy.ps1` 第 18 行硬编码（`$War3Dir = "D:\Warcraft III Frozen Throne 1.27a publish"`），不同的机器请直接改这一行。`tools/config.local.ps1`（gitignored）已预留但**尚未接入**任何脚本；`config.example.ps1` 描述的 `-War3Dir` 参数 / `WAR3_DIR` 环境变量是规划中的方案，当前不可用。
+**当前实现**：War3 安装路径在 `tools/deploy.ps1` 顶部硬编码（`$War3Dir = "D:\Warcraft III Frozen Throne 1.27a publish"`），不同的机器请直接改这一行。`tools/config.local.ps1`（gitignored）已预留但**尚未接入**任何脚本；`config.example.ps1` 描述的 `-War3Dir` 参数 / `WAR3_DIR` 环境变量是规划中的方案，当前不可用。
 
 ---
 
@@ -159,7 +191,8 @@ cd src; .\build.bat; cd ..
 | `-BaseMap` | `reference\empty-map` | 基座地图文件或 unpacked 源目录 |
 | `-DllPath` | `src\build\bin\Release\yd_japi.dll` | DLL 路径 |
 | `-OutFile` | `build\output.w3x` | 输出路径 |
-| `-MapDir` | `map` | Lua 源码目录 |
+| `-MapDir` | `map` | Lua 源码目录（任意自带 `war3map.lua` 的项目树） |
+| `-WorkDir` | `build\work` | 中间产物目录；并行打包时给每个任务一个独立目录 |
 
 **deploy.ps1**：
 
@@ -167,8 +200,13 @@ cd src; .\build.bat; cd ..
 |------|--------|------|
 | `-BaseMap` | `reference\empty-map`（由 pack.ps1 采用） | 可覆盖的基座地图文件或源目录 |
 | `-DllPath` | 同 pack.ps1 | DLL 路径 |
-| `-LogFile` | `C:\ProgramData\japi_debug.txt` | 结果判定日志 |
+| `-LogFile` | `C:\ProgramData\japi_debug.txt` | 结果判定日志。DLL 硬编码写这个路径（`src/src/debug_log.h`，另有 `japi_debug_<pid>.txt` 兜底），**没有覆盖开关**；传别的路径会让 deploy 等一个永远没人写的文件而超时（脚本现在会打 WARNING） |
 | `-Timeout` | 120 | 超时秒数（超时只 WARNING，不以非零退出） |
 | `-NoKill` | 开关 | 不杀 War3 |
+| `-MapDir` | 不传（用 `map`） | 透传给 pack.ps1：打包任意项目树 |
+| `-MapName` | `output.w3x` | 部署到 `Maps\Test\<MapName>`；多人/多会话共用游戏目录时必须区分 |
+| `-InteractiveD3D` / `-Demo` / `-TestReboot` | 开关 | 额外安装 D3D 代理并断言其导出表；交互模式默认 `-Timeout 3660` |
+
+其余开关（`-WithJassWrappers` `-WithGetFuncAddr` `-WithDebugger` `-Hold` …）见 `tools/deploy.ps1` 头部 usage。
 
 注意：deploy.ps1 **没有** `-War3Dir` 参数，War3 路径见上方"配置管理"。
