@@ -35,3 +35,4 @@ Desktop.ini
 # Reference: ignored subdirs (submodules or not needed)
 reference/ujapi/
 reference/old-japi/
+.alma-snapshots
