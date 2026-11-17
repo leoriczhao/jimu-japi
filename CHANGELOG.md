@@ -4,7 +4,7 @@
 > 版本号唯一来源：`src/src/lua_engine/lua_engine/libs_d3d.cpp:35` 的 `constexpr const char* kVersion`；
 > 只有 **Lua 侧 `jass.d3d` 对外 API 变化**时才递增，工具链 / 文档 / 示例 / 脚手架改动一律不递增。
 > 发布流程见 [docs/RELEASE.md](docs/RELEASE.md)；当前实现、验证强度与缺口以 [docs/STATUS.md](docs/STATUS.md) 为唯一权威。
-> 最后更新：2026-11-16（记录 `0.4.0` 与之后的 `[Unreleased]` 改动）。
+> 最后更新：2026-11-17（记录 `0.4.0` 与之后的 `[Unreleased]` 改动）。
 
 约定：
 
@@ -30,6 +30,44 @@
 ---
 
 ## [Unreleased]
+
+### 新增：接口一致性测试台（`tests/conformance/`，2026-11-17）
+
+把「引擎到底实现了什么」变成一张会失败的表格 —— 一张独立最小地图，不依赖 `map\` 的 demo，也不依赖任何移植层 shim，只用引擎：
+
+| 文件 | 作用 |
+|---|---|
+| `tests/conformance/war3map.lua` | 测试本体：夹具（步兵 `hfoo` + 技能 `AHbz`）+ 十三组断言（A 模块 / B `jass.common` / C handler 存在性 / D 返回类型 / E 语义往返 / F slk / G message / H storm / I 外部图的 16 个 EX 使用点 / J EX* 真 native / K console+log / L bignum / M setter 返回值） |
+| `tests/conformance/gen-manifest.mjs` → `manifest.lua` | **生成物**：从 `src/` 剥注释后抽 `register_cpp_handler`（可被 Lua 调用的 handler，66 个）与 `jass::japi_add`（声明的 native，39 个）；注册表多一个 handler，C 组自动多一行 |
+| `tests/conformance/run.ps1` | 一条命令：语法校验 → 独占 war3 → 打包部署 → 过滤 `[PASS]/[FAIL]/[SKIP]` → 打印两行汇总与 exit code |
+| `tests/conformance/check-syntax.lua` | `w3x2lni-lua` 的 `loadfile` 校验（打包器原样拼接，语法错在游戏里只有一行 FATAL） |
+| `tests/conformance/README.md` | 断言分组、怎么加用例、边界、已捕获缺陷 |
+
+**实机结果**（`yd_japi.dll` 633856 B，`816E5F347743538A9458B49431381A8B803B011697B41E6A19557215DBD44D26`）：`Conformance: 170 passed, 0 failed, 4 skipped` / `Results: 170 passed, 0 failed, 170 total`，deploy exit 0。
+
+### 新增：`jass.console` / `jass.log` / `jass.bignum` / `jass.storm.save` / `slk.misc`（2026-11-17）
+
+这几个模块 builtin-japi 有、我们此前没有；外部 YDWE 谱系图全靠它们，所以补成真实现（不再靠假 shim）：
+
+| 模块 | 实现 | 验证 |
+|---|---|---|
+| `jass.console` | 新 `src/src/lua_engine/lua_engine/libs_console.cpp`：`enable`/`write`/`flush`/`clear` 写 `debug_log.h` 的 `AllocConsole` 控制台并镜像 `OutputDebugString`（没有控制台时也能看见） | conformance K 组 |
+| `jass.log` | 新 `libs_log.cpp`：真写 `<游戏目录>\<log.path>log-YYYYMMDD.log`，一行一次调用；路径按 UTF-16 处理（1.27a 是 ANSI 进程，脚本串是 UTF-8），默认 `logs\map\` | K 组 + 实机真的落盘 |
+| `jass.bignum` | 新 `libs_bignum.cpp`：32 位 limb 大数（`new`/`bin`/`powmod`）+ 自写 SHA-1；`tostring`/`sha1` 都是小写十六进制、不补零（与上游 RSA 校验同口径） | L 组往返 |
+| `jass.storm.save` | `libs_storm.cpp` 新增：把 Lua 串写进地图目录下的真实文件；`storm.load` 在 MPQ 未命中时回落读同目录 | H 组 `save → has → load` 往返 |
+| `slk.misc` | `libs_slk.cpp` 第 8 张表：`ObjectManager` 的 misc 数据 + 地图 `war3mapmisc.txt` 合并（`DefenseArmor` 等） | F 组 |
+
+### 修复：bridge 字符串返回 ABI；41 个 EX* 变成真 JASS native（2026-11-17）
+
+| 问题 | 根因与修法 | 验证 |
+|---|---|---|
+| 所有 EX* 字符串 getter 返回垃圾（读 `AHbz` 的提示得到 `playerevent`） | `jass::create_string()` 返回的是 **JASS 字符串句柄索引**（实测 `create_string("Blizzard") == 0x30`），必须 `vm->string_table->get(idx)` 拿节点再 `jass::from_string()`；原实现按「`>=0x10000` 当句柄、否则当脚本 string id」猜，小值全走错。`bridge_dispatch.cpp` 新增 `resolve_string_result()`：句柄表优先、脚本 string id 回落且检查 `reverse_table::size` | conformance E 组转绿；探针打印 `203=暴风雪 / 204=…\BTNBlizzard.blp / 215=暴风雪(…)` |
+| 41 个 EX* 名字在 JASS 里不存在 | 根因：`initialize_ex_natives()` 只 `register_cpp_handler`，从不调 6 个 `Initialize*` ⇒ 那些 `jass::japi_add` 全是死代码。新增 `register_real_ex_natives()` 依次调用 `InitializeAbilityState`/`ItemState`/`Effect`/`EventDamageData`/`GameInfo`/`DisplayChat` | conformance J 组；**`-WithJassWrappers` 仍 125/125**（同名 native 会与 `gen-jass-wrappers.ps1` 生成的 wrapper 撞名，实测没撞） |
+| bridge 的 `V`（void）setter 返回 `nil`，与 UjAPI 的谓词语义不符 | `bridge_dispatch.cpp`：`spec.ret == 'V'` 时推 `true`（18 个 setter 受影响） | conformance M 组 |
+| `EXGetUnitState`/`EXSetUnitState` 调不到 | `UnitState.cpp` 新增 `resolve_real_unit_state()`：用 `jass::jass_func("GetUnitState"/"SetUnitState")->get_address()` 填 `RealGetUnitState`/`RealSetUnitState`（原本一直是空指针），再注册两个 bridge handler | conformance E 组 |
+| `EXGetAbilityString`/`EXSetAbilityString` 缺失 | 按共享的 per-type ability UI 表（`CAbilityUIDef`）实现，按 rawcode 而不是单位上的 ability handle 寻址 | conformance E 组 |
+| 外来图的物编查不到（`slk.unit` 空、`slk.destructable[整数]` 崩） | `libs_slk.cpp`：7 张表改 `mgr.load(::slk::ROBJECT_TYPE::…, table)`（带地图物编合并；地图没有该表时 `ObjectManager` 自己回落基表），失败才回落原来的纯基表；`type_index` 接受数字 rawcode（大端 `'YTfb' == 0x59546662`） | conformance F 组 |
+| Lua 侧调不到只经 `register_cpp_handler` 注册的 handler | 新增 `bridge::push_cpp_handler`，`libs_japi.cpp` 的 `japi_index` 在 `jass::japi_func` 取不到时回落它 ⇒ 66 个 bridge handler 全部可当 native 调用，且不动 JASS 命名空间 | conformance C 组（66 条） |
 
 自 `0.4.0`（`d151fd7`，2026-11-15）以来的改动。**SDK 版本号仍是 `0.4.0`**：`jass.d3d` 的 Lua 侧 API 没有变化，
 本轮加的是 JASS 侧通道、工具链、示例、文档与脚手架。日后若动 `jass.d3d` 的对外行为，按 `0.5.0` 递增。
@@ -110,6 +148,19 @@ exit 0、干净 worktree 自动创建并删除。`498a308` 那次包内 hash 与
 
 - `release-sdk.ps1` 一旦内嵌中文就必须存成 UTF-8 **带 BOM**。它原来是纯 ASCII 无 BOM，加中文后 PS 5.1 按 ANSI 解码，解析直接报「意外的标记」；改存带 BOM 后正常（`tools\new-project.ps1` 本来就是 BOM 先例）。任何工具重写该文件都可能把 BOM 丢掉，改完确认前 3 字节是 `EF BB BF`。
 - PowerShell 变量名**不区分大小写**：`[switch]$SdkBundle` 与本地 `$sdkBundle = $null` 是同一个变量，开关刚被读就被置空，Step5 整段静默跳过（首跑 summary 里连 bundle 行都没有）。改名 `$bundleInfo` 后才跑通。这是本会话第二次踩同类坑（第一次是 `verify-examples.ps1` 的 `$live` vs `[switch]$Live`）：**开关名不要当同名局部变量复用**。
+
+### 修复：调试控制台乱码 + 关不掉的孤儿 War3
+
+| 问题 | 修法 | 验证 |
+|---|---|---|
+| 控制台满屏乱码（日志文件本身是合法 UTF-8，`chcp` = 936） | `src/src/debug_log.h` 的 `init_console()`：`AllocConsole()` 后加 `SetConsoleOutputCP(CP_UTF8)`/`SetConsoleCP(CP_UTF8)`，并用 `CONSOLE_FONT_INFOEX` 把字体换成 TrueType 中文字体（光栅 Terminal 字体没有 CJK 字形）。字体名必须写成 C++ universal character names（`L"\u65b0\u5b8b\u4f53"`）：.h 是 UTF-8 而 MSVC 按 936 编译，直接写中文报 C2001 | 实机：控制台 `[log.debug] 日志系统装载完毕,向着星辰大海出击!` 正常（`a5dff44`） |
+| 游戏成了孤儿进程就再也杀不掉 | 根因：1.27a 发布版的 `Game.dll` 启动时给自身进程对象装 `DENY 0x001FFFFF \Everyone`（导入表有 `AddAccessDeniedAce`/`SetSecurityInfo`），但进程 owner 隐式持有 `READ_CONTROL`+`WRITE_DAC` ⇒ 不用提权：`OpenProcess(READ_CONTROL\|WRITE_DAC)` → `SetSecurityInfo` 写回「`SYSTEM` + 当前用户 `PROCESS_ALL_ACCESS`」的 DACL → 正常 `TerminateProcess`。封装在新增的 `tools/_war3ctl.ps1`（dot-source 库，含 Toolhelp 判活、DACL 修复、Job Object），命令行入口是新增的 `tools/kill-war3.ps1`（无参数 = 关掉所有 `war3.exe`，`-DryRun` 只看能否打开）；`tools/deploy.ps1` 收尾改走 `Stop-War3Process`（先创建句柄，失败再「修复 DACL + Terminate」，逐轮重试），并新增 `-Job` 把游戏放进 `KILL_ON_JOB_CLOSE` 的 Job Object，启动器被强杀时由内核收尸 | 实机（2026-11-16，`yd_japi.dll` `26D1FA3D…`）：默认回归 `122 passed, 0 failed, 122 total`；`-Job` + `Stop-Process` 掉启动器 → 4 s 内游戏消失；无 `-Job` 强杀启动器 → 孤儿存活（`terminateAccess=False`），`tools\kill-war3.ps1` → `pid 35708 closed (dacl repair + terminate)`；外部 PowerShell 单独起的游戏同样能关 |
+| `verify-examples.ps1 -Live` 可能在已有游戏运行时开跑 | 它用 `Get-Process -Name war3` 判活，而 .NET 的进程枚举会**静默跳过**拒绝访问的游戏进程（DACL 生效后正是这种情况）⇒ 4 处判活改走 `tools\_war3ctl.ps1` 的 CIM/tasklist 查询（`Get-War3ProcessId`） | 静态 `10 passed, 0 failed, 10 total`；`-Live -Filter 01-hello-jass` → `[live] ok (5/5 passed)` |
+| `tools\release-sdk.ps1` 在 Windows PowerShell 5.1 下直接语法报错（`Unexpected token 'pack.ps1' + $bt ...` @ line 506） | 文件是**无 BOM 的 UTF-8**，5.1 按 ANSI（936）解码，中文串里映射不到的字节被吞成 `?`、把引号吃掉 ⇒ 加 UTF-8 BOM（与 `new-project.ps1` 一致；PowerShell 7 不受影响） | 5.1 下 `-NoBuild -SdkBundle` 跑通：685 文件 / 90.3 MB / 685 hashed，`tools` 13 个（含 `_war3ctl.ps1`、`kill-war3.ps1`） |
+
+原「DLL exit watch」方案（`japi_install_exit_watch()` 轮询 `JAPI_EXIT_MARKER`/`JAPI_PARENT_PID` 后 `ExitProcess`）**已回滚**：给 DLL 加一个只为关进程而存在的方法并不合适，`JAPI_EXIT_*` 约定随之取消，`deploy.ps1` 不再导出这些环境变量（`src/src/extensions/dllmain.cpp` 删掉整段 watch 线程与非零退出前的 `DeleteFileA` 分支）。
+
+⇒ **不需要用管理员权限启动 DSH**：任何以当前用户运行的进程都能修 DACL 再关游戏（owner 隐式权限恒定）。注意游戏**启动早期会二次安装 deny ACE**（实测 t=6.5 s 修好后 `OpenProcess(PROCESS_TERMINATE)` 又变 `win32=5`，到 t=10.5 s 才稳定），所以 `Stop-War3Process` 是「修复 + Terminate 紧挨着」并逐轮重试；启动完成后不会再装回（实测 10 s 后 DACL 仍是我们的两条 ALLOW）。`-Job` 是「启动器被强杀、来不及收尾」时的额外保险；`tools\kill-war3.ps1` 用于清历史孤儿或外部起的游戏。
 
 ### 验证（2026-11-16 实机，本地构建 `yd_japi.dll` = `87C83BA1CE0E6E413CEA7B9D6018E9A289259EC9C2F01EE02E7827DAF6661908`）
 

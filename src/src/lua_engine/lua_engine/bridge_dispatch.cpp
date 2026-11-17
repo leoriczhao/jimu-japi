@@ -534,6 +534,48 @@ namespace warcraft3::lua_engine::bridge {
     // marshals Lua arguments into the handler ABI (uint32 slots, reals kept as
     // float bits, strings as jstring_t) and converts the result back.
 
+    // Resolve a string-valued handler result to characters.
+    //
+    // Two different ABIs end up here:
+    //   * jass::create_string() — used by every EX* helper — returns a JASS
+    //     string *handle index*. The VM's string_fasttable maps the index to a
+    //     handle node, and only that node yields the characters through
+    //     jass::from_string(). Measured with the P1 probe:
+    //     create_string("Blizzard") == 0x30, string_table->get(0x30) -> "Blizzard".
+    //   * a compiled-script string id (as stored by the JASS symbol table) is
+    //     resolved through symbol_table->string_table->at().
+    // The magnitude of the value does not tell them apart for every case, so the
+    // handle table is tried first and the symbol table is only a fallback.
+    static const char* resolve_string_result(uint32_t value) {
+        if (!value) return nullptr;
+
+        jass_vm_t* vm = get_jass_vm();
+        if (!vm) return nullptr;
+
+        if (value < 0x10000u) {
+            if (vm->string_table) {
+                uintptr_t node = vm->string_table->get(value);
+                if (node && !::IsBadReadPtr((void*)node, 0x10)) {
+                    const char* s = jass::from_string((jass::jstring_t)node);
+                    if (s && !::IsBadReadPtr(s, 1)) return s;
+                }
+            }
+
+            if (vm->symbol_table && vm->symbol_table->string_table) {
+                hashtable::reverse_table* table = vm->symbol_table->string_table;
+                if (value < table->size) {          // at() does no bounds check
+                    const char* s = jass::from_stringid(value);
+                    if (s && !::IsBadReadPtr(s, 1)) return s;
+                }
+            }
+            return nullptr;
+        }
+
+        if (::IsBadReadPtr((void*)(uintptr_t)value, 0x20)) return nullptr;
+        const char* s = jass::from_string((jass::jstring_t)value);
+        return (s && !::IsBadReadPtr(s, 1)) ? s : nullptr;
+    }
+
     static void push_handler_result(lua_State* L, char ret, uint32_t result) {
         switch (ret) {
             case 'I':
@@ -546,17 +588,7 @@ namespace warcraft3::lua_engine::bridge {
                 jassbind::push_real(L, result);
                 break;
             case 'S': {
-                // Handlers disagree on the string ABI: natives return a string
-                // *id* (small int, resolved through the string table) while the
-                // EX* helpers hand back a fresh jstring_t *handle* (heap
-                // pointer). Pick by magnitude; both live in low memory on 32-bit.
-                const char* s = nullptr;
-                if (result >= 0x10000u) {
-                    s = jass::from_string((jass::jstring_t)result);
-                }
-                else if (result) {
-                    s = jass::from_stringid(result);
-                }
+                const char* s = resolve_string_result(result);
                 lua_pushstring(L, s ? s : "");
                 break;
             }
@@ -615,7 +647,15 @@ namespace warcraft3::lua_engine::bridge {
             return luaL_error(L, "jass.japi: handler '%s' raised a native exception", name);
         }
 
-        if (spec.ret == 'V' || spec.ret == 0) return 0;
+        // 'V' means the handler returns void in the JASS ABI, but every Lua
+        // caller (and UjAPI's own documentation) treats setters as predicates:
+        // `if EXSetAbilityDataReal(...) then` must work. A handler that ran
+        // without raising the SEH guard has done its job, so report success.
+        if (spec.ret == 'V') {
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+        if (spec.ret == 0) return 0;
         push_handler_result(L, spec.ret, result);
         return 1;
     }

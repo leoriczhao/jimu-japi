@@ -11,6 +11,7 @@
 | **部署测试** | `build/output.w3x` | War3 日志 | `tools/deploy.ps1` |
 | **新建地图项目（作者）** | 项目名 + 基座地图 | 可打包的项目目录 | `tools/new-project.ps1` |
 | **示例验证（作者）** | `examples/**` | 每个示例的 `Results:` 行 | `tools/verify-examples.ps1` |
+| **接口一致性（引擎）** | `src/src/**` 里的注册表 | 每个 native 的 `[PASS]`/`[FAIL]`/`[SKIP]` + `Conformance:` 汇总行 | `tests/conformance/run.ps1` |
 
 ## 架构
 

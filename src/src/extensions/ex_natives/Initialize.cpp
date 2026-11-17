@@ -47,6 +47,8 @@ namespace warcraft3::japi {
 	uint32_t EXGetAbilityDataString_handler(const uint32_t* args, size_t nargs);
 	uint32_t EXSetAbilityDataString_handler(const uint32_t* args, size_t nargs);
 	uint32_t EXSetAbilityAEmeDataA_handler(const uint32_t* args, size_t nargs);
+uint32_t EXGetAbilityString_handler(const uint32_t* args, size_t nargs);
+uint32_t EXSetAbilityString_handler(const uint32_t* args, size_t nargs);
 	uint32_t EXGetBuffDataString_handler(const uint32_t* args, size_t nargs);
 	uint32_t EXSetBuffDataString_handler(const uint32_t* args, size_t nargs);
 
@@ -94,6 +96,37 @@ namespace warcraft3::japi {
 
 	using namespace warcraft3::lua_engine::bridge;
 
+	// P3-E1: the EX* surface is exposed two ways on purpose.
+	//
+	//   * bridge handler (UnitId RPC + the jass.japi closure) — the path Lua uses.
+	//     Its marshalling is the tested one (P1 conformance: string-result ABI,
+	//     real/boolean types) and it survives the native table being rebuilt.
+	//   * real JASS native (jass::japi_add) — the YDWE / builtin-japi contract:
+	//     the name resolves through jass.debug.jass_func_address() and through a
+	//     JASS native declaration compiled after this point (e.g. the reboot child
+	//     map), which is what "EX* is a native" means for map authors.
+	//
+	// jass.japi prefers the bridge handler (libs_japi.cpp japi_index), so adding
+	// the native cannot change what Lua sees.
+	void InitializeAbilityState();
+	void InitializeEffect();
+	void InitializeItemState();
+	void InitializeEventDamageData();
+	void InitializeGameInfo();
+	void InitializeDisplayChat();
+
+	static void register_real_ex_natives()
+	{
+		InitializeAbilityState();     // 16 ability natives (EXGetUnitAbility …)
+		InitializeEffect();           // 13 effect natives (EXSetEffectXY …)
+		InitializeItemState();        //  2 item natives (EXGetItemDataString …)
+		InitializeEventDamageData();  //  2 damage natives (EXGetEventDamageData, EXSetEventDamage)
+		InitializeGameInfo();         //  4 game info natives (GetMapName/GetGameVersion/GetPluginVersion/Hex)
+		InitializeDisplayChat();      //  1 display native (EXDisplayChat)
+		// InitializeCodeRunLogs() stays empty: open_code_run_logs is a plugin
+		// lifecycle entry point reached through the bridge, never a map-facing native.
+	}
+
 	void initialize_ex_natives()
 	{
 		install_event_damage_hooks();
@@ -129,6 +162,8 @@ namespace warcraft3::japi {
 		register_cpp_handler("EXGetAbilityDataString", "(III)S", EXGetAbilityDataString_handler);
 		register_cpp_handler("EXSetAbilityDataString", "(IIIS)V",EXSetAbilityDataString_handler);
 		register_cpp_handler("EXSetAbilityAEmeDataA",  "(II)B",  EXSetAbilityAEmeDataA_handler);
+	register_cpp_handler("EXGetAbilityString",     "(III)S", EXGetAbilityString_handler);
+	register_cpp_handler("EXSetAbilityString",     "(IIIS)V",EXSetAbilityString_handler);
 		register_cpp_handler("EXGetBuffDataString",    "(II)S",  EXGetBuffDataString_handler);
 		register_cpp_handler("EXSetBuffDataString",    "(IIS)B", EXSetBuffDataString_handler);
 
@@ -174,5 +209,10 @@ namespace warcraft3::japi {
 		register_cpp_handler("SetLittleMapX",          "(R)V",   SetLittleMapX_handler);
 		register_cpp_handler("GetLittleMapY",          "()R",    GetLittleMapY_handler);
 		register_cpp_handler("SetLittleMapY",          "(R)V",   SetLittleMapY_handler);
+
+		// P3-E1: publish the same surface as real JASS natives. japi_add only
+		// queues the entry; dllmain Step 3 flushes the queue into the current
+		// JASS native table (a fresh table after every map boot).
+		register_real_ex_natives();
 	}
 }

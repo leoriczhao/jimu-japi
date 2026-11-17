@@ -44,11 +44,12 @@ enum slk_type_index {
 	SLK_UPGRADE,
 	SLK_DOODAD,
 	SLK_DESTRUCTABLE,
+	SLK_MISC,
 	SLK_TYPE_COUNT
 };
 
 static const char* slk_type_names[SLK_TYPE_COUNT] = {
-	"ability", "buff", "unit", "item", "upgrade", "doodad", "destructable"
+	"ability", "buff", "unit", "item", "upgrade", "doodad", "destructable", "misc"
 };
 
 // ── Cached SlkTable per type ───────────────────────────────────
@@ -103,6 +104,11 @@ static ::slk::SlkTable* get_or_load_table(lua_State* L, int type_idx)
 	case SLK_DESTRUCTABLE:
 		loaded = mgr.load(::slk::ROBJECT_TYPE::DESTRUCTABLE, *table);
 		break;
+	case SLK_MISC:
+		// MiscData.txt + MiscData_Units.txt + MiscGameData.txt + the map's own
+		// war3mapmisc.txt merged on top: slk.misc.Misc.DefenseArmor etc.
+		loaded = mgr.load(::slk::ROBJECT_TYPE::MISC, *table);
+		break;
 	default:
 		return nullptr;
 	}
@@ -131,6 +137,9 @@ static ::slk::SlkTable* get_or_load_table(lua_State* L, int type_idx)
 			break;
 		case SLK_DESTRUCTABLE:
 			mgr.load_destructable(*table);
+			break;
+		case SLK_MISC:
+			mgr.load_misc(*table);
 			break;
 		}
 	}

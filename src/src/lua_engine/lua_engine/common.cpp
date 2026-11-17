@@ -174,7 +174,17 @@ namespace warcraft3::lua_engine {
 
 		if (nf->get_return() == jass::TYPE_STRING)
 		{
-			retval = get_jass_vm()->string_table->get(retval);
+			// A string-returning engine native hands back a string-table id, so
+			// the id has to become a handle node before it is pushed. The EX*
+			// natives registered by jass::japi_add (P3-E1) instead return a fresh
+			// jstring_t — a pointer — and pushing that through string_table->get()
+			// would index the table with a pointer. Only convert real ids:
+			// jassbind::push_string accepts both forms (it converts ids < 0x10000
+			// on its own), so pointers pass through untouched.
+			if (retval < 0x10000)
+			{
+				retval = get_jass_vm()->string_table->get((uint32_t)retval);
+			}
 		}
 
 		return jass_push(L, nf->get_return(), retval) ? 1 : 0;

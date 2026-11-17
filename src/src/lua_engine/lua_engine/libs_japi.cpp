@@ -47,17 +47,20 @@ namespace warcraft3::lua_engine::japi {
 	int japi_index(lua_State* L)
 	{
 		const char* name = luaL_checkstring(L, 2);
+		// Bridge handlers win over natives for the same name. P3-E1 registers the
+		// EX*/game-info surface as real natives too (so JASS and jass.debug see
+		// them), but the native call path converts a *string* return through
+		// string_table the compiled-JASS way, while our EX getters hand back a
+		// fresh jstring_t. The bridge marshalling is the tested one (P1), so keep
+		// Lua on it. Maps written for YDWE call these as
+		// `jass.japi.EXSetAbilityDataReal(...)`.
+		if (bridge::push_cpp_handler(L, name)) {
+			return 1;
+		}
 		jass::func_value const* nf = jass::japi_func(name);
 		if (nf) {
 			lua_pushinteger(L, (uint32_t)(uintptr_t)nf);
 			lua_pushcclosure(L, jass_call_closure, 1);
-			return 1;
-		}
-		// Fall back to the bridge handler table: EX*/message/D3D entry points are
-		// registered as UnitId RPC handlers, never as natives, so japi_func()
-		// cannot see them. Maps written for YDWE call them as
-		// `jass.japi.EXSetAbilityDataReal(...)`, which has to work here too.
-		if (bridge::push_cpp_handler(L, name)) {
 			return 1;
 		}
 		lua_pushnil(L);
