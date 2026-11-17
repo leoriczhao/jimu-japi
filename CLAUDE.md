@@ -102,7 +102,8 @@ map-inject/
 │   ├── drive-demo.ps1          # 驱动 -Demo -Hold 会话：真左键/真 Q/真 R + 截图
 │   ├── gen-jass-wrappers.ps1   # 按 C++ 注册表生成 JASS 五部曲 wrapper
 │   ├── pjass.exe               # JASS 语法检查
-│   └── w3x2lni/                # 地图格式转换
+│   ├── fetch-w3x2lni.ps1       # 拉取/更新 w3x2lni（脚本+数据未入库）
+│   └── w3x2lni/                # 地图格式转换（仅编译产物 bin/ 入库）
 │
 ├── reference/
 │   ├── empty-map/              # 默认空白地图源 + Hrif 英雄火枪手对象定义
@@ -191,6 +192,9 @@ cd src
 ## 打包 & 测试（地图开发）
 
 ```powershell
+# 首次/换机器：拉取 w3x2lni 的脚本与数据（未入库；pin 在上游 commit，当前 2.7.4）
+.\tools\fetch-w3x2lni.ps1
+
 # 打包地图（合并 Lua + 注入 DLL + patch war3map.j 插入 LoadScript 调用）
 .\tools\pack.ps1
 # 输出：build/output.w3x

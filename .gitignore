@@ -32,6 +32,14 @@ Desktop.ini
 *.w3x
 *.w3m
 
+# w3x2lni: the Lua/data tree belongs to upstream (sumneko/w3x2lni) and is restored by
+# tools/fetch-w3x2lni.ps1; only the compiled runtime is tracked.
+tools/w3x2lni/*
+!tools/w3x2lni/bin/
+!tools/w3x2lni/bin/*.dll
+!tools/w3x2lni/w2l.exe
+!tools/w3x2lni/w3x2lni.exe
+
 # Reference: ignored subdirs (submodules or not needed)
 reference/ujapi/
 reference/old-japi/
