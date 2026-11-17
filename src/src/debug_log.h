@@ -93,9 +93,52 @@ namespace japi_log {
 // ── Console ─────────────────────────────────────────────────
 inline void init_console() {
     AllocConsole();
+    // The log file is UTF-8 (the tooling depends on that), but stdout goes
+    // through the ANSI CRT, so the console has to be told to interpret those
+    // bytes as UTF-8. Without this the console codepage stays 936 and every
+    // Chinese line shows up as mojibake while the file itself is fine.
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+    // A raster (Terminal) font has no CJK glyphs at all; ask for a TrueType
+    // CJK face so the UTF-8 bytes have something to render with.
+    CONSOLE_FONT_INFOEX cfi;
+    cfi.cbSize = sizeof(cfi);
+    if (GetCurrentConsoleFontEx(GetStdHandle(STD_OUTPUT_HANDLE), FALSE, &cfi)) {
+        cfi.FontFamily = FF_DONTCARE;
+        cfi.FontWeight = FW_NORMAL;
+        // C++ universal character names on purpose: this .h is UTF-8 but MSVC
+        // compiles it as codepage 936, so a raw CJK literal would corrupt.
+        lstrcpynW(cfi.FaceName, L"\u65b0\u5b8b\u4f53", LF_FACESIZE);
+        SetCurrentConsoleFontEx(GetStdHandle(STD_OUTPUT_HANDLE), FALSE, &cfi);
+    }
     freopen("CONOUT$", "w", stdout);
     freopen("CONOUT$", "w", stderr);
     SetConsoleTitleA("japi debug");
+
+    // Long log lines used to push the caret past the right edge; with
+    // ENABLE_WRAP_AT_EOL_OUTPUT off conhost scrolls the view horizontally and then every
+    // line starts mid-word, which is what reads as "garbage" in the log window. Force
+    // wrapping, give the buffer a fixed generous geometry and park the window in the top
+    // right corner so it does not cover the game.
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD outMode = 0;
+    if (GetConsoleMode(hOut, &outMode)) {
+        SetConsoleMode(hOut, outMode | ENABLE_WRAP_AT_EOL_OUTPUT);
+    }
+    SMALL_RECT tiny = { 0, 0, 1, 1 };
+    SetConsoleWindowInfo(hOut, TRUE, &tiny);
+    COORD bufSize = { 200, 4000 };
+    SetConsoleScreenBufferSize(hOut, bufSize);
+    SMALL_RECT win = { 0, 0, 129, 44 };
+    SetConsoleWindowInfo(hOut, TRUE, &win);
+    COORD origin = { 0, 0 };
+    SetConsoleCursorPosition(hOut, origin);
+    if (HWND con = GetConsoleWindow()) {
+        RECT mon = { 0, 0, 1920, 1080 };
+        SystemParametersInfoA(SPI_GETWORKAREA, 0, &mon, 0);
+        int w = 1080, h = 760;
+        MoveWindow(con, mon.right - w - 8, mon.top + 8, w, h, TRUE);
+    }
 }
 
 // ── Async file writer ───────────────────────────────────────
