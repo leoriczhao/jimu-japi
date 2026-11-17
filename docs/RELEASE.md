@@ -216,6 +216,8 @@ Get-Content C:\ProgramData\japi_debug.txt -Tail 5 | Select-String 'Results:'
 # 期望：170 passed, 0 failed, 170 total
 ```
 
+`build\war3.kill` 只是 `-Hold` 等待循环的收尾信号；真正关游戏靠 `deploy.ps1` 的 `Stop-War3Process`（优先用创建句柄，失败则修进程 DACL 再 `TerminateProcess`）。
+启动器已经死掉留下的孤儿、或手工起的游戏，用 `.\tools\kill-war3.ps1` 关（`-DryRun` 只报告能不能打开）；希望「启动器被强杀也不留孤儿」就给 `deploy.ps1` 加 `-Job`（kill-on-close Job Object）。
 `-InteractiveD3D` 会把 `deploy.ps1` 的超时自动放宽到 3660 秒（`tools/deploy.ps1:48-53`）。首次运行要放前台，否则夹具抢不到真实输入，日志会以 `timed out waiting for real mouse/keyboard input` 失败（2026-11-15 的 165/166 事故即此原因，修在 `65bceb5`）。
 
 ---
@@ -404,7 +406,7 @@ build\sdk\0.4.0-498a308\
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| 部署后日志不更新 / 秒退 | WAR3 单实例锁：旧进程还在，新进程立刻退出 | 先 `Get-Process war3 -ErrorAction SilentlyContinue` 确认，再 `Stop-Process -Name war3 -Force`，等 2 秒再跑 |
+| 部署后日志不更新 / 秒退 | WAR3 单实例锁：旧进程还在，新进程立刻退出 | `tools\kill-war3.ps1 -DryRun` 看一眼，再 `tools\kill-war3.ps1`（修进程 DACL 后 Terminate；`Stop-Process -Force` 对它是 Access denied），等 2 秒再跑 |
 | `NOTE: ...japi_debug.txt is locked by a stale instance` | 旧实例仍持有日志句柄 | 脚本自动回退到 `japi_debug_<pid>.txt`（`deploy.ps1:196-208`）；也可以主动清旧进程 |
 | 两个 agent 同时 `deploy`，日志串台 | 共享日志被 `Remove-Item` 后互相覆盖 | **串行**执行；打包用 `-WorkDir build\scratch\<tag>\work` 隔离，地图名用 `-MapName` 隔离 |
 | `objdump.exe is required to validate the D3D proxy exports` | `PATH` 里没有 `objdump.exe` | 装 32 位 binutils 并加入 `PATH`；仅静态校验需要 |

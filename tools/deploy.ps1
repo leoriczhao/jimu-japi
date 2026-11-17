@@ -7,6 +7,8 @@
 #   .\tools\deploy.ps1 -DllPath "path\to\yd_japi.dll"   # custom DLL
 #   .\tools\deploy.ps1 -NoKill                          # leave War3 running after tests
 #   .\tools\deploy.ps1 -Hold                            # keep the session: waits for build\war3.kill, then closes War3
+#   .\tools\deploy.ps1 -Job                             # put War3 in a kill-on-close job (survives launcher death)
+#   .\tools\kill-war3.ps1                               # close a War3 that was left behind (also as an orphan)
 #   .\tools\deploy.ps1 -InteractivePoint                # require a real Q key for LocalPointOrder
 #   .\tools\deploy.ps1 -InteractiveUi                   # verify hover target and ability button UI
 #   .\tools\deploy.ps1 -InteractiveD3D                  # deploy proxy + run visual D3D probe
@@ -25,6 +27,7 @@ param(
     [int]$Timeout    = 120,
     [switch]$NoKill,
     [switch]$Hold,
+    [switch]$Job,
     [switch]$InteractivePoint,
     [switch]$InteractiveUi,
     [switch]$InteractiveD3D,
@@ -34,6 +37,9 @@ param(
     [switch]$WithJassWrappers,
 [switch]$WithGetFuncAddr
 )
+
+# Shared War3 process control (DACL repair, kill-on-close job): tools\_war3ctl.ps1.
+. (Join-Path $PSScriptRoot '_war3ctl.ps1')
 
 $Root     = Split-Path -Parent $PSScriptRoot
 $War3Dir  = "D:\Warcraft III Frozen Throne 1.27a publish"
@@ -203,12 +209,40 @@ if ($InteractiveD3D) {
 
 # ── Step 3: Launch War3 ────────────────────────────────────────
 Write-Host "[3/4] Launching War3..."
+# War3 1.27a's Game.dll installs a deny-only DACL on its own process object, so
+# only this launcher's creation handle may terminate the game (details and the
+# repair path: tools\_war3ctl.ps1). Cleanup prefers that creation handle and
+# falls back to rewriting the DACL; tools\kill-war3.ps1 does the same from any
+# other shell, which is what makes a leftover or orphaned game closable.
+# -Job adds a belt: the game joins a job with KILL_ON_JOB_CLOSE, so Windows
+# closes it as soon as this launcher's handle goes away - even on a force kill.
+$killFile = "$Root\build\war3.kill"   # touch it to close this session (also during -Hold)
+Remove-Item $killFile -Force -ErrorAction SilentlyContinue   # never let a stale marker kill this run
 Remove-Item $LogFile -Force -ErrorAction SilentlyContinue
 $stalePrimary = Test-Path $LogFile
 if ($stalePrimary) {
     Write-Host "  NOTE: $LogFile is locked by a stale instance; per-pid log will be used by the DLL."
 }
 $war3 = Start-Process -FilePath $War3Exe -WorkingDirectory $War3Dir -ArgumentList "-window", "-loadfile", "$TestMap" -PassThru
+$jobObject = $null
+if ($Job -and $NoKill) {
+    Write-Host "  NOTE: -Job is ignored with -NoKill (closing the job would close the game)."
+} elseif ($Job) {
+    $jobObject = New-War3Job
+    if ($jobObject.Error -ne 0) {
+        Write-Host "  WARNING: cannot create the kill-on-close job (win32 error $($jobObject.Error)); the game is not guarded."
+        $jobObject = $null
+    } else {
+        $assignError = Add-War3ProcessToJob -Job $jobObject.Handle -ProcessHandle $war3.Handle
+        if ($assignError -ne 0) {
+            Write-Host "  WARNING: cannot put War3 into the job (win32 error $assignError); the game is not guarded."
+            [void](Close-War3Job -Job $jobObject.Handle)
+            $jobObject = $null
+        } else {
+            Write-Host "  War3 runs in a kill-on-close job: if this launcher dies, Windows closes the game."
+        }
+    }
+}
 $launchTime = Get-Date
 $altLogFile = "C:\ProgramData\japi_debug_$($war3.Id).txt"
 # Watch both, but ONLY match a "Results:" line in a file whose mtime is after
@@ -259,16 +293,21 @@ while ($elapsed -lt $Timeout) {
         }
     }
     if ($ready) { break }
+    if (Test-Path $killFile) {
+        Write-Host "  build\war3.kill appeared; closing War3."
+        Remove-Item $killFile -Force -ErrorAction SilentlyContinue
+        break
+    }
     Start-Sleep -Seconds 3
     $elapsed += 3
 }
 
 # ── Cleanup ─────────────────────────────────────────────────────
-# Only the process that launched War3 holds its creation handle; a fresh shell
-# cannot OpenProcess a War3 that runs at a higher integrity level. -Hold keeps
-# this launcher alive so the session can be closed later by touching the kill
-# file, instead of leaving an unkillable orphan behind.
-$killFile = "$Root\build\war3.kill"
+# War3 1.27a denies PROCESS_TERMINATE to every process that did not create it,
+# so this launcher's creation handle is the normal path; when it is refused, the
+# DACL repair in tools\_war3ctl.ps1 takes over (a process may rewrite the DACL of
+# a process it owns, no admin rights involved). If this launcher is killed
+# outright, nothing here runs - that is what -Job and tools\kill-war3.ps1 are for.
 if ($Hold) {
     Remove-Item $killFile -Force -ErrorAction SilentlyContinue
     Write-Host "  Holding War3 session; touch $killFile to close it"
@@ -279,13 +318,24 @@ if ($Hold) {
 }
 
 if (-not $NoKill) {
-    if (-not $war3.HasExited) {
-        $war3.Kill()
-        Start-Sleep -Seconds 1
+    if (-not (Test-War3ProcessAlive -ProcessId $war3.Id)) {
+        Write-Host "  War3 terminated"
+    } else {
+        $stop = Stop-War3Process -ProcessId $war3.Id -Process $war3 -TimeoutSeconds 20
+        if ($stop.Ok) {
+            Write-Host "  War3 terminated ($($stop.Method))"
+        } else {
+            Write-Host "  ERROR: War3 (pid $($war3.Id)) is still running: $($stop.Note)"
+            $killTool = Join-Path $PSScriptRoot 'kill-war3.ps1'
+            Write-Host ('         Close it with: powershell -ExecutionPolicy Bypass -File "' + $killTool + '"')
+        }
     }
-    Write-Host "  War3 terminated"
+    if ($jobObject) {
+        [void](Close-War3Job -Job $jobObject.Handle)
+        $jobObject = $null
+    }
 } else {
-    Write-Host "  War3 left running (-NoKill)"
+    Write-Host "  War3 left running (-NoKill); touch $killFile to close it"
 }
 
 # Read final log

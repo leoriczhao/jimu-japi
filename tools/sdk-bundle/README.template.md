@@ -104,12 +104,14 @@ Get-Content .\SHA256SUMS.txt | ForEach-Object {
 |---|---|---|
 | `tools\new-project.ps1` | 生成工程骨架 | `-Name`、`-Path`、`-Base`、`-Force` |
 | `tools\pack.ps1` | 打包：内联 Lua、注入 DLL、修 `war3map.j` | `-MapDir`、`-BaseMap`、`-OutFile`、`-WorkDir`、`-DllPath`、`-W3x2Lni`、`-SkipJassCheck` |
-| `tools\deploy.ps1` | 打包 + 拷进 `Maps\Test` + 启动 + 等 `Results` 行 | `-MapDir`、`-BaseMap`、`-MapName`、`-War3Dir`、`-Timeout` |
+| `tools\deploy.ps1` | 打包 + 拷进 `Maps\Test` + 启动 + 等 `Results` 行 | `-MapDir`、`-BaseMap`、`-MapName`、`-War3Dir`、`-Timeout`、`-Hold`、`-Job` |
 | `tools\verify-examples.ps1` | 示例回归：静态 / 打包 / 实机 | `-Filter`、`-SkipPack`、`-Live`、`-Timeout` |
 | `tools\build-luac.ps1` | 编一个 `luac.exe` 供静态语法检查（包里缺 Lua 源码和 gcc，用不上） | 无 |
 | `tools\d3d-proxy.ps1` | 安装 / 检查 / 卸载 D3D 代理 | `-Install`、`-Remove`、`-Status` |
 | `tools\drive-interactive-d3d.ps1` | 按 `[WAIT]` 标记自动驱动交互式 D3D 回归 | `-ResizeCount`、`-TimeoutSeconds` |
 | `tools\gen-jass-wrappers.ps1` | 按 C++ 注册表生成 JASS wrapper（需要源码仓库，包里跑不了完整版） | `-Check`、`-Force` |
+| `tools\kill-war3.ps1` | 关掉 `war3.exe`，包括杀不掉的孤儿（修进程 DACL 再 Terminate，不需要管理员） | `-ProcessId`、`-DryRun` |
+| `tools\_war3ctl.ps1` | 上面那个脚本的库：判活、DACL 修复、kill-on-close Job Object，由 `deploy.ps1` dot-source | 无（不单独运行） |
 
 `reference\empty-map` 是**目录形态**的基座（已解包），`pack.ps1` 直接把它当源文件读；如果 `-BaseMap` 指向 `.w3m`/`.w3x` 文件，则先解包再打包（工程 README 第 2 节有区别）。
 

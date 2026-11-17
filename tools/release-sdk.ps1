@@ -444,7 +444,8 @@ if ($SdkBundle) {
     $toolNames = @(
         'new-project.ps1', 'pack.ps1', 'deploy.ps1', 'verify-examples.ps1',
         'build-luac.ps1', 'd3d-proxy.ps1', 'drive-interactive-d3d.ps1',
-        'gen-jass-wrappers.ps1', 'config.example.ps1', 'pjass.exe', 'callback'
+        'gen-jass-wrappers.ps1', 'config.example.ps1', 'pjass.exe', 'callback',
+        '_war3ctl.ps1', 'kill-war3.ps1'
     )
     foreach ($name in $toolNames) {
         Copy-FileTo -Source (Join-Path $bundleSrc ('tools\' + $name)) -Destination (Join-Path $sdkDir ('tools\' + $name)) -Label ('tools/' + $name)

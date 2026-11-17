@@ -49,6 +49,7 @@ $PackScript     = Join-Path $PSScriptRoot 'pack.ps1'
 $DeployScript   = Join-Path $PSScriptRoot 'deploy.ps1'
 $D3DProxyScript = Join-Path $PSScriptRoot 'd3d-proxy.ps1'
 $ConfigLocal    = Join-Path $PSScriptRoot 'config.local.ps1'
+. (Join-Path $PSScriptRoot '_war3ctl.ps1')
 $ProxyBuild     = Join-Path $Root 'src\build\bin\Release\newD3d9.dll'
 # Mirrors tools\deploy.ps1's default $War3Dir so authors do not have to pass -War3Dir by hand.
 $DefaultWar3Dir = 'D:\Warcraft III Frozen Throne 1.27a publish'
@@ -386,10 +387,12 @@ function Invoke-ExampleLive {
     $deployLog = Join-Path $VerifyLogDir ([string]$Example.id + '.log')
     $mapName = 'vx-' + [string]$Example.id + '.w3x'
 
-    $running = @(Get-Process -Name war3 -ErrorAction SilentlyContinue)
-    if ($running.Count -gt 0) {
-        $ids = ($running | ForEach-Object { $_.Id }) -join ', '
-        throw "war3.exe is already running (PID: $ids). -Live runs one game at a time; close it (or wait for the other deploy run) and retry."
+    # Get-Process silently skips a game that has denied us access, so liveness comes
+    # from the CIM/tasklist lookup in tools\_war3ctl.ps1.
+    $runningIds = @(Get-War3ProcessId)
+    if ($runningIds.Count -gt 0) {
+        $ids = $runningIds -join ', '
+        throw "war3.exe is already running (PID: $ids). -Live runs one game at a time; close it (or wait for the other deploy run) and retry. tools\kill-war3.ps1 closes it."
     }
 
     $startedAt = Get-Date
@@ -416,8 +419,8 @@ function Invoke-ExampleLive {
     # from the parsed Results line, the exit code is only carried into the note.
     $deployExit = $LASTEXITCODE
 
-    $left = @(Get-Process -Name war3 -ErrorAction SilentlyContinue)
-    $war3Left = ($left.Count -gt 0)
+    $leftIds = @(Get-War3ProcessId)
+    $war3Left = ($leftIds.Count -gt 0)
 
     $logPath = ''
     $passed = 0
@@ -459,7 +462,7 @@ function Invoke-ExampleLive {
     if ($deployError -ne '') { $notes += "deploy.ps1: $deployError" }
     if ($null -ne $deployExit -and [int]$deployExit -ne 0) { $notes += "deploy.ps1 exit $deployExit" }
     if ($war3Left) {
-        $ids = ($left | ForEach-Object { $_.Id }) -join ', '
+        $ids = $leftIds -join ', '
         $notes += "war3.exe still running after deploy (PID: $ids)"
     }
 
@@ -560,10 +563,10 @@ if ($Live) {
         if ($alreadyInstalled) {
             Write-Host "  [ok] d3d9 proxy already installed in $War3Dir (sidecar hash agrees); leaving it alone"
         } else {
-            $running = @(Get-Process -Name war3 -ErrorAction SilentlyContinue)
-            if ($running.Count -gt 0) {
-                $ids = ($running | ForEach-Object { $_.Id }) -join ', '
-                Write-Host "[fail] war3.exe is already running (PID: $ids); the d3d9 proxy is missing or stale, so it cannot be installed now. Close the game and retry."
+            $runningIds = @(Get-War3ProcessId)
+            if ($runningIds.Count -gt 0) {
+                $ids = $runningIds -join ', '
+                Write-Host "[fail] war3.exe is already running (PID: $ids); the d3d9 proxy is missing or stale, so it cannot be installed now. Close the game (tools\kill-war3.ps1) and retry."
                 exit 1
             }
             Write-Host "[live] installing d3d9 proxy into $War3Dir"
@@ -668,9 +671,9 @@ foreach ($example in $selected) {
                     Write-Host "  [live] $($liveResult.Note)"
                     Add-Note -Result $result -Text $liveResult.Note
                 }
-                $stillRunning = @(Get-Process -Name war3 -ErrorAction SilentlyContinue)
-                if ($stillRunning.Count -gt 0) {
-                    $abortLive = "war3.exe is still running after $($example.id); remaining live runs cancelled"
+                $stillRunningIds = @(Get-War3ProcessId)
+                if ($stillRunningIds.Count -gt 0) {
+                    $abortLive = "war3.exe is still running after $($example.id); remaining live runs cancelled (tools\kill-war3.ps1 closes it)"
                 }
             } catch {
                 $result.Live = 'fail'
