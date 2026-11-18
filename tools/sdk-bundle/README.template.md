@@ -13,9 +13,9 @@
 
 | 目录 | 内容 |
 |---|---|
-| `docs/guide/` | SDK 与 D3D 作者指南；包含相应功能的版本另附代码化物编和基础 UI 指南 |
+| `docs/guide/` | 6 份作者文档：SDK 快速上手、SDK 指南、Cookbook、D3D HUD 的 Quickstart / API / 迁移 |
 | `docs/` | `STATUS.md`（模块完成度与验证强度）、`RELEASE.md`（维护者视角的出包流程）、`planning/` 里被指南引用的两份设计文档 |
-| `examples/` | `manifest.json` 中列出的全部示例，每个都有 `README.md`、`war3map.lua` 和所需的本地模块；新功能请复制整个示例目录 |
+| `examples/` | 10 个可运行的最小示例，每个都有自己的 `README.md` 与 `war3map.lua`；`manifest.json` 是索引 |
 | `tools/` | 脚手架与打包/部署/回归脚本（清单见第 4 节）、`pjass.exe`、`callback`、`config.example.ps1` |
 | `tools/w3x2lni/` | @@VENDORSTATUS@@ |
 | `reference/empty-map/` | 空白基座地图（解包形态，17 个文件）：`new-project.ps1` 默认拿它当基座 |
@@ -26,7 +26,7 @@
 
 整个包 @@TREEFILES@@ 个文件 / @@TREEMB@@ MB（不含 `SHA256SUMS.txt` 自身，vendor 占大头），直接拷走整个目录即可。
 
-**不在包里**：除上面那 3 个注册表文件以外的 C++ 源码 `src/src/`、仓库自测用的 `map/` 开发目录（新版本可单独附带 `map/lib/ui.lua` 供复制复用）、`architecture/` `analysis/` 等内部文档、调试器 payload `tools/debugger/`、出包脚本 `tools/release-sdk.ps1`（它需要 `src/` 现场编译）。文档里指向这些位置的链接打不开，属预期行为。
+**不在包里**：除上面那 3 个注册表文件以外的 C++ 源码 `src/src/`、仓库自测用的 `map/` 开发目录、`architecture/` `analysis/` 等内部文档、调试器 payload `tools/debugger/`、出包脚本 `tools/release-sdk.ps1`（它需要 `src/` 现场编译）。文档里指向这些位置的链接打不开，属预期行为。
 
 **环境要求**：不需要装 Lua、CMake、Visual Studio——DLL 已经是编好的；只需要 Windows + PowerShell 5.1+ + WAR3 1.27a。
 
@@ -60,7 +60,7 @@ cd <解压出来的目录>
 Get-Content C:\ProgramData\japi_debug.txt -Tail 40
 ```
 
-`deploy.ps1` 默认游戏目录是 `D:\Warcraft III Frozen Throne 1.27a publish`。装在别处请修改 `tools\deploy.ps1` 顶部的 `$War3Dir`。当前脚本没有 `-War3Dir` 参数，也未读取 `config.local.ps1` 或 `WAR3_DIR`。`pack.ps1` 的运行时路径固定为 `tools\w3x2lni`，缺少时请将完整运行时放到该目录；没有 `-W3x2Lni` 参数。
+`deploy.ps1` 默认游戏目录是 `D:\Warcraft III Frozen Throne 1.27a publish`。装在别处就传 `-War3Dir`，或者把 `tools\config.example.ps1` 复制成 `tools\config.local.ps1` 后改 `$War3Dir`（`config.local.ps1` 不会被提交）。
 
 ## 3. 验证这个包本身
 
@@ -75,7 +75,7 @@ Get-Content C:\ProgramData\japi_debug.txt -Tail 40
 .\tools\verify-examples.ps1 -Live
 ```
 
-静态 + 打包必须覆盖清单中的全部示例并零失败；`-Live` 逐个启动游戏。需要真实输入的示例还必须完成其交互驱动，单纯创建订阅不能算点击验证通过。
+静态 + 打包必须 10/10（出包前的门槛）；`-Live` 是逐个示例真开游戏跑一遍。
 
 包里不带 `luac.exe`，所以静态检查会先打印一行 `[skip] luac not found`——其余检查（模块名、`require` 位置、打包）照常跑。想打开 Lua 语法检查：装一份 Lua 5.4，把 `luac.exe` 的路径设到 `$env:LUAC`，或直接放到 `build\scratch\luac\luac.exe`；`tools\build-luac.ps1` 需要 `src\vendor\lua-5.4\src` 和 gcc，包里没有，不能用。
 
@@ -103,8 +103,8 @@ Get-Content .\SHA256SUMS.txt | ForEach-Object {
 | 脚本 | 作用 | 常用参数 |
 |---|---|---|
 | `tools\new-project.ps1` | 生成工程骨架 | `-Name`、`-Path`、`-Base`、`-Force` |
-| `tools\pack.ps1` | 打包：内联 Lua、注入 DLL、修 `war3map.j` | `-MapDir`、`-BaseMap`、`-OutFile`、`-WorkDir`、`-DllPath`、`-SkipJassCheck` |
-| `tools\deploy.ps1` | 打包 + 拷进 `Maps\Test` + 启动 + 等 `Results` 行 | `-MapDir`、`-BaseMap`、`-MapName`、`-Timeout`、`-Hold`、`-Job` |
+| `tools\pack.ps1` | 打包：内联 Lua、注入 DLL、修 `war3map.j` | `-MapDir`、`-BaseMap`、`-OutFile`、`-WorkDir`、`-DllPath`、`-W3x2Lni`、`-SkipJassCheck` |
+| `tools\deploy.ps1` | 打包 + 拷进 `Maps\Test` + 启动 + 等 `Results` 行 | `-MapDir`、`-BaseMap`、`-MapName`、`-War3Dir`、`-Timeout`、`-Hold`、`-Job` |
 | `tools\verify-examples.ps1` | 示例回归：静态 / 打包 / 实机 | `-Filter`、`-SkipPack`、`-Live`、`-Timeout` |
 | `tools\build-luac.ps1` | 编一个 `luac.exe` 供静态语法检查（包里缺 Lua 源码和 gcc，用不上） | 无 |
 | `tools\d3d-proxy.ps1` | 安装 / 检查 / 卸载 D3D 代理 | `-Install`、`-Remove`、`-Status` |
@@ -131,6 +131,5 @@ Get-Content .\SHA256SUMS.txt | ForEach-Object {
 
 - 版本号取自源码 `src/src/lua_engine/lua_engine/libs_d3d.cpp` 的 `kVersion`；出包脚本在 clean worktree 上编译，因此二进制与提交严格对应（`-NoBuild` 除外，那种包不得对外发布）。
 - `manifest.json`（本目录的上一级）记录出包提交、构建方式、三个二进制的字节数与 SHA-256、以及回归记录来源；`sdk_bundle` 段记录本包的文件数与字节数。
-- 上一级 `SHA256SUMS.txt` 覆盖 manifest 与完整 SDK；SDK 内清单覆盖自身以外全部文件。manifest 的 `dependencies` 和 `sdk_bundle.vendor.dependencies` 记录依赖逐文件哈希、来源及可用的 PE 版本信息；本地 runtime DLL overlay 不是 Git 固定输入，重建时必须匹配这些哈希。构建时间和主机等 manifest/README 元数据会变化；请比较两次干净构建的二进制 SHA-256。
 - 变更记录与每一项实测证据见 `CHANGELOG.md`。
 - 重新出包（在源码仓库里）：`.\tools\release-sdk.ps1 -SdkBundle`；只装二进制：`.\tools\release-sdk.ps1 -NoBuild`。

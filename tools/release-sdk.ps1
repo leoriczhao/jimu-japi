@@ -4,7 +4,7 @@
 # What it does
 #   1. resolve <Commit> to a full SHA and derive the SDK version from
 #      src/src/lua_engine/lua_engine/libs_d3d.cpp (kVersion), unless -Version overrides it
-#   2. create a detached clean worktree at build\clean-<sha7>-<unique> and assert that it is
+#   2. create a detached clean worktree at build\clean-<sha7> and assert that it is
 #      at that exact commit with an empty "git status --porcelain"
 #   3. build it (vcvars32 + CMake "Visual Studio 17 2022" -A Win32 --config Release),
 #      or with -NoBuild copy the already-built files from src\build\bin\Release
@@ -20,7 +20,7 @@
 #   .\tools\release-sdk.ps1                                    # release HEAD with a real clean build
 #   .\tools\release-sdk.ps1 -Commit 498a308                     # release an explicit commit
 #   .\tools\release-sdk.ps1 -Commit 498a308 -NoBuild            # package local artifacts (smoke test only)
-#   .\tools\release-sdk.ps1 -Commit 498a308 -NoBuild -Keep      # keep build\clean-<sha7>-<unique> for inspection
+#   .\tools\release-sdk.ps1 -Commit 498a308 -NoBuild -Keep      # keep build\clean-<sha7> for inspection
 #   .\tools\release-sdk.ps1 -SdkBundle                          # + the author SDK bundle (sdk\)
 #   .\tools\release-sdk.ps1 -SdkBundle -NoVendor                # + the bundle without tools\w3x2lni
 #
@@ -150,21 +150,6 @@ function Write-TreeChecksums {
     return [pscustomobject]@{ Path = $outPath; Count = [int64]$files.Count }
 }
 
-# Exact dependency bytes are the version identity when no upstream version is available.
-function Get-DependencyInventory {
-    param([string]$Dir, [string]$Origin)
-    foreach ($file in @(Get-ChildItem -LiteralPath $Dir -Recurse -File -Force | Sort-Object FullName)) {
-        [ordered]@{
-            path = $file.FullName.Substring($Dir.Length + 1).Replace('\', '/')
-            bytes = [int64]$file.Length
-            sha256 = Get-Sha256 $file.FullName
-            origin = $Origin
-            file_version = [string]$file.VersionInfo.FileVersion
-            product_version = [string]$file.VersionInfo.ProductVersion
-        }
-    }
-}
-
 function New-BundleTokens {
     param([hashtable]$Base, [int64]$Files, [string]$Megabytes)
     $tokens = $Base.Clone()
@@ -221,6 +206,10 @@ function Find-Vcvars32 {
     throw ('vcvars32.bat not found. Install the Visual Studio C++ build tools, or point ' + $BuildBat + ' at your vcvars32.bat.')
 }
 
+$buildSettings = Get-BuildSettings
+$Generator = $buildSettings.Generator
+$Arch = $buildSettings.Arch
+$Config = $buildSettings.Config
 
 Write-Step '0. Resolve commit and SDK version'
 $commitSha = (@(Invoke-Git -GitArgs @('rev-parse', ($Commit + '^{commit}'))) -join '').Trim()
@@ -261,30 +250,42 @@ if (-not $OutDir) {
 }
 $OutDir = Resolve-Abs $OutDir
 $buildRoot = [System.IO.Path]::GetFullPath((Join-Path $Root 'build'))
-if (-not $OutDir.StartsWith(($buildRoot.TrimEnd([char]92, [char]47) + [IO.Path]::DirectorySeparatorChar), [System.StringComparison]::OrdinalIgnoreCase)) {
+if (-not $OutDir.StartsWith($buildRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw ('refusing to write the package outside ' + $buildRoot + ': ' + $OutDir)
 }
 if (Test-Path -LiteralPath $OutDir) {
-    throw ('output exists; choose a new -OutDir; existing files preserved: ' + $OutDir)
+    Write-Host ('  clearing previous output: ' + $OutDir)
+    Remove-Item -LiteralPath $OutDir -Recurse -Force
 }
 New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 Write-Host ('  output : ' + $OutDir)
 
 Write-Step '2. Create the detached clean worktree'
-# Never adopt an existing worktree or its build cache.
-$workPath = Join-Path $Root ('build\clean-' + $sha7 + '-' + [guid]::NewGuid().ToString('N'))
+$workPath = Join-Path $Root ('build\clean-' + $sha7)
 $worktreeAdded = $false
-$tempCmd = $null
-$toolchainPath = $null
-try {
-Invoke-Git -GitArgs @('worktree', 'add', '--detach', $workPath, $commitSha) | Out-Null
+$workPathGit = $workPath -replace '\\', '/'
+$worktrees = @(Invoke-Git -GitArgs @('worktree', 'list', '--porcelain'))
+$registered = $false
+foreach ($line in $worktrees) {
+    if ($line -match '^worktree\s+(.+)$') {
+        if ($Matches[1].Trim() -ieq $workPathGit) { $registered = $true }
+    }
+}
+if (Test-Path -LiteralPath $workPath) {
+    if (-not $registered) {
+        throw ('refusing to touch an existing directory that is not a git worktree: ' + $workPath + ' (remove it by hand)')
+    }
+    $head = (@(Invoke-Git -GitArgs @('rev-parse', 'HEAD') -WorkDir $workPath) -join '').Trim()
+    if ($head -ne $commitSha) {
+        throw ('existing worktree is at ' + $head + ', expected ' + $commitSha + ': ' + $workPath)
+    }
+    Write-Host ('  reusing existing worktree: ' + $workPath)
+} else {
+    Invoke-Git -GitArgs @('worktree', 'add', '--detach', $workPath, $commitSha) | Out-Null
+    Write-Host ('  created worktree: ' + $workPath)
+    $worktreeAdded = $true
+}
 $worktreeAdded = $true
-$BuildBat = Join-Path $workPath 'src\build.bat'
-$buildSettings = Get-BuildSettings
-$Generator = $buildSettings.Generator
-$Arch = $buildSettings.Arch
-$Config = $buildSettings.Config
-if ($Config -ne 'Release') { throw 'release-sdk requires Release configuration' }
 
 $headNow = (@(Invoke-Git -GitArgs @('rev-parse', 'HEAD') -WorkDir $workPath) -join '').Trim()
 if ($headNow -ne $commitSha) {
@@ -297,26 +298,6 @@ if ($dirtyLines.Count -gt 0) {
 }
 Write-Host ('  HEAD    : ' + $headNow)
 Write-Host '  status  : clean (git status --porcelain is empty)'
-
-# Worktrees do not populate submodules. Export the pinned bee-lua tree using only
-# locally available Git objects; never use mutable submodule files or fetch a remote.
-$beeEntry = (@(Invoke-Git -GitArgs @('ls-tree', $commitSha, 'src/vendor/bee-lua')) -join '').Trim()
-if ($beeEntry -notmatch '^160000 commit ([0-9a-f]{40})\s') { throw 'missing pinned bee-lua gitlink' }
-$beeCommit = $Matches[1]
-$localBee = Join-Path $Root 'src/vendor/bee-lua'
-$beeArchive = Join-Path $Root ('build\bee-' + [guid]::NewGuid().ToString('N') + '.tar')
-try {
-    Invoke-Git -WorkDir $localBee -GitArgs @('archive', '--format=tar', ('--output=' + $beeArchive), $beeCommit) | Out-Null
-    $beeTarget = Join-Path $workPath 'src/vendor/bee-lua'
-    New-Item -ItemType Directory -Path $beeTarget -Force | Out-Null
-    Push-Location $beeTarget
-    try {
-        $extract = Invoke-Native -FilePath 'cmake' -Arguments @('-E', 'tar', 'xf', $beeArchive)
-        if ($extract.ExitCode -ne 0) { throw ('bee-lua extraction failed: ' + ($extract.Lines -join ' ')) }
-    } finally { Pop-Location }
-} finally {
-    if (Test-Path -LiteralPath $beeArchive) { Remove-Item -LiteralPath $beeArchive -Force }
-}
 
 Write-Step '3. Obtain the artifacts'
 $vcvars = ''
@@ -334,18 +315,15 @@ if ($NoBuild) {
 } else {
     $vcvars = Find-Vcvars32
     $cleanSrc = Join-Path $workPath 'src'
-    $tempCmd = Join-Path $Root ('build\japi-release-' + [guid]::NewGuid().ToString('N') + '.cmd')
-    $toolchainPath = Join-Path $Root ('build\toolchain-' + [guid]::NewGuid().ToString('N') + '.txt')
+    $tempCmd = Join-Path $env:TEMP ('japi-release-' + $sha7 + '.cmd')
     $cmdLines = @(
         '@echo off',
         ('call "' + $vcvars + '" >nul'),
         'if errorlevel 1 exit /b 2',
-        ('> "' + $toolchainPath + '" echo VCToolsVersion=%VCToolsVersion%'),
-        ('>> "' + $toolchainPath + '" echo WindowsSDKVersion=%WindowsSDKVersion%'),
         ('cd /d "' + $cleanSrc + '"'),
-        ('cmake -S . -B ../build/native -G "' + $Generator + '" -A ' + $Arch),
+        ('cmake -S . -B build-clean -G "' + $Generator + '" -A ' + $Arch),
         'if errorlevel 1 exit /b 3',
-        ('cmake --build ../build/native --config ' + $Config),
+        ('cmake --build build-clean --config ' + $Config),
         'exit /b %ERRORLEVEL%'
     )
     [System.IO.File]::WriteAllText($tempCmd, (($cmdLines -join [Environment]::NewLine) + [Environment]::NewLine), (New-Object System.Text.ASCIIEncoding))
@@ -356,7 +334,7 @@ if ($NoBuild) {
     $buildExit = $LASTEXITCODE
     Remove-Item -LiteralPath $tempCmd -Force -ErrorAction SilentlyContinue
     if ($buildExit -ne 0) {
-        throw ('clean build failed with exit code ' + $buildExit + ' (use -Keep to retain the worktree)' )
+        throw ('clean build failed with exit code ' + $buildExit + ' (worktree kept: ' + $workPath + ')')
     }
     $buildCommand = ($cmdLines -join ' & ')
     $artifactDir = Join-Path $cleanSrc ('build-clean\bin\' + $Config)
@@ -407,10 +385,6 @@ if ($SdkBundle) {
         'SDK-QUICKSTART.md', 'SDK-GUIDE.md', 'SDK-COOKBOOK.md',
         'D3D-LUA-QUICKSTART.md', 'D3D-LUA-API.md', 'D3D-LUA-MIGRATION.md'
     )
-    # Optional for older release commits; present for the second-batch SDK.
-    if (Test-Path -LiteralPath (Join-Path $bundleSrc 'docs/guide/OBJECT-DATA-UI.md')) {
-        $guideNames += 'OBJECT-DATA-UI.md'
-    }
     foreach ($name in $guideNames) {
         Copy-FileTo -Source (Join-Path $bundleSrc ('docs\guide\' + $name)) -Destination (Join-Path $sdkDir ('docs\guide\' + $name)) -Label ('docs/guide/' + $name)
     }
@@ -423,11 +397,10 @@ if ($SdkBundle) {
         'docs/planning/D3D-LUA-SDK-DESIGN.md',
         'CHANGELOG.md'
     )
-    if (Test-Path -LiteralPath (Join-Path $bundleSrc 'docs/BASELINE.md')) { $extraDocs += 'docs/BASELINE.md' }
     foreach ($relative in $extraDocs) {
         Copy-FileTo -Source (Join-Path $bundleSrc $relative) -Destination (Join-Path $sdkDir $relative) -Label $relative
     }
-    Write-Host ('  docs    : ' + ($guideNames.Count + $extraDocs.Count) + ' markdown files (author guides and referenced documents)')
+    Write-Host ('  docs    : ' + ($guideNames.Count + $extraDocs.Count) + ' markdown files (6 guides + STATUS + RELEASE + 2 planning docs + CHANGELOG)')
 
     Copy-DirTo -Source (Join-Path $bundleSrc 'examples') -Destination (Join-Path $sdkDir 'examples') -Label 'examples'
     $exampleDirs = @(Get-ChildItem -LiteralPath (Join-Path $sdkDir 'examples') -Directory -Force | Where-Object { $_.Name -match '^[0-9][0-9]-' })
@@ -436,13 +409,8 @@ if ($SdkBundle) {
             throw ('sdk bundle: example without war3map.lua: ' + $dir.FullName)
         }
     }
-    $exampleManifest = Get-Content -LiteralPath (Join-Path $sdkDir 'examples/manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-    $expectedExampleIds = @($exampleManifest.examples | ForEach-Object { [string]$_.dir } | Sort-Object)
-    $actualExampleIds = @($exampleDirs | ForEach-Object { $_.Name } | Sort-Object)
-    if ($expectedExampleIds.Count -eq 0 -or
-        @($expectedExampleIds | Select-Object -Unique).Count -ne $expectedExampleIds.Count -or
-        @(Compare-Object $expectedExampleIds $actualExampleIds).Count -gt 0) {
-        throw 'sdk bundle: example directories do not match examples/manifest.json'
+    if ($exampleDirs.Count -ne 10) {
+        throw ('sdk bundle: expected 10 examples, found ' + $exampleDirs.Count)
     }
     Write-Host ('  examples: ' + $exampleDirs.Count + ' directories + manifest.json + README.md')
 
@@ -482,27 +450,13 @@ if ($SdkBundle) {
     foreach ($name in $toolNames) {
         Copy-FileTo -Source (Join-Path $bundleSrc ('tools\' + $name)) -Destination (Join-Path $sdkDir ('tools\' + $name)) -Label ('tools/' + $name)
     }
-    # Ship build-time declarations/compiler and the reusable UI module when
-    # the selected release commit contains them (older commits remain valid).
-    $optionalDirs = @('tools/object-data')
-    $optionalFiles = @('map/lib/ui.lua', 'tools/drive-ui-components.ps1', 'tools/verify-baseline.ps1')
-    foreach ($relative in $optionalDirs) {
-        if (Test-Path -LiteralPath (Join-Path $bundleSrc $relative) -PathType Container) {
-            Copy-DirTo -Source (Join-Path $bundleSrc $relative) -Destination (Join-Path $sdkDir $relative) -Label $relative
-        }
-    }
-    foreach ($relative in $optionalFiles) {
-        if (Test-Path -LiteralPath (Join-Path $bundleSrc $relative) -PathType Leaf) {
-            Copy-FileTo -Source (Join-Path $bundleSrc $relative) -Destination (Join-Path $sdkDir $relative) -Label $relative
-        }
-    }
-    Write-Host ('  tools   : ' + $toolNames.Count + ' core files plus optional object-data/UI support')
+    Write-Host ('  tools   : ' + $toolNames.Count + ' files (release-sdk.ps1, tools\debugger and tools\core stay in the repo)')
 
     $vendor = [ordered]@{ included = $false; files = [int64]0; bytes = [int64]0; overlaid_files = [int64]0; source = ''; note = '' }
     if ($NoVendor) {
         Write-Host '  -NoVendor: tools\w3x2lni left out; the bundle cannot pack maps until one is supplied.' -ForegroundColor Yellow
         $vendor['source'] = 'omitted (-NoVendor)'
-        $vendor['note'] = 'pack.ps1 needs the w3x2lni runtime; install it at tools/w3x2lni'
+        $vendor['note'] = 'pack.ps1 needs the w3x2lni runtime; pass -W3x2Lni <dir> and it works'
     } else {
         $vendorSource = Join-Path $bundleSrc 'tools\w3x2lni'
         $vendorTarget = Join-Path $sdkDir 'tools\w3x2lni'
@@ -515,7 +469,7 @@ if ($SdkBundle) {
         if (Test-Path -LiteralPath $localVendor -PathType Container) {
             foreach ($file in @(Get-ChildItem -LiteralPath $localVendor -Recurse -File -Force)) {
                 $relative = $file.FullName.Substring($localVendor.Length + 1)
-                if ($relative -like 'log\*' -or $relative -like '.git\*') { continue }
+                if ($relative -like 'log\*') { continue }
                 $destination = Join-Path $vendorTarget $relative
                 if (-not (Test-Path -LiteralPath $destination)) {
                     Copy-FileTo -Source $file.FullName -Destination $destination -Label ('vendor overlay ' + $relative)
@@ -528,7 +482,7 @@ if ($SdkBundle) {
         $vendor['files'] = $vendorStats.Files
         $vendor['bytes'] = $vendorStats.Bytes
         $vendor['overlaid_files'] = $overlaid
-        $vendor['source'] = 'clean worktree plus ' + $overlaid + ' gitignored files from ' + $localVendor
+        $vendor['source'] = 'clean worktree at the released commit, + ' + $overlaid + ' gitignored files from ' + $localVendor
         $vendor['note'] = 'tools/w3x2lni/bin/*.dll is excluded by the repository .gitignore (*.dll): a clean worktree cannot supply the runtime, so those files come from the local checkout and are hashed with the rest of the bundle'
         Write-Host ('  vendor  : tools\w3x2lni  ' + $vendorStats.Files + ' files / ' + (Format-MB $vendorStats.Bytes) + ' MB  (' + $overlaid + ' gitignored DLLs overlaid from the local checkout)')
         $launcher = Join-Path $vendorTarget 'bin\w3x2lni-lua.exe'
@@ -537,17 +491,9 @@ if ($SdkBundle) {
         }
     }
 
-    if (-not $NoVendor) {
-        $vendor['dependencies'] = @(Get-DependencyInventory -Dir $vendorTarget -Origin ('git:' + $commitSha + ':tools/w3x2lni/'))
-        foreach ($dependency in $vendor['dependencies']) {
-            if (-not (Test-Path -LiteralPath (Join-Path $vendorSource $dependency.path) -PathType Leaf)) {
-                $dependency['origin'] = 'local-vendor-snapshot:tools/w3x2lni/'
-            }
-        }
-    }
-
-    # sdk\README.md and its template are pinned to the released commit.
-    $templatePath = Join-Path $bundleSrc 'tools\sdk-bundle\README.template.md'
+    # sdk\README.md - the entry point of the package. The template lives next to this
+    # script (generator asset), the content it describes comes from the released commit.
+    $templatePath = Join-Path $Root 'tools\sdk-bundle\README.template.md'
     if (-not (Test-Path -LiteralPath $templatePath -PathType Leaf)) {
         throw ('sdk bundle: README template missing: ' + $templatePath)
     }
@@ -557,7 +503,7 @@ if ($SdkBundle) {
     }
 
     if ($NoVendor) {
-        $vendorStatus = ('**未包含**（出包时用了 ' + $bt + '-NoVendor' + $bt + '）。' + $bt + 'pack.ps1' + $bt + ' 默认从这里找 ' + $bt + 'w3x2lni-lua.exe' + $bt + '，没有它就没法把 Lua 打成 MPQ；请把完整运行时放在 tools/w3x2lni。')
+        $vendorStatus = ('**未包含**（出包时用了 ' + $bt + '-NoVendor' + $bt + '）。' + $bt + 'pack.ps1' + $bt + ' 默认从这里找 ' + $bt + 'w3x2lni-lua.exe' + $bt + '，没有它就没法把 Lua 打成 MPQ；自备一份后传 ' + $bt + '-W3x2Lni <目录>' + $bt + ' 即可。')
     } else {
         $vendorStatus = ($bt + 'w3x2lni' + $bt + ' 运行时（vendor，' + $vendor['files'] + ' 个文件 / ' + (Format-MB ([int64]$vendor['bytes'])) + ' MB）：' + $bt + 'pack.ps1' + $bt + ' 靠它写 MPQ，删掉就没法打包。其中 ' + $vendor['overlaid_files'] + ' 个 ' + $bt + 'bin\*.dll' + $bt + ' 被仓库 ' + $bt + '.gitignore' + $bt + ' 的 ' + $bt + '*.dll' + $bt + ' 规则排除，来自出包机本地 checkout。')
     }
@@ -611,8 +557,6 @@ if ($SdkBundle) {
         docs = @($guideNames | ForEach-Object { 'docs/guide/' + $_ }) + @($extraDocs)
         examples = @($exampleDirs | ForEach-Object { 'examples/' + $_.Name })
         tools = @($toolNames | ForEach-Object { 'tools/' + $_ })
-        optional_content = @(@($optionalDirs) + @($optionalFiles) | Where-Object { Test-Path -LiteralPath (Join-Path $sdkDir $_) })
-        readme_template_sha256 = Get-Sha256 $templatePath
         base_map = 'reference/empty-map (' + $baseMapFiles + ' files)'
         binaries = @($ExpectedArtifacts | ForEach-Object { 'src/build/bin/Release/' + $_ })
         registries = @($registryFiles | ForEach-Object { $_ -replace '\\', '/' })
@@ -639,11 +583,7 @@ $localStatus = @(Invoke-Git -GitArgs @('status', '--porcelain'))
 $localDirty = @($localStatus | Where-Object { $_ -ne $null -and $_.Trim() -ne '' }).Count -gt 0
 
 $manifest = [ordered]@{
-    schema = 2
-    release_script_sha256 = Get-Sha256 $PSCommandPath
-    dependencies = @(Get-DependencyInventory -Dir (Join-Path $workPath 'src/vendor') -Origin ('git:' + $commitSha + ':src/vendor/'))
-    submodules = @([ordered]@{ path = 'src/vendor/bee-lua'; commit = $beeCommit; source = 'local Git archive of released gitlink; no network' })
-    dependency_versions = 'Source versions are pinned by commit and file hashes (including version headers); PE versions are recorded when available.'
+    schema = 1
     version = $Version
     version_source = $versionSource
     commit = $commitSha
@@ -652,7 +592,7 @@ $manifest = [ordered]@{
     commit_subject = $commitSubject
     branch = $branch
     dirty = $false
-    clean_worktree = $workPath
+    clean_worktree = ('build\clean-' + $sha7)
     clean_worktree_asserted = $true
     built = $built
     artifact_source = $artifactSource
@@ -678,8 +618,6 @@ $manifest = [ordered]@{
         cmake = $cmakeVersion
         powershell = $PSVersionTable.PSVersion.ToString()
         host = [Environment]::MachineName
-        msvc_sdk = $(if ($built) { @(Get-Content -LiteralPath $toolchainPath) } else { @() })
-        determinism = 'Release: compiler /Brepro /pathmap; librarian /Brepro; linker /Brepro /INCREMENTAL:NO /DEBUG:NONE. Compare with identical MSVC and SDK versions.'
     }
 }
 if ($bundleInfo) { $manifest['sdk_bundle'] = $bundleInfo }
@@ -689,8 +627,6 @@ $manifestPath = Join-Path $OutDir 'manifest.json'
 $json = ($manifest | ConvertTo-Json -Depth 8)
 [System.IO.File]::WriteAllText($manifestPath, ($json + [Environment]::NewLine), (New-Object System.Text.UTF8Encoding($false)))
 Write-Host ('  wrote   : ' + $manifestPath)
-# Include the manifest and the nested SDK checksum list in the outer inventory.
-Write-TreeChecksums -Dir $OutDir -OutName 'SHA256SUMS.txt' | Out-Null
 
 Write-Step '7. Summary'
 Write-Host ('  version : ' + $Version)
@@ -705,7 +641,7 @@ if ($bundleInfo) {
     if ($bundleInfo['vendor']['included']) {
         Write-Host ('            tools\w3x2lni ' + $bundleInfo['vendor']['files'] + ' files / ' + (Format-MB ([int64]$bundleInfo['vendor']['bytes'])) + ' MB, ' + $bundleInfo['vendor']['overlaid_files'] + ' gitignored DLLs from the local checkout')
     } else {
-        Write-Host '            tools\w3x2lni NOT bundled (-NoVendor): install runtime at tools/w3x2lni' -ForegroundColor Yellow
+        Write-Host '            tools\w3x2lni NOT bundled (-NoVendor): pack.ps1 needs -W3x2Lni' -ForegroundColor Yellow
     }
 }
 Write-Host ''
@@ -726,30 +662,22 @@ if ($bundleInfo) {
     Write-Host ''
     Write-Host '  4. author SDK bundle: prove it is self-contained by using it outside this repository:'
     Write-Host ('       Copy-Item "' + (Join-Path $OutDir 'sdk') + '" "' + $scratch + '" -Recurse -Force')
-    Write-Host ('       cd "' + $scratch + '"; .\tools\verify-examples.ps1            # static + pack, expect all manifest examples')
+    Write-Host ('       cd "' + $scratch + '"; .\tools\verify-examples.ps1            # static + pack, expect 10/10')
     Write-Host ('       cd "' + $scratch + '"; .\tools\new-project.ps1 -Name Smoke -Path "' + $smokeProject + '" -Force')
     Write-Host '     then pack/deploy the scaffolded project from the bundle (sdk\README.md section 3).'
 }
 
-} finally {
-    if ($tempCmd -and (Test-Path -LiteralPath $tempCmd)) {
-        Remove-Item -LiteralPath $tempCmd -Force -ErrorAction SilentlyContinue
-    }
-    if ($toolchainPath -and (Test-Path -LiteralPath $toolchainPath)) {
-        Remove-Item -LiteralPath $toolchainPath -Force -ErrorAction SilentlyContinue
-    }
-    if ($worktreeAdded) {
-        if ($Keep) {
-            Write-Host ('  keeping release worktree: ' + $workPath) -ForegroundColor Yellow
+if ($worktreeAdded) {
+    if ($Keep) {
+        Write-Host ''
+        Write-Host ('  keeping clean worktree: ' + $workPath) -ForegroundColor Yellow
+    } else {
+        $removeResult = Invoke-Native -FilePath 'git' -Arguments @('-C', $Root, 'worktree', 'remove', '--force', $workPath)
+        if ($removeResult.ExitCode -ne 0) {
+            Write-Host ('  WARNING: could not remove the clean worktree: ' + $workPath) -ForegroundColor Yellow
         } else {
-            # Preserve tracked/untracked edits; only ignored build outputs are disposable.
-            $cleanup = Invoke-Native -FilePath 'git' -Arguments @('-C', $workPath, 'status', '--porcelain', '--untracked-files=all')
-            if ($cleanup.ExitCode -ne 0 -or @($cleanup.Lines | Where-Object { $_.Trim() }).Count -gt 0) {
-                Write-Warning ('release worktree has changes; preserved: ' + $workPath)
-            } else {
-                $remove = Invoke-Native -FilePath 'git' -Arguments @('-C', $Root, 'worktree', 'remove', '--force', $workPath)
-                if ($remove.ExitCode -ne 0) { Write-Warning ('could not remove release worktree: ' + $workPath) }
-            }
+            Write-Host ''
+            Write-Host ('  removed clean worktree: ' + $workPath)
         }
     }
 }
