@@ -275,6 +275,12 @@ Write-Host "[4/4] Waiting for test results (${Timeout}s timeout)..."
 $elapsed = 0
 $ready = $false
 $tmpLog = "$env:TEMP\japi-debug-tmp.log"
+# Why the wait ended: 'results', 'kill', 'exit' or 'timeout'. A war3 that dies on
+# its own used to look exactly like a slow suite: the loop never looked at the
+# process, so a launch that exited immediately still burned the full timeout and
+# reported the misleading "No log content read".
+$stopReason = ''
+$exitCodeText = 'unknown'
 
 while ($elapsed -lt $Timeout) {
     foreach ($cand in $logCandidates) {
@@ -287,6 +293,7 @@ while ($elapsed -lt $Timeout) {
                 if ($log -and $log -match "Results:.*total") {
                     $ready = $true
                     $LogFile = $cand
+                    $stopReason = 'results'
                     break
                 }
             } catch {}
@@ -296,11 +303,21 @@ while ($elapsed -lt $Timeout) {
     if (Test-Path $killFile) {
         Write-Host "  build\war3.kill appeared; closing War3."
         Remove-Item $killFile -Force -ErrorAction SilentlyContinue
+        $stopReason = 'kill'
+        break
+    }
+    if ($war3.HasExited) {
+        # The game is gone and nothing is going to append to the log any more.
+        try { $exitCodeText = [string]$war3.ExitCode } catch { $exitCodeText = 'unavailable' }
+        $stopReason = 'exit'
+        Write-Host ("  War3 exited on its own after ${elapsed}s (exit code " + $exitCodeText +
+            ") without reaching a Results line")
         break
     }
     Start-Sleep -Seconds 3
     $elapsed += 3
 }
+if (-not $stopReason) { $stopReason = 'timeout' }
 
 # ── Cleanup ─────────────────────────────────────────────────────
 # War3 1.27a denies PROCESS_TERMINATE to every process that did not create it,
@@ -319,7 +336,11 @@ if ($Hold) {
 
 if (-not $NoKill) {
     if (-not (Test-War3ProcessAlive -ProcessId $war3.Id)) {
-        Write-Host "  War3 terminated"
+        if ($stopReason -eq 'exit') {
+            Write-Host "  War3 was already gone; nothing to close"
+        } else {
+            Write-Host "  War3 terminated"
+        }
     } else {
         $stop = Stop-War3Process -ProcessId $war3.Id -Process $war3 -TimeoutSeconds 20
         if ($stop.Ok) {
@@ -358,7 +379,15 @@ if ($log) {
 } else {
     Write-Host "  WARNING: No log content read"
     if (-not $ready) {
-        Write-Host "  Timed out after ${Timeout}s — tests may still be running"
+        switch ($stopReason) {
+            'exit' {
+                Write-Host ("  War3 exited after ${elapsed}s with no log at all (exit code " + $exitCodeText + ")")
+                Write-Host "  Nothing ran: the DLL never got far enough to log, so this is a launch"
+                Write-Host "  problem (map not loading, game dir state), not a failing test."
+            }
+            'kill' { Write-Host "  Stopped on build\war3.kill; no results were reported" }
+            default { Write-Host "  Timed out after ${Timeout}s — tests may still be running" }
+        }
     }
 }
 Remove-Item $tmpLog -Force -ErrorAction SilentlyContinue
@@ -367,10 +396,20 @@ Remove-Item $tmpLog -Force -ErrorAction SilentlyContinue
 # A timeout stays exit 0 (documented behaviour: the map may legitimately still be
 # running, e.g. interactive suites); callers that need a strict verdict (CI, release
 # runs, tools/verify-examples.ps1) must also require a Results line themselves.
+# A war3 that exits on its own before reporting results is exit 1 — that is not a
+# timeout, it is a run that produced nothing to judge.
 if ($log) {
     $verdict = [regex]::Match($log, 'Results:\s*(\d+)\s+passed,\s*(\d+)\s+failed,\s*(\d+)\s+total')
     if ($verdict.Success -and [int]$verdict.Groups[2].Value -gt 0) {
         Write-Host "  FAILED: $($verdict.Groups[2].Value) check(s) failed out of $($verdict.Groups[3].Value) — see the Results line above"
         exit 1
     }
+}
+
+# The game ending on its own before reporting results is a failure, not a
+# timeout: there is no verdict to fall back on, and callers that only grep for a
+# Results line would otherwise see a clean exit 0.
+if (-not $ready -and $stopReason -eq 'exit') {
+    Write-Host "  FAILED: War3 exited before the suite reported a Results line (exit code $exitCodeText)"
+    exit 1
 }
