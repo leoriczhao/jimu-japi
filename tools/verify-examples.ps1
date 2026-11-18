@@ -277,14 +277,21 @@ function Test-ExampleStatic {
         $errors += 'war3map.lua must start a timer (jass.TimerStart) that prints the Results line'
     }
 
-    # Self-contained: every require is a jass.* module and lives inside the pasteable section.
+    # Self-contained: dependencies are either jass.* modules or Lua files shipped
+    # inside this example. Local modules still require copying the whole example.
+    # Entry-point requires live inside the pasteable section.
     for ($i = 0; $i -lt $lines.Count; $i++) {
         $line = $lines[$i]
         if ($line -match '^\s*--') { continue }
         foreach ($match in [regex]::Matches($line, 'require\s+"([^"]+)"')) {
             $name = $match.Groups[1].Value
             if ($name -notmatch '^jass\.[a-z][a-z0-9]*$') {
-                $errors += "line $($i + 1): require ""$name"" is not a jass.* module (examples must stay self-contained)"
+                $localModule = if ($name -match '^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$') {
+                    Join-Path $dir (($name -replace '\.', '/') + '.lua')
+                } else { '' }
+                if (-not $localModule -or -not (Test-Path -LiteralPath $localModule -PathType Leaf)) {
+                    $errors += "line $($i + 1): require ""$name"" is neither jass.* nor a Lua file shipped in this example"
+                }
             }
             if ($markers.Count -eq 4 -and ($i -lt $markers[2] -or $i -gt $markers[3])) {
                 $errors += "line $($i + 1): require ""$name"" must live inside the pasteable section"
@@ -296,8 +303,11 @@ function Test-ExampleStatic {
     # so an uncompilable chunk (for example a missing paren that pack.ps1 happily bundles) would
     # otherwise only surface as "no Results line" in a live run. Quote luac's own message verbatim.
     if (-not [string]::IsNullOrEmpty($LuacPath)) {
-        $syntaxError = Test-LuaSyntax -LuacPath $LuacPath -LuaPath $luaPath -DisplayPath ('examples\' + [string]$Example.dir + '\war3map.lua')
-        if ($syntaxError -ne '') { $errors += 'luac -p failed: ' + $syntaxError }
+        foreach ($source in @(Get-ChildItem -LiteralPath $dir -Filter '*.lua' -Recurse -File)) {
+            $relative = $source.FullName.Substring($dir.Length).TrimStart([char]92, [char]47)
+            $syntaxError = Test-LuaSyntax -LuacPath $LuacPath -LuaPath $source.FullName -DisplayPath ('examples/' + [string]$Example.dir + '/' + $relative)
+            if ($syntaxError -ne '') { $errors += 'luac -p failed: ' + $syntaxError }
+        }
     }
 
     return $errors
@@ -405,6 +415,22 @@ function Invoke-ExampleLive {
         foreach ($switchName in @($Example.pack)) { $arguments[$switchName] = $true }
     }
 
+    $driverProcess = $null
+    $driverExit = 0
+    $driverLog = Join-Path $VerifyLogDir ([string]$Example.id + '-input.log')
+    if ($Example.interactive -eq 'ui-components') {
+        $driver = Join-Path $PSScriptRoot 'drive-ui-components.ps1'
+        if (-not (Test-Path -LiteralPath $driver)) { throw "UI driver missing: $driver" }
+        # Start before deploy: it waits for this run's War3 window and markers.
+        # The example cannot print success without physical-window input.
+        $driverArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $driver + '"'), '-TimeoutSeconds', "$Timeout")
+        $driverProcess = Start-Process powershell.exe -ArgumentList $driverArgs -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput $driverLog -RedirectStandardError ($driverLog + '.err')
+        # Retain the native handle before the short-lived child exits. Otherwise
+        # Windows PowerShell 5.1 can report a null ExitCode after WaitForExit.
+        $null = $driverProcess.Handle
+    }
+
     $deployError = ''
     $previousEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -415,9 +441,18 @@ function Invoke-ExampleLive {
     } finally {
         $ErrorActionPreference = $previousEap
     }
-    # deploy.ps1 now exits 1 when the run observed failed > 0; the verdict here still comes
-    # from the parsed Results line, the exit code is only carried into the note.
+    # Require both a fresh zero-failure Results line and a successful deploy;
+    # interactive examples must also finish their physical-window input driver.
     $deployExit = $LASTEXITCODE
+    if ($driverProcess) {
+        if (-not $driverProcess.WaitForExit(5000)) {
+            Stop-Process -Id $driverProcess.Id -Force -ErrorAction SilentlyContinue
+            $driverExit = 1
+        } else {
+            $driverProcess.Refresh()
+            $driverExit = $driverProcess.ExitCode
+        }
+    }
 
     $leftIds = @(Get-War3ProcessId)
     $war3Left = ($leftIds.Count -gt 0)
@@ -466,7 +501,10 @@ function Invoke-ExampleLive {
         $notes += "war3.exe still running after deploy (PID: $ids)"
     }
 
-    $ok = $found -and -not $war3Left -and $failedCount -eq 0 -and $totalCount -ge 3
+    if ($driverExit -ne 0) { $notes += "real input driver failed (see $driverLog and $driverLog.err)" }
+    $ok = $found -and -not $war3Left -and $failedCount -eq 0 -and $totalCount -ge 3 `
+        -and $passed -eq $totalCount -and $driverExit -eq 0 -and $deployError -eq '' `
+        -and ($null -eq $deployExit -or [int]$deployExit -eq 0)
     return [pscustomobject]@{
         Ok      = $ok
         Note    = ($notes -join ' | ')

@@ -196,6 +196,292 @@ for _, h in ipairs(manifest.bridge) do
     end)
 end
 
+-- ============ N. interface capability diagnostics ============
+-- The engine has three independent registries (Game.dll natives, japi natives,
+-- and the UnitId bridge). These checks assert which one owns a name and which
+-- routes can reach it, using only live registry state.
+print("")
+print("-- N. interface capability diagnostics (jass.japi.info/counts) --")
+
+do
+    local globals_mod = require "jass.globals"
+    local debug_mod = require "jass.debug"
+
+    check("N1 info/counts 是函数，counts 内部一致", function()
+        assert(is_callable(japi.info), "japi.info=" .. type(japi.info))
+        assert(is_callable(japi.counts), "japi.counts=" .. type(japi.counts))
+        local c = japi.counts()
+        assert(type(c) == "table", "counts 返回 " .. type(c))
+        assert(c.bridge_handlers == c.bridge_cpp + c.bridge_lua,
+            string.format("bridge_handlers=%s cpp=%s lua=%s",
+                tostring(c.bridge_handlers), tostring(c.bridge_cpp), tostring(c.bridge_lua)))
+        assert(c.bridge_lua == 0, "测试注册前 bridge_lua 应为 0，得到 " .. tostring(c.bridge_lua))
+        assert(c.bridge_cpp >= #manifest.bridge,
+            string.format("bridge_cpp=%s < manifest=%s", tostring(c.bridge_cpp), #manifest.bridge))
+        assert(c.japi_natives == #manifest.declared,
+            string.format("japi_natives=%s manifest.declared=%s",
+                tostring(c.japi_natives), #manifest.declared))
+        assert(c.engine_natives > 0, "engine_natives=" .. tostring(c.engine_natives))
+        assert(c.handshake == true, "handshake=" .. tostring(c.handshake))
+        assert(c.unitid_hook == true, "unitid_hook=" .. tostring(c.unitid_hook))
+    end)
+
+    check("N2 engine-only: I2S 走 jass.common/jass.call", function()
+        local e = japi.info("I2S")
+        assert(e ~= nil, "info(I2S) 返回 nil")
+        assert(e.engine_native and e.engine_native.spec == "(I)S",
+            "engine spec=" .. tostring(e.engine_native and e.engine_native.spec))
+        assert(e.japi_native == nil and e.bridge == nil, "I2S 不应有 japi/bridge 条目")
+        assert(e.routes.lua_common and e.routes.lua_call and e.routes.jass_native,
+            "I2S 的三个 native 路由应为 true")
+        assert(not e.routes.lua_japi and not e.routes.jass_unitid,
+            "I2S 不应走 jass.japi/UnitId")
+    end)
+
+    check("N3 bridge-only: SaveFunc 不是 native", function()
+        local e = japi.info("SaveFunc")
+        assert(e ~= nil, "info(SaveFunc) 返回 nil")
+        assert(e.bridge and e.bridge.kind == "cpp" and e.bridge.spec == "(I)V",
+            "bridge=" .. tostring(e.bridge and (e.bridge.kind .. "/" .. e.bridge.spec)))
+        assert(e.japi_native == nil and e.engine_native == nil, "SaveFunc 不应有 native 条目")
+        assert(e.routes.lua_japi and e.routes.jass_unitid, "SaveFunc 应走 japi/UnitId")
+        assert(not e.routes.lua_call and not e.routes.lua_common and not e.routes.jass_native,
+            "SaveFunc 不应走 jass.call/jass.common")
+        assert(jass.SaveFunc == nil, "jass.common.SaveFunc=" .. tostring(jass.SaveFunc))
+        local ok = pcall(function() return jass.call("SaveFunc", 0) end)
+        assert(not ok, "jass.call(SaveFunc) 不应成功")
+        assert(debug_mod.jass_func_address("SaveFunc") == 0, "SaveFunc 不应有 native 地址")
+        assert(is_callable(japi.SaveFunc), "jass.japi.SaveFunc 不可调用")
+    end)
+
+    check("N4 双注册表：jass.call 用 native spec，jass.japi 用 bridge spec", function()
+        local e = japi.info("EXGetUnitAbility")
+        assert(e and e.bridge and e.bridge.kind == "cpp" and e.bridge.spec == "(II)I",
+            "EXGetUnitAbility bridge=" .. tostring(e and e.bridge and e.bridge.spec))
+        assert(e.japi_native and e.japi_native.spec == "(Hunit;I)Hability;",
+            "EXGetUnitAbility native=" .. tostring(e and e.japi_native and e.japi_native.spec))
+        assert(e.effective.lua_call == "(Hunit;I)Hability;",
+            "effective.lua_call=" .. tostring(e.effective.lua_call))
+        assert(e.effective.lua_japi == "(II)I",
+            "effective.lua_japi=" .. tostring(e.effective.lua_japi))
+
+        local s = japi.info("EXSetAbilityString")
+        assert(s.japi_native and s.japi_native.spec == "(IIIS)B",
+            "EXSetAbilityString native=" .. tostring(s and s.japi_native and s.japi_native.spec))
+        assert(s.bridge and s.bridge.spec == "(IIIS)V",
+            "EXSetAbilityString bridge=" .. tostring(s and s.bridge and s.bridge.spec))
+    end)
+
+    check("N5 bridge-only EX: EXSetUnitState", function()
+        local e = japi.info("EXSetUnitState")
+        assert(e and e.bridge and e.bridge.spec == "(IIR)V", "bridge 缺失或 spec 不符")
+        assert(e.japi_native == nil and e.engine_native == nil, "EXSetUnitState 不应有 native 条目")
+        assert(not e.routes.lua_call and e.routes.lua_japi and e.routes.jass_unitid,
+            "EXSetUnitState 路由不符")
+        assert(not pcall(function() return jass.call("EXSetUnitState", unit, 0, 1.0) end),
+            "jass.call(EXSetUnitState) 不应成功")
+    end)
+
+    check("N6 japi-only: SetHeroLevels", function()
+        local e = japi.info("SetHeroLevels")
+        assert(e and e.japi_native and e.japi_native.spec == "(C)V", "native spec 不符")
+        -- The name also exists in Game.dll's native table (that is exactly why
+        -- the declaration is legal); it has no UnitId bridge entry.
+        assert(e.bridge == nil, "SetHeroLevels 不应有 bridge 条目")
+        assert(e.routes.lua_japi and not e.routes.jass_unitid, "SetHeroLevels 路由不符")
+    end)
+
+    check("N7 未知名字与参数校验", function()
+        assert(japi.info("ConfinitelyNotRegistered") == nil, "未知名字应返回 nil")
+        assert(not pcall(japi.info, {}), "info(table) 应抛错")
+        for _, h in ipairs(manifest.bridge) do
+            assert(h.name ~= "info" and h.name ~= "counts", "manifest 与 info/counts 撞名: " .. h.name)
+        end
+    end)
+
+    check("N14 diagnostic names cannot be registered as handlers", function()
+        local before = japi.counts()
+        for _, name in ipairs({"info", "counts"}) do
+            local ok, err = pcall(function() japi(name, "()I", function() return 42 end) end)
+            assert(not ok and tostring(err):find("reserved", 1, true), tostring(err))
+            assert(japi.info(name) == nil, "rejected registration left a registry entry")
+        end
+        assert(japi.counts().bridge_handlers == before.bridge_handlers)
+        assert(japi.counts().japi_natives == before.japi_natives)
+    end)
+
+    check("N15 self-unhook is rejected and escaped orig fails safely", function()
+        local hook_mod = require "jass.hook"
+        local original = jass.call("Deg2Rad", 180.0)
+        local escaped, removal_ok, replacement_ok
+        hook_mod.hook("Deg2Rad", function(value, orig)
+            escaped = orig
+            removal_ok = pcall(hook_mod.unhook, "Deg2Rad")
+            replacement_ok = pcall(function() hook_mod.Deg2Rad = nil end)
+            return orig(value)
+        end)
+        local result = jass.call("Deg2Rad", 180.0)
+        assert(hook_mod.unhook("Deg2Rad"), "hook should remain installed until callback returns")
+        collectgarbage("collect")
+        assert(removal_ok == false and replacement_ok == false, "removed an executing trampoline")
+        assert(result == original, "orig stopped working after rejected self-unhook")
+        local ok, err = pcall(escaped, 180.0)
+        assert(not ok and tostring(err):find("no longer installed", 1, true), tostring(err))
+    end)
+
+    check("N8 manifest 与活注册表逐条一致", function()
+        local mismatches = {}
+        for _, h in ipairs(manifest.bridge) do
+            local e = japi.info(h.name)
+            if not e or not e.bridge or e.bridge.kind ~= "cpp"
+                or e.bridge.spec ~= h.spec or not e.routes.lua_japi
+                or not e.routes.jass_unitid then
+                mismatches[#mismatches + 1] = "bridge:" .. h.name .. "(" .. h.spec .. ")"
+            end
+        end
+        for _, h in ipairs(manifest.declared) do
+            local e = japi.info(h.name)
+            if not e or not e.japi_native or e.japi_native.spec ~= h.spec
+                or not e.routes.lua_call then
+                mismatches[#mismatches + 1] = "native:" .. h.name .. "(" .. h.spec .. ")"
+            end
+        end
+        assert(#mismatches == 0, "不一致: " .. table.concat(mismatches, ", "))
+    end)
+
+    check("N9 运行时 Lua 注册的计数与路由", function()
+        local before = japi.counts()
+        japi("ConformanceUnitIdAdd", "(II)I", function(a, b) return a + b end)
+        local after = japi.counts()
+        assert(after.japi_natives == before.japi_natives + 1,
+            "japi_natives " .. tostring(before.japi_natives) .. " -> " .. tostring(after.japi_natives))
+        assert(after.bridge_handlers == before.bridge_handlers + 1, "bridge_handlers 未 +1")
+        assert(after.bridge_lua == before.bridge_lua + 1, "bridge_lua 未 +1")
+        assert(after.bridge_cpp == before.bridge_cpp, "bridge_cpp 不应变化")
+
+        local e = japi.info("ConformanceUnitIdAdd")
+        assert(e and e.bridge and e.bridge.kind == "lua" and e.bridge.spec == "(II)I",
+            "运行时 handler 的 bridge 条目不符")
+        assert(e.japi_native and e.japi_native.spec == "(II)I", "运行时 handler 的 native 条目不符")
+        assert(e.routes.lua_japi and e.routes.lua_call and e.routes.jass_unitid,
+            "运行时 handler 的 japi/call/unitid 路由应为 true")
+        assert(not e.routes.lua_common and not e.routes.jass_native,
+            "运行时 handler 不应有 engine native 路由")
+        assert(japi.ConformanceUnitIdAdd(40, 2) == 42, "japi.ConformanceUnitIdAdd(40,2) 不是 42")
+    end)
+
+    check("N10 UnitId + hashtable 真实协议（Lua 与 C++ handler）", function()
+        local ht = globals_mod.japi_ht
+        local key = globals_mod.japi__key
+        assert(is_number(ht) and is_number(key),
+            "japi_ht/japi__key 类型 " .. type(ht) .. "/" .. type(key))
+
+        jass.SaveStr(ht, key, 0, "(II)I")
+        jass.SaveInteger(ht, key, 1, 40)
+        jass.SaveInteger(ht, key, 2, 2)
+        jass.UnitId("ConformanceUnitIdAdd")
+        assert(jass.LoadInteger(ht, key, 0) == 42,
+            "Lua handler 经 UnitId 返回 " .. tostring(jass.LoadInteger(ht, key, 0)))
+
+        jass.SaveStr(ht, key, 0, "()I")
+        jass.UnitId("GetGameVersion")
+        local bridged = jass.LoadInteger(ht, key, 0)
+        assert(bridged == jass.call("GetGameVersion"),
+            "C++ handler 经 UnitId=" .. tostring(bridged) ..
+            " native=" .. tostring(jass.call("GetGameVersion")))
+    end)
+
+    check("N11 D3D 条件表面不被虚报", function()
+        local e = japi.info("CreateFont")
+        assert(e == nil or (e.bridge and e.bridge.kind == "cpp" and e.japi_native == nil),
+            "CreateFont 不应被报成 native/双注册")
+    end)
+
+    check("N12 hook.unhook 返回值与 hook[name]=nil 清理", function()
+        local hook_mod = require "jass.hook"
+        local before = jass.call("Deg2Rad", 180.0)
+
+        hook_mod.hook("Deg2Rad", function(v, orig) return 0.0 end)
+        assert(jass.call("Deg2Rad", 180.0) == 0.0, "hook 未生效")
+        assert(hook_mod.unhook("Deg2Rad") == true, "首次 unhook 应返回 true")
+        assert(hook_mod.unhook("Deg2Rad") == false, "重复 unhook 应返回 false")
+        assert(hook_mod.unhook("NoSuchNative_XYZ") == false, "未知名字应返回 false")
+        assert(jass.call("Deg2Rad", 180.0) == before, "unhook 未恢复原函数")
+
+        -- Assigning nil through the table form must unhook too, not leave a
+        -- stale entry that makes a later hook(name, fn) fail as "already hooked".
+        hook_mod.Deg2Rad = function(v, orig) return 1.0 end
+        assert(jass.call("Deg2Rad", 180.0) == 1.0, "table 形式 hook 未生效")
+        hook_mod.Deg2Rad = nil
+        assert(jass.call("Deg2Rad", 180.0) == before, "hook[name]=nil 未恢复原函数")
+        assert(hook_mod.unhook("Deg2Rad") == false, "nil 赋值后 hook 仍被报告为存在")
+    end)
+
+    check("N13 texture event 显式清理按 owner 释放回调", function()
+        local tex = message.texture_create(0.0, 0.0, 1.0, 1.0)
+        assert(type(tex) == "number" and tex > 0, "texture_create=" .. tostring(tex))
+        local weak = setmetatable({}, { __mode = "v" })
+
+        local function new_cb(tag)
+            local cb = function() return tag end
+            weak[tag] = cb
+            return cb
+        end
+
+        local a = new_cb("a")
+        local b = new_cb("b")
+        local c = new_cb("c")
+        local e1 = message.texture_add_event(tex, 65, a, nil)
+        local e2 = message.texture_add_event(tex, 65, b, nil)
+        local e3 = message.texture_add_event(tex, 65, c, nil)
+        assert(e1 > 0 and e2 > 0 and e3 > 0, "texture_add_event 返回 0")
+
+        assert(message.texture_remove_event(tex, e3) == true)
+        assert(message.texture_remove_event(tex, e3) == false, "重复 remove 应返回 false")
+        c = nil
+        collectgarbage("collect"); collectgarbage("collect")
+        assert(weak.c == nil, "被移除事件的回调仍被强引用")
+
+        -- A removal must not disturb an event that was never removed.
+        local d = new_cb("d")
+        local e4 = message.texture_add_event(tex, 65, d, nil)
+        assert(message.texture_remove_event(tex, e2) == true)
+        b = nil
+        collectgarbage("collect"); collectgarbage("collect")
+        assert(weak.b == nil, "被移除事件的回调仍被强引用")
+        assert(weak.d ~= nil, "移除其他事件时误释放了 e4 的回调")
+        assert(message.texture_remove_event(tex, e4) == true)
+        assert(message.texture_remove_event(tex, e1) == true)
+        a = nil; d = nil
+        collectgarbage("collect"); collectgarbage("collect")
+        assert(weak.a == nil and weak.d == nil, "最后一个 owner 移除后回调未释放")
+
+        -- The same Lua function may be owned by two events (callback_push
+        -- deduplicates it); releasing one owner must keep the other alive.
+        local shared = new_cb("shared")
+        local s1 = message.texture_add_event(tex, 66, shared, nil)
+        local s2 = message.texture_add_event(tex, 67, shared, nil)
+        assert(message.texture_remove_event(tex, s1) == true)
+        shared = nil
+        collectgarbage("collect"); collectgarbage("collect")
+        assert(weak.shared ~= nil, "共享回调在另一个事件仍持有时被释放")
+        assert(message.texture_remove_event(tex, s2) == true)
+        collectgarbage("collect"); collectgarbage("collect")
+        assert(weak.shared == nil, "共享回调在最后一个 owner 移除后泄漏")
+
+        -- texture_destroy removes every remaining event and reports the count.
+        local r1 = new_cb("r1")
+        local r2 = new_cb("r2")
+        assert(message.texture_add_event(tex, 68, nil, r1) > 0)
+        assert(message.texture_add_event(tex, 69, r2, nil) > 0)
+        assert(message.texture_destroy(tex) == 2, "texture_destroy 返回值不是 2")
+        r1 = nil; r2 = nil
+        collectgarbage("collect"); collectgarbage("collect")
+        assert(weak.r1 == nil and weak.r2 == nil, "destroy 未释放回调")
+        assert(message.texture_destroy(tex) == 0, "重复 destroy 应返回 0")
+    end)
+end
+
 -- ============ D. 可调用性 / 返回类型 ============
 print("")
 print("-- D. bridge handler 的返回类型（按 spec 的 ret 字符）--")

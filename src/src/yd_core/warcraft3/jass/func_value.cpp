@@ -78,6 +78,7 @@ namespace warcraft3::jass {
 	func_value::func_value()
 		: return_(TYPE_NONE)
 		, param_()
+		, spec_()
 		, address_(0)
 		, has_sleep_(false)
 	{ }
@@ -85,6 +86,7 @@ namespace warcraft3::jass {
 	func_value::func_value(const char* param, uintptr_t address)
 		: return_(TYPE_NONE)
 		, param_()
+		, spec_(param ? param : "")
 		, address_(address)
 		, has_sleep_(false)
 	{
@@ -119,6 +121,7 @@ namespace warcraft3::jass {
 	func_value::func_value(func_value const& that, uintptr_t address)
 		: return_(that.return_)
 		, param_(that.param_)
+		, spec_(that.spec_)
 		, address_(address)
 		, has_sleep_(false)
 	{ }
@@ -136,6 +139,11 @@ namespace warcraft3::jass {
 	variable_type const& func_value::get_return() const
 	{
 		return return_;
+	}
+
+	const char* func_value::get_spec() const
+	{
+		return spec_.c_str();
 	}
 
 	uintptr_t func_value::get_address() const

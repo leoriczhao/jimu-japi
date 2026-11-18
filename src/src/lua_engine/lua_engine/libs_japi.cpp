@@ -77,6 +77,9 @@ namespace warcraft3::lua_engine::japi {
 		const char* name = luaL_checkstring(L, 2);
 		const char* def = luaL_checkstring(L, 3);
 		luaL_checktype(L, 4, LUA_TFUNCTION);
+		if (strcmp(name, "info") == 0 || strcmp(name, "counts") == 0) {
+			return luaL_error(L, "japi: '%s' is reserved for diagnostics", name);
+		}
 		if (jass::japi_func(name)) {
 			return luaL_error(L, "japi: '%s' is already registered", name);
 		}
@@ -115,6 +118,115 @@ namespace warcraft3::lua_engine::japi {
 		return base::lua::make_range(L, jass::japi_function);
 	}
 
+	// jass.japi.info(name) — report which of the three registries owns a name
+	// and which Lua/JASS routes can reach it. This is a snapshot of the live
+	// maps, not a promise about map-side wrappers or compiled JASS symbols.
+	int japi_info(lua_State* L)
+	{
+		const char* name = luaL_checkstring(L, 1);
+
+		// Reading jass_function initializes the lazy Game.dll native scan.
+		jass::func_value const* engine = jass::jass_func(name);
+		jass::func_value const* native = jass::japi_func(name);
+		std::string bridge_spec;
+		bool bridge_is_lua = false;
+		const bool has_bridge =
+			bridge::handler_describe(name, &bridge_spec, &bridge_is_lua);
+
+		if (!engine && !native && !has_bridge) {
+			lua_pushnil(L);
+			return 1;
+		}
+
+		lua_newtable(L);
+		lua_pushstring(L, name);
+		lua_setfield(L, -2, "name");
+
+		auto push_spec = [L](const char* field, const jass::func_value* nf) {
+			if (!nf) return;
+			lua_newtable(L);
+			lua_pushstring(L, nf->get_spec());
+			lua_setfield(L, -2, "spec");
+			lua_setfield(L, -2, field);
+		};
+		push_spec("engine_native", engine);
+		push_spec("japi_native", native);
+
+		if (has_bridge) {
+			lua_newtable(L);
+			lua_pushstring(L, bridge_is_lua ? "lua" : "cpp");
+			lua_setfield(L, -2, "kind");
+			lua_pushstring(L, bridge_spec.c_str());
+			lua_setfield(L, -2, "spec");
+			lua_setfield(L, -2, "bridge");
+		}
+
+		lua_newtable(L);
+		const auto set_bool = [L](const char* field, bool value) {
+			lua_pushboolean(L, value);
+			lua_setfield(L, -2, field);
+		};
+		// A route means "resolvable in this path", not "the map declared it".
+		set_bool("lua_common", engine != nullptr);
+		set_bool("lua_call", engine != nullptr || native != nullptr);
+		set_bool("lua_japi",
+			(has_bridge && !bridge_is_lua) || native != nullptr);
+		set_bool("jass_native", engine != nullptr);
+		set_bool("jass_unitid", has_bridge);
+		lua_setfield(L, -2, "routes");
+
+		lua_newtable(L);
+		const auto set_effective = [L](const char* field, const char* spec) {
+			if (spec) lua_pushstring(L, spec);
+			else lua_pushnil(L);
+			lua_setfield(L, -2, field);
+		};
+		const jass::func_value* call_effective = engine ? engine : native;
+		const char* japi_effective = nullptr;
+		if (has_bridge && !bridge_is_lua) japi_effective = bridge_spec.c_str();
+		else if (native) japi_effective = native->get_spec();
+		set_effective("lua_common", engine ? engine->get_spec() : nullptr);
+		set_effective("lua_call", call_effective ? call_effective->get_spec() : nullptr);
+		set_effective("lua_japi", japi_effective);
+		lua_setfield(L, -2, "effective");
+		return 1;
+	}
+
+	// jass.japi.counts() — live registry cardinalities and bridge readiness.
+	int japi_counts(lua_State* L)
+	{
+		// Force the lazy engine-native scan before counting, even when no
+		// name has been looked up yet.
+		jass::jass_func("Deg2Rad");
+
+		size_t engine_natives = 0;
+		for (const auto& [key, value] : jass::jass_function) {
+			(void)key;
+			if (value.is_valid()) ++engine_natives;
+		}
+		size_t japi_natives = 0;
+		for (const auto& [key, value] : jass::japi_function) {
+			(void)key;
+			if (value.is_valid()) ++japi_natives;
+		}
+
+		lua_newtable(L);
+		const auto set_int = [L](const char* field, size_t value) {
+			lua_pushinteger(L, static_cast<lua_Integer>(value));
+			lua_setfield(L, -2, field);
+		};
+		set_int("engine_natives", engine_natives);
+		set_int("japi_natives", japi_natives);
+		set_int("bridge_handlers", bridge::handler_count());
+		set_int("bridge_cpp", bridge::cpp_handler_count());
+		set_int("bridge_lua", bridge::lua_handler_count());
+		lua_pushboolean(L, bridge::handshake_ready());
+		lua_setfield(L, -2, "handshake");
+		lua_pushboolean(L, bridge::unitid_hooked());
+		lua_setfield(L, -2, "unitid_hook");
+		return 1;
+	}
+
 	static int mt_gc(lua_State *L)
 	{
 		japi* self = (japi*)luaL_testudata(L, 1, japi::name());
@@ -137,6 +249,16 @@ namespace warcraft3::lua_engine::japi {
 
 		lua_newtable(L);
 		{
+			// Raw fields are checked before __index. They intentionally shadow
+			// bridge handlers named "info"/"counts"; none exist today.
+			lua_pushstring(L, "info");
+			lua_pushcclosure(L, japi_info, 0);
+			lua_rawset(L, -3);
+
+			lua_pushstring(L, "counts");
+			lua_pushcclosure(L, japi_counts, 0);
+			lua_rawset(L, -3);
+
 			lua_newtable(L);
 			{
 				lua_pushstring(L, "__index");

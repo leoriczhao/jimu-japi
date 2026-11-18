@@ -55,12 +55,13 @@ war3map.j（干净，只调标准 JASS native）
 | 上手文档 | `docs/guide/SDK-QUICKSTART.md` | 30 分钟从零到第一个玩法 |
 | 模块指南 | `docs/guide/SDK-GUIDE.md` | 按 `jass.*` 模块讲怎么用 |
 | 玩法配方 | `docs/guide/SDK-COOKBOOK.md` | 可直接粘贴的代码片段 |
-| 示例 | `examples/`（`manifest.json` + `tools/verify-examples.ps1`） | 10 个最小可运行示例 |
+| 代码化物编与 UI | `docs/guide/OBJECT-DATA-UI.md` | `objects.lua` 单位/技能声明、`lib.ui` 按钮布局、示例 11/12 与真实输入验证 |
+| 示例 | `examples/`（`manifest.json` + `tools/verify-examples.ps1`） | 12 个示例；11 为物编，12 附带 UI 模块与真实输入驱动 |
 | 版本与变更 | `CHANGELOG.md` | SDK 版本策略与历史 |
 | 出包流程 | `docs/RELEASE.md` + `tools/release-sdk.ps1` | 可复现的发布流程 |
 | 自包含作者包 | `build\sdk\<ver>-<sha7>\sdk\README.md`（`release-sdk.ps1 -SdkBundle` 产出） | 文档+示例+脚本+vendor+二进制一体，解压即用 |
 
-`-MapDir` 指向的目录只需要有 `war3map.lua`（入口），其下所有 `*.lua` 会被递归内联，模块名 = 相对路径去掉 `.lua` 并把 `/` 换成 `.`（`lib/util.lua` → `require "lib.util"`）。
+`-MapDir` 指向的目录必须有 `war3map.lua`（入口）；模块名 = 相对路径去掉 `.lua` 并把 `/` 换成 `.`（`lib/util.lua` → `require "lib.util"`），从入口可达的受支持 `require` 会递归内联。根 `objects.lua` 是构建专用保留文件，会编译成单位/技能物编而不会进入游戏 Lua 模块；不需要物编声明的工程可以省略它。
 
 ---
 
@@ -113,10 +114,10 @@ cd src
 
 1. 复制默认 `reference/empty-map/` 源地图，或解包显式传入的 `.w3m` / `.w3x` → `build/work/`
 2. 若存在 `war3map.w3u.ini`，先生成 Warcraft III 使用的 `war3map.w3u` 对象数据
-3. 合并 `map/` 下 Lua → `build/work/war3map.lua`（UTF-8 无 BOM；`__modcache` 模块缓存）
-4. **patch `build/work/war3map.j`**：在 `call initializePlugin(  )` 后插入 `SaveStr(...,"()V") + UnitId("LoadScript")`（找不到锚点会立即报错）
+3. 合并 `map/` 下 Lua → `build/work/war3map.lua`（UTF-8 无 BOM；`__modcache` 模块缓存）；`require` 按「地图模块 / 引擎 `jass.*` / 缺失」分类，`-RequireReport` 打印逐条来源，`-StrictRequires` 让无法内联的模块在打包期失败
+4. **patch `build/work/war3map.j`**：先打印所有注入锚点（`globals` / `endglobals` / `main` / `initializePlugin` / `LoadScript` / 首个函数 / 探针全局）的行号；在 `call initializePlugin(...)` 后插入 `SaveStr + UnitId("LoadScript")`，或在已存在的 `LoadScript` 前后补齐数组预分配与探针；锚点缺失/错位时抛出带锚点摘要的错误
 5. 复制 DLL → `build/work/japi.tga`，复制 callback，复制 `war3map.lua` → `script\war3map.lua`，更新 `(listfile)`
-6. 重新打包为 `build/output.w3x`
+6. 重新打包为 `build/output.w3x`；`-SkipRepack` 在 patch 后停止，只保留 `-WorkDir` 供检查
 
 **Lua 侧注册 JAPI 函数**：
 
@@ -193,6 +194,9 @@ cd src; .\build.bat; cd ..
 | `-OutFile` | `build\output.w3x` | 输出路径 |
 | `-MapDir` | `map` | Lua 源码目录（任意自带 `war3map.lua` 的项目树） |
 | `-WorkDir` | `build\work` | 中间产物目录；并行打包时给每个任务一个独立目录 |
+| `-RequireReport` | 关 | 打印每个 `require` 的分类（地图内联/缓存/引擎 `jass.*`/缺失）与未使用的 Lua 文件 |
+| `-StrictRequires` | 关 | 有缺失或无法内联的地图模块时打包失败（默认只 WARNING） |
+| `-SkipRepack` | 关 | patch 完 `-WorkDir` 后停止，不写 `.w3x`，用于检查注入锚点/脚本 |
 
 **deploy.ps1**：
 

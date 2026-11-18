@@ -76,6 +76,15 @@ check("old Lua bridge handlers were dropped", function()
         .. tostring(globals.udg_lua_error_result) .. ")")
 end)
 
+check("event timer cleanup tolerates reentrant removal", function()
+    assert(globals.udg_lua_test_array[2] == 2,
+        "expected 2 event timer pauses, got " .. tostring(globals.udg_lua_test_array[2]))
+    assert(globals.udg_lua_test_array[3] == 0,
+        "retiring events were still visible during timer cleanup")
+    local japi = require "jass.japi"
+    assert(japi.GetTextureEventCount() == 0, "old timer event survived the reset")
+end)
+
 check("the new VM can create and destroy D3D resources", function()
     local font, font_err = d3d.Font.new { face = "Arial", height = 20 }
     assert(font, font_err)

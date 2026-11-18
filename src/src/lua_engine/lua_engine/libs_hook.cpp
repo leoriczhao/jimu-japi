@@ -23,6 +23,8 @@ namespace warcraft3::lua_engine::hook {
 			: base_(nullptr)
 			, name_()
 			, real_func_(0)
+			, lua_(nullptr)
+			, luaobj_(0)
 		{ }
 
 		~jhook_t()
@@ -43,6 +45,7 @@ namespace warcraft3::lua_engine::hook {
 			if (!jass::table_hook(name_.c_str(), &real_func_, (uintptr_t)base_->funcentry)) {
 				delete base_;
 				base_ = nullptr;
+				runtime::callback_release(L, luaobj);
 				return false;
 			}
 			// Also redirect Lua-side dispatch: the func_value maps cache native
@@ -57,6 +60,12 @@ namespace warcraft3::lua_engine::hook {
 			if (jp != jass::japi_function.end()) {
 				jp->second = jass::func_value(jp->second, (uintptr_t)base_->funcentry);
 			}
+			// Release through the main thread, not the (possibly coroutine) state
+			// that installed the hook: the coroutine may be collected long before
+			// the hook is uninstalled, and the registry is shared anyway.
+			lua_ = get_mainthread(L);
+			if (!lua_) lua_ = L;
+			luaobj_ = luaobj;
 			return true;
 		}
 
@@ -64,8 +73,10 @@ namespace warcraft3::lua_engine::hook {
 		{
 			if (!base_)
 			{
+				release_luaobj();
 				return true;
 			}
+			if (base_->active_calls != 0) return false;
 			jass::table_unhook(name_.c_str(), &real_func_, 0);
 			// Restore the cached addresses (see install).
 			auto jf = jass::jass_function.find(name_);
@@ -78,6 +89,7 @@ namespace warcraft3::lua_engine::hook {
 			}
 			delete base_;
 			base_ = nullptr;
+			release_luaobj();
 			return true;
 		}
 
@@ -94,15 +106,28 @@ namespace warcraft3::lua_engine::hook {
 			return 1;
 		}
 
+		bool installed() const
+		{
+			return base_ != nullptr;
+		}
+
 		static int call_real_function(lua_State* L)
 		{
-			jhook_t* self = (jhook_t*)(uintptr_t)lua_tointeger(L, lua_upvalueindex(1));
+			jhook_t* self = static_cast<jhook_t*>(lua_touserdata(L, lua_upvalueindex(1)));
+			if (!self || !self->installed()) {
+				return luaL_error(L, "hook: original function is no longer installed");
+			}
 			return jass_call_native_function(L, self->base_->funcdef, self->real_func_);
 		}
 
 		static int push_real_function(lua_State* L, void* userdata)
 		{
-			lua_pushinteger(L, (uint32_t)(uintptr_t)userdata);
+			// Pin the userdata, not a raw pointer: an escaped orig closure must
+			// fail safely after unhook, even after the registry entry is removed.
+			auto* self = static_cast<jhook_t*>(userdata);
+			runtime::get_global_table(L, "_JASS_HOOK_TABLE", false);
+			lua_getfield(L, -1, self->name_.c_str());
+			lua_remove(L, -2);
 			lua_pushcclosure(L, call_real_function, 1);
 			return 1;
 		}
@@ -110,9 +135,20 @@ namespace warcraft3::lua_engine::hook {
 		typedef lua_to_nativefunction<jhook_t::push_real_function> nfunction;
 
 	private:
+		void release_luaobj()
+		{
+			if (lua_ && luaobj_ != 0)
+			{
+				runtime::callback_release(lua_, luaobj_);
+			}
+			luaobj_ = 0;
+		}
+
 		nfunction*  base_;
 		std::string name_;
 		uintptr_t   real_func_;
+		lua_State*  lua_;
+		int         luaobj_;
 	};
 
 #define LUA_JASS_HOOK "jhook_t"
@@ -125,6 +161,18 @@ namespace warcraft3::lua_engine::hook {
 		return (jhook_t*)luaL_testudata(L, -1, LUA_JASS_HOOK);
 	}
 
+	// Drop the registration entry. Kept separate because get_jhook() leaves the
+	// registry table and the hook object on the stack: using those positions for
+	// a rawset would target the userdata instead of the table.
+	static void remove_hook_entry(lua_State* L, const char* name)
+	{
+		runtime::get_global_table(L, "_JASS_HOOK_TABLE", false);
+		lua_pushstring(L, name);
+		lua_pushnil(L);
+		lua_rawset(L, -3);
+		lua_pop(L, 1);
+	}
+
 	static int mt_newindex(lua_State* L)
 	{
 		const char* name = luaL_checkstring(L, 2);
@@ -134,8 +182,8 @@ namespace warcraft3::lua_engine::hook {
 		}
 
 		jhook_t* self = get_jhook(L, name);
-		if (self) {
-			self->uninstall();
+		if (self && !self->uninstall()) {
+			return luaL_error(L, "hook: '%s' is executing; defer replacement/removal until it returns", name);
 		}
 
 		if (lua_isfunction(L, 3)) {
@@ -149,7 +197,16 @@ namespace warcraft3::lua_engine::hook {
 			}
 
 			int luaobj = runtime::callback_push(L, 3);
-			self->install(L, funcdef, name, luaobj);
+			if (!self->install(L, funcdef, name, luaobj)) {
+				// install() already released luaobj. Drop the dead entry so a
+				// later hook(name, fn) is not rejected as "already hooked".
+				remove_hook_entry(L, name);
+			}
+		} else if (self) {
+			// Assigning nil (or any non-function) unhooks: uninstall() ran above,
+			// and the entry is dropped so a later hook.hook(name, fn) is not
+			// rejected as "already hooked".
+			remove_hook_entry(L, name);
 		}
 		return 0;
 	}
@@ -174,7 +231,7 @@ namespace warcraft3::lua_engine::hook {
 		return 0;
 	}
 
-	// hook.hook(name, fn) — function-style API (mirrors the builtin-japi usage).
+	// hook.hook(name, fn) - function-style API (mirrors the builtin-japi usage).
 	// Errors on unknown natives and on double-hooking.
 	static int fn_hook(lua_State* L)
 	{
@@ -210,20 +267,23 @@ namespace warcraft3::lua_engine::hook {
 		return 0;
 	}
 
-	// hook.unhook(name) — remove a previously installed hook.
+	// hook.unhook(name) - remove a previously installed hook.
+	// Returns true once (the hook was live), false for repeats/unknown names.
 	static int fn_unhook(lua_State* L)
 	{
 		const char* name = luaL_checkstring(L, 1);
 		jhook_t* self = get_jhook(L, name);
+		bool removed = false;
 		if (self) {
-			self->uninstall();
-			// Remove the table entry so re-hooking is allowed
-			runtime::get_global_table(L, "_JASS_HOOK_TABLE", false);
-			lua_pushstring(L, name);
-			lua_pushnil(L);
-			lua_rawset(L, -3);
+			removed = self->installed();
+			if (!self->uninstall()) {
+				return luaL_error(L, "hook: '%s' is executing; defer removal until it returns", name);
+			}
+			// Remove the table entry so re-hooking is allowed.
+			remove_hook_entry(L, name);
 		}
-		return 0;
+		lua_pushboolean(L, removed);
+		return 1;
 	}
 
 	int open(lua_State* L)

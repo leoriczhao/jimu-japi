@@ -1,0 +1,18 @@
+local root=assert(arg[1])
+local function section(kind,id)
+    local f=assert(io.open(root..'/table/'..kind..'.ini','rb'))
+    local s=f:read('a'); f:close()
+    return assert(s:match('%['..id..'%]([^%[]+)'), 'missing roundtrip '..id):lower()
+end
+local u=section('unit','uO11')
+assert(u:match('_parent%s*=%s*"hfoo"'),u)
+assert(u:match('name%s*=%s*"code footman"'),u)
+assert(u:match('hp%s*=%s*725'),u)
+local a=section('ability','AO11')
+assert(a:match('_parent%s*=%s*"ahbz"'),a)
+-- AHbz already has 3 levels: the converter omits an unchanged scalar.
+local levels=a:match('levels%s*=%s*(%d+)')
+assert(levels==nil or levels=='3',a)
+assert(a:match('cool%s*=%s*{%s*9%.?0*,%s*7%.?0*,%s*5%.?0*%s*}'),a)
+assert(a:match('cost%s*=%s*{%s*30,%s*40,%s*50%s*}'),a)
+print('Results: independent unit/ability LNI roundtrip assertions passed')

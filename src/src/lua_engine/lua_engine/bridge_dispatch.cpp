@@ -502,6 +502,45 @@ namespace warcraft3::lua_engine::bridge {
         return name && g_handlers.find(name) != g_handlers.end();
     }
 
+    size_t handler_count() {
+        return g_handlers.size();
+    }
+
+    size_t cpp_handler_count() {
+        size_t count = 0;
+        for (const auto& [name, entry] : g_handlers) {
+            (void)name;
+            if (entry.cpp_fn) ++count;
+        }
+        return count;
+    }
+
+    size_t lua_handler_count() {
+        size_t count = 0;
+        for (const auto& [name, entry] : g_handlers) {
+            (void)name;
+            if (entry.lua_ref != 0) ++count;
+        }
+        return count;
+    }
+
+    bool handler_describe(const char* name, std::string* spec, bool* is_lua) {
+        if (!name) return false;
+        auto it = g_handlers.find(name);
+        if (it == g_handlers.end()) return false;
+        if (spec) *spec = it->second.spec;
+        if (is_lua) *is_lua = (it->second.cpp_fn == nullptr);
+        return true;
+    }
+
+    bool handshake_ready() {
+        return g_ht_handle != 0 && g_ht_key != 0;
+    }
+
+    bool unitid_hooked() {
+        return RealUnitId != 0;
+    }
+
     static bool invoke_cpp_handler_safely(cpp_handler_fn fn,
                                            const uint32_t* args,
                                            size_t nargs,

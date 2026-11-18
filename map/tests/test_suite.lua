@@ -325,9 +325,10 @@ test("mouse returns world coords", function()
     assert(type(wx) == "number" and type(wy) == "number")
 end)
 
-test("selection returns nil at init", function()
+test("selection returns nil or a valid handle", function()
     local sel = util.get_selected_unit()
-    assert(sel == nil or type(sel) == "number")
+    -- The default handle_level=2 returns userdata for a selected unit.
+    assert(sel == nil or is_handle(sel), "invalid selection: " .. tostring(sel))
 end)
 
 test("order functions exist and return boolean", function()
@@ -336,7 +337,9 @@ test("order functions exist and return boolean", function()
     assert(type(message.order_target) == "function")
     local r1 = message.order_immediate(0, 0)
     local r2 = message.order_point(0, 0, 0, 0)
-    local r3 = message.order_target(0, 0, 0)
+    -- Signature: (order, x, y, target, flags); missing target used to be
+    -- hidden by the no-selection early return in the native binding.
+    local r3 = message.order_target(0, 0, 0, util.get_selected_unit(), 0)
     assert(type(r1) == "boolean")
     assert(type(r2) == "boolean")
     assert(type(r3) == "boolean")

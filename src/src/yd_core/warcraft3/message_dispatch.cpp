@@ -3,6 +3,7 @@
 #include <warcraft3/version.h>
 #include <base/hook/replace_pointer.h>
 #include <base/hook/fp_call.h>
+#include <algorithm>
 #include <vector>
 
 namespace warcraft3::message_dispatch {
@@ -36,9 +37,17 @@ namespace warcraft3::message_dispatch {
 
 	static bool __fastcall fn_fake(uintptr_t cgameui, uintptr_t /*edx*/, void* msg)
 	{
-		for (auto it = filters.begin(); it != filters.end(); ++it)
+		// A filter may uninstall itself (or another filter) while running.
+		// Iterate a snapshot and skip entries removed in the meantime, so
+		// remove_filter() can never invalidate this loop.
+		std::vector<uintptr_t> snapshot = filters;
+		for (uintptr_t filter : snapshot)
 		{
-			if (!base::this_call<bool>(*it, cgameui, msg))
+			if (std::find(filters.begin(), filters.end(), filter) == filters.end())
+			{
+				continue;
+			}
+			if (!base::this_call<bool>(filter, cgameui, msg))
 			{
 				return false;
 			}

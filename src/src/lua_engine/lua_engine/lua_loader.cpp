@@ -274,7 +274,7 @@ namespace warcraft3::lua_engine::lua_loader {
 		// registry reference before the state dies (C++ handlers survive),
 		// stop the JASS timer that would re-enter the dead VM, then close.
 		bridge::reset_lua_state(jass_engine_alive);
-		message::reset_vm_state();
+		message::reset_vm_state(jass_engine_alive);
 		d3d::prepare_vm_reset(jass_engine_alive);
 		close_vm(jass_engine_alive ? "simulated map boot" : "map boot");
 		d3d::reset_vm_state();

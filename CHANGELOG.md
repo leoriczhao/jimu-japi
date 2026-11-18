@@ -31,6 +31,28 @@
 
 ## [Unreleased]
 
+### 新增：代码化物编与基础 UI（2026-11-18，工作区未提交）
+
+- `tools/object-data`：构建专用 `unit` / `ability` 声明，使用四字符 ID、原生父对象与原始字段 ID；读取 w3x2lni 元数据验证类型、等级与冲突，追加到版本 1/2 物编并保留既有记录字节。声明时复制字段和等级表，复用 Lua 配置表不改变先前对象。`pack.ps1` 自动发现根 `objects.lua`，该文件不进入游戏模块。
+- `map/lib/ui.lua`：本地像素按钮、行/列嵌套布局、padding/spacing、resize 重排、启用/隐藏与悬停/按下状态；拥有式资源释放、失败回收及回调中销毁。保持共享 D3D session，不提供网络同步。
+- 示例 11/12、[使用指南](docs/guide/OBJECT-DATA-UI.md)与自动输入驱动；示例验证支持项目内 Lua 模块并检查其语法；UI 实机必须完成真实窗口输入，驱动失败或结果不完整均判失败。发布脚本读取示例 manifest，包含物编工具与 UI 副本；本轮没有创建发布包。
+- 验证：物编离线 `21/21`、真实 w3x2lni 往返与既有 Hrif 保留；UI mock 5 组库测试 + 2 组示例协议回放；全部 12 例静态+打包通过；新例实机 `4/4` 与 `3/3`，真实点击与 resize 后资源计数回到基线。Lua 原生 D3D API 未变，版本仍为 `0.4.0`。
+
+### 新增：首批 SDK 诊断与显式清理（2026-11-17，工作区未提交）
+
+| 能力 | 实现 | 验证 |
+|---|---|---|
+| 接口能力诊断 | `jass.japi.info(name)` / `jass.japi.counts()`：直接读活注册表，报告 engine native / japi native / UnitId bridge 三张表的归属、spec、可达路由（`lua_common`/`lua_call`/`lua_japi`/`jass_native`/`jass_unitid`）与 `handshake`/`unitid_hook` 状态 | conformance N1–N11、N14（含双注册表 `EXGetUnitAbility` 的 effective spec、运行时 Lua handler、未知名字）；实机 `Conformance: 199 passed, 0 failed, 4 skipped` |
+| 事件/回调显式清理 | `jass.hook.unhook` 返回 `true`/`false`，`hook[name] = nil` 同时清表项；hook、texture event 的回调引用改按 owner 计数释放（`callback_release`），共享闭包不误释放；`message.texture_remove_event` 返回布尔、`texture_destroy` 返回移除数量；模拟换图重置会销毁 bridge D3D 事件保留的 timer | conformance N12–N13、N15（弱表 + GC 证明释放、双 owner、`texture_destroy` 计数）；基线 122/122、VM 重置 10/10（含计时器清理重入） |
+| Lua 打包依赖诊断 | `pack.ps1` 的 `require` 分类改为按匹配位置替换（保留 `local x =` 前缀，避免误改缩进/注释里的文本）；`-RequireReport` 打印每条来源与未使用文件，`-StrictRequires` 让缺失/无法内联/循环依赖在打包期失败；引擎 `jass.*` 模块从 `open_lua_engine.cpp` 动态读取 | `tests/tools/pack-diagnostics.ps1` 实跑 13/13：含注释/长字符串不误改、循环依赖、重复 require、缺失锚点及重复打包 |
+| JASS 注入锚点诊断 | `pack.ps1` 在 patch 前打印 `globals`/`endglobals`/`main`/首个函数/`initializePlugin`/`LoadScript`/`native:SetHeroLevels` 的行号与探针全局；调用锚点容忍空白差异；缺失/错位时抛出带锚点摘要的错误，多重调用锚点发出告警；数组全局若最终没有 `JapiForceAllocArrays()` 调用会直接失败 | 夹具覆盖正常/空白差异/外来图/无 `main`/`native` 在函数后/缺 `endglobals`；仓库 `-WithJassWrappers` 125/125、`-WithGetFuncAddr` 126/126（pjass 通过） |
+
+被测 DLL：640000 B，SHA256 `F2C6EB0849D07FF6ACAA97FEAB854BB58AD950014F7DC7BD0B83EA662B7EE9E4`（`src\build\bin\Release\yd_japi.dll`，
+cmake Win32 Release 构建；同一份 DLL 跑完上述实机回归）。
+`jass.d3d` 的 Lua 公开面没有变化，SDK 版本仍是 `0.4.0`。
+
+本轮审查补充：拒绝注册诊断保留名 `info`/`counts`；拒绝卸载正在执行的 hook，卸载后调用保存的 `orig` 会报错；计时器清理先移出事件表以隔离重入删除。测试台补齐选中单位的 userdata 类型和选择集合前置条件，修正 `order_target` 漏传参数；conformance 启动器必须同时确认进程退出码、两条汇总与零失败，缺失结果不能算通过。
+
 ### 新增：接口一致性测试台（`tests/conformance/`，2026-11-17）
 
 把「引擎到底实现了什么」变成一张会失败的表格 —— 一张独立最小地图，不依赖 `map\` 的 demo，也不依赖任何移植层 shim，只用引擎：

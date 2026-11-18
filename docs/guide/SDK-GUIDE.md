@@ -220,6 +220,39 @@ JASS→Lua 的完整链路（哈希表槽位约定：**槽 0 放签名 / 返回�
 japi("LuaBridgeProbe", "(II)I", function(a, b) return a + b end)
 ```
 
+### 诊断：一个名字到底走哪条路
+
+引擎里有三张独立的注册表：Game.dll 的 native 表、`jass::japi_add` 的 native 表、UnitId 桥的 handler 表。
+同一个名字可能只在一张表里，也可能同时存在（例如 `EXGetUnitAbility` 同时有 JASS native 和 bridge handler），
+而不同入口看到的是不同的签名。`japi.info(name)` 直接报告活注册表的状态（不是 `manifest.lua` 快照）：
+
+```lua
+local info = japi.info("EXGetUnitAbility")
+-- info.engine_native / info.japi_native / info.bridge 各为 { spec = "..." } 或 nil
+-- info.bridge.kind == "cpp" / "lua"
+-- info.routes = {
+--   lua_common  = true,   -- jass.common.Name / jass.Name(...)
+--   lua_call    = true,   -- jass.call("Name", ...) 能解析
+--   lua_japi    = true,   -- japi.Name(...) 能调用
+--   jass_native = true,   -- 名字存在于 Game.dll native 表（地图仍需在首个函数前声明）
+--   jass_unitid = true,   -- UnitId("Name") + 哈希表协议可达
+-- }
+-- info.effective 给出每条 Lua 路由实际使用的 spec
+assert(info.effective.lua_call == "(Hunit;I)Hability;")
+assert(info.effective.lua_japi == "(II)I")   -- bridge 优先，走整数 handle
+```
+
+`japi.counts()` 返回活注册表计数与桥接就绪状态：
+
+```lua
+local c = japi.counts()
+-- c.engine_natives / c.japi_natives
+-- c.bridge_handlers == c.bridge_cpp + c.bridge_lua
+-- c.handshake（共享哈希表句柄/键已交付）、c.unitid_hook（UnitId hook 已安装）
+```
+
+未知名字返回 `nil`；传表等无效参数类型会抛错。这些函数只读取当前注册状态，不注册新 handler（首次查询可能触发引擎 native 表的惰性扫描）。`info` 和 `counts` 是诊断保留名，`japi("info", ...)` / `japi("counts", ...)` 会明确报错，避免注册成功却调用到诊断函数。路由存在不代表相关资源、游戏阶段或平台能力已经就绪。
+
 ### 坑
 
 | 坑 | 现象 | 怎么办 |
@@ -237,8 +270,9 @@ japi("LuaBridgeProbe", "(II)I", function(a, b) return a + b end)
 ### 能做什么
 
 - `hook.hook(name, fn)`：拦截 native。回调签名是 `function(参数..., orig)`——**原函数作为最后一个参数**传给你。
-- `hook.unhook(name)`：还原。
-- 元表式：`hook.Name = fn` 安装、读 `hook.Name` 拿到已装函数、`hook.Name = nil` 卸载。
+- `hook.unhook(name)`：还原。第一次成功返回 `true`，重复调用、未知名字或已经用 `hook.Name = nil` 卸过时返回 `false`；
+  卸载会释放 Lua 回调的引用，共享同一个闭包的其它 owner 不受影响。
+- 元表式：`hook.Name = fn` 安装、读 `hook.Name` 拿到已装函数、`hook.Name = nil` 卸载（同时清掉表项，之后可以重新 hook）。
 - 拦截后 **`jass.call` 和 `jass.X()` 两条路都走你的函数**（`libs_hook.cpp:48-59`）。
 
 ### 最小用法
@@ -269,6 +303,8 @@ print(jass.GetPlayerId(lp))       -- 还原
 | 名字不存在 | `hook: unknown native <name>` | 只有引擎 native 表和 japi 注册表里的名字能 hook |
 | 安装失败 | `hook: failed to install on '<name>'` | 多半是进程版本不匹配，别忽略这个错 |
 | 卸载时把别人的 hook 一起摘了 | 只还原你自己那次 | `unhook` 前确认当前 hook 的是你的函数 |
+| 在自己的回调里卸载或替换当前 hook | 报 `is executing`，防止释放仍在执行的跳板 | 等该回调返回后，再从外层调用 `unhook`；嵌套调用中仍在栈上的 hook 也不能卸载 |
+| 保存 `orig`，在卸载后继续调用 | 报 `original function is no longer installed` | `orig` 只在 hook 的安装期使用；卸载后通过正常 native 接口调用 |
 
 ---
 
@@ -286,6 +322,10 @@ print(jass.GetPlayerId(lp))       -- 还原
 | `message.set_keyboard(vk, down)` / `message.click_keyboard(vk)` | boolean | 用 `PostMessage` 合成按键 |
 | `message.show_console(show)` | boolean | 近似实现（找 `ConsoleWindowClass` 子窗口 `ShowWindow`），可能返回 false |
 | `message.order_immediate` / `order_point` / `order_target` | boolean | 1.24e+ 才有；**要求当前已选中单位**，否则直接 false |
+| `message.texture_create(x, y, w, h)` | id | 注册一个归一化屏幕矩形（0..1），供 `texture_add_event` 使用 |
+| `message.texture_add_event(id, keycode, press, release)` | event_id | `keycode` 用 `message.keyboard` 的 WARK 码，鼠标按钮用 `-1`；回调可省略 |
+| `message.texture_remove_event(id, event_id)` | boolean | 首次移除返回 `true`，重复/未知返回 `false`；只释放该 event 自己持有的回调 |
+| `message.texture_destroy(id)` | integer | 删除矩形并移除它的全部 event，返回移除数量；重复调用返回 `0` |
 | `message.hook = function(msg) ... end` | — | 装输入过滤器；赋 `nil` 卸载（`libs_message.cpp:913-950`） |
 
 `msg` 表字段：`type`（`key_down`/`key_up`/`mouse_down`/`mouse_up`/`mouse_ability`）、`code`、`state`（键盘）、`x`/`y`（鼠标，世界坐标）、`ability`/`order`（命令卡）。
@@ -310,6 +350,10 @@ end
 
 返回值语义（`libs_message.cpp:592-603`）：**真值 = 放行给游戏，假值/没写 return = 吞掉**。
 仓库里 `map/game/demo.lua` 的 `on_message` 就是这么用的：拦到 Q 返回 `false`，其他一律返回 `true`。
+
+**显式清理**：`texture_remove_event` / `texture_destroy` 会释放事件持有的 Lua 回调引用（同一个闭包被多个事件共享时
+按 owner 计数，只释放最后一个）。不再需要某个事件时主动移除，不要等 Lua GC——尤其是长局里反复 `add_event` 的写法。
+同理，`hook.unhook` 或 `hook.Name = nil` 会释放 hook 的回调引用。
 
 ### 坑
 

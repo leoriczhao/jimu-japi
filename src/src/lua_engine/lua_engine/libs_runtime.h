@@ -37,4 +37,7 @@ namespace warcraft3::lua_engine::runtime {
 
 	int callback_push(lua_State* L, int idx);
 	int callback_read(lua_State* L, int ref);
+	// Drop one ownership of a callback ref returned by callback_push().
+	// Returns the remaining count, or -1 when the ref was unknown/zero.
+	int callback_release(lua_State* L, int ref);
 }

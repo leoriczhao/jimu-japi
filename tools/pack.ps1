@@ -11,6 +11,9 @@
 #   .\tools\pack.ps1 -Demo                             # playable vertical slice instead of the suite
 #   .\tools\pack.ps1 -WithJassWrappers                  # generate JASS wrappers for every bridge handler
 #   .\tools\pack.ps1 -WithGetFuncAddr                   # expose builtin-style GetFuncAddr(code) in the map
+#   .\tools\pack.ps1 -RequireReport                     # print every require classification
+#   .\tools\pack.ps1 -StrictRequires                    # fail on missing/un-inlined map modules
+#   .\tools\pack.ps1 -SkipRepack                        # stop after patching; inspect -WorkDir, write no .w3x
 param(
     [string]$DllPath  = "",
     [string]$BaseMap  = "",
@@ -26,7 +29,10 @@ param(
     [switch]$SkipJassCheck,
     [switch]$NoArrayPrealloc,
     [switch]$WithJassWrappers,
-    [switch]$WithGetFuncAddr
+    [switch]$WithGetFuncAddr,
+    [switch]$RequireReport,
+    [switch]$StrictRequires,
+    [switch]$SkipRepack
 )
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -81,9 +87,152 @@ function Use-W3x2Lni {
     } finally { Pop-Location }
 }
 
+# ── JASS injection anchor diagnostics ───────────────────────────
+# Every patch below is a textual insertion into war3map.j. A missing or
+# displaced anchor used to surface as a generic exception, and a whitespace
+# difference silently fell through to foreign-map injection. Resolve all
+# anchors once, print their line numbers, and fail with that report when a
+# requested patch has nowhere safe to go.
+function Get-LineNumberFromIndex {
+    param([string]$Text, [int]$Index)
+    if ($Index -le 0) { return 1 }
+    return 1 + ([regex]::Matches($Text.Substring(0, $Index), "`n")).Count
+}
+
+function Find-JassAnchors {
+    param([string]$Content)
+    [pscustomobject]@{
+        Globals          = [regex]::Match($Content, '(?m)^[ \t]*globals\b')
+        EndGlobals       = [regex]::Match($Content, '(?m)^[ \t]*endglobals\b')
+        Main             = [regex]::Match($Content, '(?m)^[ \t]*function[ \t]+main[ \t]+takes\b')
+        FirstFunction    = [regex]::Match($Content, '(?m)^[ \t]*function[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+takes\b')
+        InitializePlugin = [regex]::Matches($Content, '(?m)^[ \t]*call[ \t]+initializePlugin[ \t]*\([ \t]*\)')
+        LoadScript       = [regex]::Matches($Content, '(?m)^[ \t]*call[ \t]+UnitId[ \t]*\([ \t]*"LoadScript"[ \t]*\)')
+        SetHeroLevels    = [regex]::Matches($Content, '(?m)^[ \t]*native[ \t]+SetHeroLevels\b')
+        HasBridgeProbe   = [bool]($Content -match '(?m)^[ \t]*function[ \t]+LuaBridgeProbeCall[ \t]+takes\b')
+        HasWrapperProbe  = [bool]($Content -match '(?m)^[ \t]*integer[ \t]+udg_lua_wrapper_ready\b')
+        HasGetFuncProbe  = [bool]($Content -match '(?m)^[ \t]*integer[ \t]+udg_lua_getfunc_ready\b')
+    }
+}
+
+function Format-JassAnchorMatch {
+    param([string]$Content, $Match, [string]$Name)
+    if ($null -eq $Match -or -not $Match.Success) { return "$Name=absent" }
+    return "$Name@$(Get-LineNumberFromIndex $Content $Match.Index)"
+}
+
+function Format-JassAnchorMatches {
+    param([string]$Content, $Collection, [string]$Name)
+    if ($null -eq $Collection -or $Collection.Count -eq 0) { return "$Name=absent" }
+    $line = Get-LineNumberFromIndex $Content $Collection[0].Index
+    if ($Collection.Count -gt 1) { return "$Name@$line(x$($Collection.Count))" }
+    return "$Name@$line"
+}
+
+function Get-JassAnchorSummary {
+    param([string]$Content)
+    $a = Find-JassAnchors $Content
+    $parts = @(
+        (Format-JassAnchorMatch   $Content $a.Globals          'globals'),
+        (Format-JassAnchorMatch   $Content $a.EndGlobals       'endglobals'),
+        (Format-JassAnchorMatch   $Content $a.Main             'main'),
+        (Format-JassAnchorMatch   $Content $a.FirstFunction    'first-function'),
+        (Format-JassAnchorMatches $Content $a.InitializePlugin 'initializePlugin'),
+        (Format-JassAnchorMatches $Content $a.LoadScript       'loadScript'),
+        (Format-JassAnchorMatches $Content $a.SetHeroLevels    'native:SetHeroLevels')
+    )
+    $probes = @()
+    if ($a.HasBridgeProbe)  { $probes += 'bridge' }
+    if ($a.HasWrapperProbe) { $probes += 'wrapper' }
+    if ($a.HasGetFuncProbe) { $probes += 'getfunc' }
+    if ($probes.Count -eq 0) { $parts += 'probes=absent' }
+    else { $parts += ('probes=' + ($probes -join ',')) }
+    return ($parts -join ' ')
+}
+
+function Insert-AfterJassMatch {
+    param([string]$Content, $Match, [string]$Text)
+    $at = $Match.Index + $Match.Length
+    return $Content.Substring(0, $at) + $Text + $Content.Substring($at)
+}
+
 # ── Lua bundler ─────────────────────────────────────────────────
 # Collects all .lua files under $MapDir, converts paths to module names,
 # and inlines require() calls into a single war3map.lua.
+
+# Modules the DLL registers on package.preload (open_lua_engine.cpp). A require
+# that resolves here stays in the bundle and is served at runtime; it is not a
+# packaging error. The list is read from the source when present (repository
+# checkout); the static copy keeps -SdkBundle working, where src\ is not shipped.
+$EngineModules = [System.Collections.Generic.HashSet[string]]::new()
+foreach ($engineModule in @(
+    'jass.common', 'jass.globals', 'jass.japi', 'jass.hook', 'jass.runtime',
+    'jass.debug', 'jass.message', 'jass.sleep', 'jass.storm', 'jass.slk',
+    'jass.debugger', 'jass.d3d', 'jass.console', 'jass.log', 'jass.bignum')) {
+    [void]$EngineModules.Add($engineModule)
+}
+$engineModuleSource = "$Root\src\src\lua_engine\lua_engine\open_lua_engine.cpp"
+if (Test-Path -LiteralPath $engineModuleSource) {
+    $engineModuleText = Get-Content -LiteralPath $engineModuleSource -Raw
+    foreach ($m in [regex]::Matches($engineModuleText,
+            'register_preload_lib\s*\(\s*L\s*,\s*"([^"]+)"')) {
+        [void]$EngineModules.Add($m.Groups[1].Value)
+    }
+}
+
+# Column-0 form the bundler can rewrite. Group 1 is the optional
+# "local name = " prefix and must survive the replacement; group 2 is the
+# module name. Anything else that looks like a require is reported by
+# -RequireReport / -StrictRequires instead of being silently left in the bundle.
+$RequirePattern    = '(?m)^((?:local\s+\w+\s*=\s*)?)require\s+"([^"]+)"'
+# Diagnose literal requires at any position, excluding comments and strings.
+# Dynamic expressions and shadowing of require are not statically resolved.
+$AnyRequirePattern = '(?<![\w.:])\brequire\s*\(?\s*["'']([^"''\r\n]+)["'']'
+
+# Mask Lua strings and comments without changing offsets or line numbers. A
+# require mentioned in a long comment/string is data, not a dependency. This
+# is a lexer for diagnostics, not a parser or a module-loader replacement.
+function Get-LuaCodeMask {
+    param([string]$Code)
+    $chars = $Code.ToCharArray()
+    $i = 0
+    while ($i -lt $Code.Length) {
+        $start = $i
+        $comment = $i + 1 -lt $Code.Length -and $Code.Substring($i, 2) -eq '--'
+        $quote = $Code[$i]
+        $longAt = $i
+        if ($comment) { $longAt += 2 }
+        $long = $null
+        if ($longAt -lt $Code.Length -and $Code[$longAt] -eq '[') {
+            $long = [regex]::Match($Code.Substring($longAt), '^\[(=*)\[')
+        }
+        if ($null -ne $long -and $long.Success) {
+            $close = ']' + $long.Groups[1].Value + ']'
+            $end = $Code.IndexOf($close, $longAt + $long.Length, [StringComparison]::Ordinal)
+            $i = if ($end -lt 0) { $Code.Length } else { $end + $close.Length }
+        } elseif ($comment) {
+            $end = $Code.IndexOf("`n", $i)
+            $i = if ($end -lt 0) { $Code.Length } else { $end }
+        } elseif ($quote -eq '"' -or $quote -eq "'") {
+            $i++
+            while ($i -lt $Code.Length) {
+                if ($Code[$i] -eq '\') { $i = [Math]::Min($i + 2, $Code.Length); continue }
+                if ($Code[$i] -eq $quote) { $i++; break }
+                $i++
+            }
+        } else { $i++; continue }
+        for ($j = $start; $j -lt $i; $j++) {
+            if ($chars[$j] -ne "`r" -and $chars[$j] -ne "`n") { $chars[$j] = ' ' }
+        }
+    }
+    return -join $chars
+}
+
+function Get-LuaLineNumber {
+    param([string]$Text, [int]$Index)
+    if ($Index -le 0) { return 1 }
+    return 1 + ([regex]::Matches($Text.Substring(0, $Index), "`n")).Count
+}
 
 function Get-ModuleName {
     param([string]$FilePath, [string]$BaseDir)
@@ -101,12 +250,16 @@ function Bundle-Lua {
     # Collect all .lua files
     $allFiles = Get-ChildItem -Path $MapDir -Filter "*.lua" -Recurse -File
 
-    # Build module map: name → content
+    # Build module map: name → content (and name → repo-relative path for reports)
     $moduleMap = @{}
+    $moduleFiles = @{}
     foreach ($f in $allFiles) {
         $name = Get-ModuleName $f.FullName $MapDir
+        # Root objects.lua is a build-only declaration, never a runtime module.
+        if ($name -eq 'objects') { continue }
         $content = Get-Content $f.FullName -Raw -Encoding UTF8
         $moduleMap[$name] = $content
+        $moduleFiles[$name] = ($f.FullName.Substring($MapDir.Length).TrimStart('\', '/') -replace '\\', '/')
     }
 
     # Entry point. NOTE: PowerShell variables are case-insensitive, so this must
@@ -114,38 +267,164 @@ function Bundle-Lua {
     $entryCode = $moduleMap[$Entry]
     if (-not $entryCode) { throw "$Entry.lua not found in $MapDir" }
 
-    # Inline require() calls recursively
-    # Pattern: local xxx = require "module.name"  or  require "module.name"
-    $requirePattern = '(?m)^(local\s+\w+\s*=\s*)?require\s+"([^"]+)"'
+    $records = [System.Collections.Generic.List[object]]::new()
+    $active = [System.Collections.Generic.HashSet[string]]::new()
+    [void]$active.Add($Entry)
 
+    function Add-RequireRecord {
+        param([string]$Source, [int]$Line, [string]$Module, [string]$Action, [string]$Note = '')
+        [void]$records.Add([pscustomobject]@{
+            Source = $Source; Line = $Line; Module = $Module; Action = $Action; Note = $Note
+        })
+    }
+
+    # Inline require() calls recursively.
+    # Pattern: local xxx = require "module.name"  or  require "module.name"
     function Inline-Requires {
-        param([string]$code, [hashtable]$modules, [System.Collections.Generic.HashSet[string]]$visited)
-        $result = $code
-        $matches = [regex]::Matches($code, $requirePattern)
+        param(
+            [string]$code,
+            [hashtable]$modules,
+            [hashtable]$files,
+            [System.Collections.Generic.HashSet[string]]$visited,
+            [string]$sourceFile
+        )
+        $mask = Get-LuaCodeMask $code
+        $matches = @([regex]::Matches($code, $RequirePattern) | Where-Object {
+            $mask.Substring($_.Index + $_.Groups[1].Length, 7) -eq 'require'
+        })
+        if ($matches.Count -eq 0) { return $code }
+
+        # Replace by match position, not by literal text: the old
+        # .Replace("require ""x""", ...) also rewrote indented or quoted
+        # occurrences the regex never classified.
+        $sb = [System.Text.StringBuilder]::new()
+        $cursor = 0
         foreach ($m in $matches) {
+            [void]$sb.Append($code.Substring($cursor, $m.Index - $cursor))
+            $prefix = $m.Groups[1].Value
             $modName = $m.Groups[2].Value
-            if (-not $modules.ContainsKey($modName)) { continue }
-            $requirePart = "require `"$modName`""
-            if ($visited.Contains($modName)) {
-                # Already inlined — reference the module cache (NOT nil: the module
-                # may be required again inside another module's scope)
-                $result = $result.Replace($requirePart, "__modcache[`"$modName`"]")
-                continue
+            $line = Get-LuaLineNumber $code $m.Index
+            if ($modules.ContainsKey($modName)) {
+                if ($visited.Contains($modName)) {
+                    # Already inlined — reference the module cache (NOT nil: the module
+                    # may be required again inside another module's scope)
+                    $cached = '__modcache["' + $modName + '"]'
+                    # A bare table access is not a valid Lua statement.
+                    if (-not $prefix) { $cached = 'do local _ = ' + $cached + ' end' }
+                    [void]$sb.Append($prefix + $cached)
+                    if ($active.Contains($modName)) {
+                        Add-RequireRecord $sourceFile $line $modName 'cycle' 'module is still loading; its cache value is not ready'
+                    } else {
+                        Add-RequireRecord $sourceFile $line $modName 'cached' 'reused __modcache entry'
+                    }
+                } else {
+                    # Mark before recursing so self/mutual requires hit the cache
+                    # branch instead of recursing forever.
+                    [void]$visited.Add($modName)
+                    [void]$active.Add($modName)
+                    $modCode = Inline-Requires -code $modules[$modName] -modules $modules `
+                        -files $files -visited $visited -sourceFile $files[$modName]
+                    [void]$active.Remove($modName)
+                    # Keep the "local xxx = " prefix from the matched text; wrap the
+                    # module as an IIFE that also records it in __modcache.
+                    $replacement = "(function() local m = (function()`r`n$modCode`r`nend)() __modcache[`"$modName`"] = m return m end)()"
+                    [void]$sb.Append($prefix + $replacement)
+                    Add-RequireRecord $sourceFile $line $modName 'inlined' $files[$modName]
+                }
+            } elseif ($EngineModules.Contains($modName)) {
+                # Leave the call intact: package.preload resolves it in-game.
+                [void]$sb.Append($m.Value)
+                Add-RequireRecord $sourceFile $line $modName 'engine' 'runtime module (package.preload)'
+            } else {
+                [void]$sb.Append($m.Value)
+                Add-RequireRecord $sourceFile $line $modName 'missing' 'no map file and no engine module'
             }
-            $visited.Add($modName) | Out-Null
-            $modCode = Inline-Requires $modules[$modName] $modules $visited
-            # Only replace the require "..." part, keep the "local xxx = " prefix.
-            # Wrap as IIFE that also records the module in __modcache for repeat requires.
-            $replacement = "(function() local m = (function()`r`n$modCode`r`nend)() __modcache[`"$modName`"] = m return m end)()"
-            $result = $result.Replace($requirePart, $replacement)
+            $cursor = $m.Index + $m.Length
         }
-        return $result
+        [void]$sb.Append($code.Substring($cursor))
+        return $sb.ToString()
+    }
+
+    # Requires outside the column-0 form are left untouched. Report them for the
+    # files that are actually reachable: engine modules may appear anywhere and
+    # still resolve at runtime, map modules cannot.
+    function Find-UnmatchedRequires {
+        param(
+            [hashtable]$modules,
+            [hashtable]$files,
+            [System.Collections.Generic.HashSet[string]]$visited
+        )
+        foreach ($modName in $visited) {
+            $code = $modules[$modName]
+            $sourceFile = $files[$modName]
+            $mask = Get-LuaCodeMask $code
+            $spans = @()
+            foreach ($p in [regex]::Matches($code, $RequirePattern)) {
+                $spans += ,@($p.Index, ($p.Index + $p.Length))
+            }
+            foreach ($m in [regex]::Matches($code, $AnyRequirePattern)) {
+                if ($mask.Substring($m.Index, 7) -ne 'require') { continue }
+                $inside = $false
+                foreach ($s in $spans) {
+                    if ($m.Index -ge $s[0] -and $m.Index -lt $s[1]) { $inside = $true; break }
+                }
+                if ($inside) { continue }
+
+                $target = $m.Groups[1].Value
+                $line = Get-LuaLineNumber $code $m.Index
+                if ($modules.ContainsKey($target)) {
+                    Add-RequireRecord $sourceFile $line $target 'unmatched' `
+                        'cannot be inlined here; put it at column 0 as: require "module"'
+                } elseif ($EngineModules.Contains($target)) {
+                    Add-RequireRecord $sourceFile $line $target 'engine' 'runtime module; not inlined'
+                } else {
+                    Add-RequireRecord $sourceFile $line $target 'missing' 'no map file and no engine module'
+                }
+            }
+        }
     }
 
     $isMainEntry = $Entry -eq "war3map"
     $visited = [System.Collections.Generic.HashSet[string]]::new()
-    $visited.Add($Entry) | Out-Null
-    $bundled = Inline-Requires $entryCode $moduleMap $visited
+    [void]$visited.Add($Entry)
+    $bundled = Inline-Requires -code $entryCode -modules $moduleMap -files $moduleFiles `
+        -visited $visited -sourceFile $moduleFiles[$Entry]
+    Find-UnmatchedRequires -modules $moduleMap -files $moduleFiles -visited $visited
+
+    # Conservative diagnostics for literal requires. External runtime loaders
+    # may resolve missing modules; strict mode rejects them unless recognized.
+    $missing = @($records | Where-Object { $_.Action -eq 'missing' })
+    $unmatched = @($records | Where-Object { $_.Action -eq 'unmatched' })
+    $cycles = @($records | Where-Object { $_.Action -eq 'cycle' })
+    $unused = @($moduleMap.Keys | Where-Object { -not $visited.Contains($_) } | Sort-Object)
+
+    if ($RequireReport) {
+        Write-Host ("  Require report ({0}):" -f $moduleFiles[$Entry])
+        foreach ($r in ($records | Sort-Object Source, Line, Module)) {
+            Write-Host ("    [{0,-9}] {1,-28} <- {2}:{3}" -f $r.Action, $r.Module, $r.Source, $r.Line)
+            if ($r.Note -and $r.Action -notin @('inlined', 'cached')) {
+                Write-Host ("               {0}" -f $r.Note)
+            }
+        }
+        if ($unused.Count -gt 0) {
+            Write-Host ("  Unused Lua files (not reachable from {0}): {1}" -f $Entry, ($unused -join ', '))
+        }
+        $counts = @($records | Group-Object Action | Sort-Object Name |
+            ForEach-Object { "$($_.Name)=$($_.Count)" })
+        Write-Host ("  Require summary: " + ($counts -join ' ') +
+            " modules=$($moduleMap.Count) reachable=$($visited.Count - 1) unused=$($unused.Count)")
+    } elseif ($missing.Count -gt 0 -or $unmatched.Count -gt 0 -or $cycles.Count -gt 0) {
+        Write-Host ("  WARNING: {0} missing, {1} un-inlined and {2} cyclic require(s); run with -RequireReport for detail" -f `
+            $missing.Count, $unmatched.Count, $cycles.Count)
+    }
+
+    if ($StrictRequires -and ($missing.Count -gt 0 -or $unmatched.Count -gt 0 -or $cycles.Count -gt 0)) {
+        foreach ($r in (@($missing) + @($unmatched) + @($cycles) | Sort-Object Source, Line)) {
+            Write-Host ("  [require] {0}:{1}: {2} ({3})" -f $r.Source, $r.Line, $r.Module, $r.Action)
+        }
+        throw 'require validation failed: missing, unsupported or cyclic dependencies; resolve them before bundling, or drop -StrictRequires for runtime-managed modules'
+    }
+
     $bundled = "local __modcache = {}`r`n" + $bundled
     if ($isMainEntry -and $InteractivePoint) {
         $bundled = "_G.__JAPI_TEST_INTERACTIVE_POINT = true`r`n" + $bundled
@@ -205,6 +484,16 @@ if (Test-Path -LiteralPath $UnitObjectIni) {
     Remove-Item -LiteralPath $ObjectMap -Force
 }
 
+# Opt in by placing objects.lua at the project root. Compiler stays outside MapDir.
+$ObjectDeclarations = Join-Path $MapDir 'objects.lua'
+if (Test-Path -LiteralPath $ObjectDeclarations) {
+    Write-Host '  [1c] Compile code-defined unit/ability data'
+    $ObjectCompiler = Join-Path $PSScriptRoot 'object-data\build.lua'
+    if (-not (Test-Path -LiteralPath $ObjectCompiler)) { throw "Object compiler missing: $ObjectCompiler" }
+    & $Lua -E $ObjectCompiler $ObjectDeclarations $WorkDir "$W3x2Lni\data\enUS-1.27.1"
+    if ($LASTEXITCODE -ne 0) { throw 'Object declaration compilation failed' }
+}
+
 $JFile = "$WorkDir\war3map.j"
 if (-not (Test-Path $JFile)) {
     Set-Content $JFile "// empty war3map.j`r`n" -Encoding Ascii
@@ -227,6 +516,7 @@ if ($TestReboot) {
 Write-Host '  [3/5] Patching war3map.j'
 $jContent = Get-Content $JFile -Raw -Encoding ASCII
 $nl = [string][char]13 + [string][char]10
+Write-Host ("  JASS anchors: " + (Get-JassAnchorSummary $jContent))
 
 # Every array global is allocated lazily by the JASS VM on its first store, and
 # the VM exposes no allocator. The only public way to materialise the block is a
@@ -271,7 +561,8 @@ if ($WithJassWrappers) {
     if (-not $jassWrapperBlock) { throw 'wrapper generator produced no output' }
     $wrapperCount = ([regex]::Matches($jassWrapperBlock, '(?m)^function ')).Count
     Write-Host ("  JASS wrappers: " + $wrapperCount + " generated, " + $mapFunctions.Count + " map functions left as-is")
-    if ($jContent -match '(?m)^[ \t]*integer[ \t]+udg_lua_wrapper_ready\b') {
+    if ($jContent -match '(?m)^[ \t]*integer[ \t]+udg_lua_wrapper_ready\b' -and
+        $jContent -notmatch '(?m)^[ \t]*function[ \t]+JapiWrapperProbeActions\b') {
         # The probe runs from a one-shot timer instead of inline map main():
         # the UI-backed handlers (GetLittleMapX / SetLittleMapX) are not ready
         # while the map is still on the loading screen, and a live value such
@@ -307,8 +598,31 @@ $funcAddrDecl = ''
 $funcAddrBlock = ''
 $funcAddrProbe = ''
 if ($WithGetFuncAddr) {
-    $declaredNative = $jContent -match '(?m)^[ 	]*native[ 	]+SetHeroLevels\b'
-    $declaredFunc = $jContent -match '(?m)^[ 	]*function[ 	]+GetFuncAddr[ 	]+takes'
+    $nativeDecls = [regex]::Matches($jContent, '(?m)^[ \t]*native[ \t]+SetHeroLevels\b')
+    $declaredNative = $nativeDecls.Count -gt 0
+    $declaredFunc = [bool]($jContent -match '(?m)^[ \t]*function[ \t]+GetFuncAddr[ \t]+takes\b')
+    if ($nativeDecls.Count -gt 1) {
+        $lines = @($nativeDecls | ForEach-Object { Get-LineNumberFromIndex $jContent $_.Index })
+        throw ("war3map.j declares 'native SetHeroLevels' $($nativeDecls.Count) times (lines " +
+            ($lines -join ', ') + '); the JASS compiler rejects duplicate declarations.`n' +
+            "  JASS anchors: " + (Get-JassAnchorSummary $jContent) + "`n  Base map: $BaseMap")
+    }
+    if ($declaredNative) {
+        # The declaration must precede the first function; a later declaration
+        # is compiled after the script's function table is built and the map
+        # silently drops back to the main menu. Do not try to "fix" this by
+        # prepending a second declaration: that is a duplicate.
+        $firstFunction = [regex]::Match($jContent,
+            '(?m)^[ \t]*function[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+takes\b')
+        if ($firstFunction.Success -and $nativeDecls[0].Index -gt $firstFunction.Index) {
+            throw ("war3map.j declares 'native SetHeroLevels' at line " +
+                (Get-LineNumberFromIndex $jContent $nativeDecls[0].Index) +
+                ", after the first function at line " +
+                (Get-LineNumberFromIndex $jContent $firstFunction.Index) +
+                ". Move the declaration above every function (the globals block counts), or drop -WithGetFuncAddr.`n" +
+                "  JASS anchors: " + (Get-JassAnchorSummary $jContent) + "`n  Base map: $BaseMap")
+        }
+    }
     if (-not $declaredNative) {
         $funcAddrDecl = '// japi: engine native that common.j omits; declared here so the map can take a code address.' + $nl +
             'native SetHeroLevels takes code f returns nothing' + $nl + $nl
@@ -320,7 +634,8 @@ if ($WithGetFuncAddr) {
             '    return LoadInteger(japi_ht, japi__key, 0)' + $nl +
             'endfunction' + $nl
     }
-    if ($jContent -match '(?m)^[ 	]*integer[ 	]+udg_lua_getfunc_ready\b') {
+    if ($jContent -match '(?m)^[ \t]*integer[ \t]+udg_lua_getfunc_ready\b' -and
+        $jContent -notmatch '(?m)^[ \t]*function[ \t]+JapiGetFuncAddrProbeActions\b') {
         # The probe runs from its own one-shot timer: map main() is too early for
         # the JASS globals it writes and for the DLL-registered natives it calls.
         $funcAddrProbe = $nl +
@@ -358,9 +673,23 @@ if ($WithGetFuncAddr) {
 # Lines that hand the shared hashtable over to the DLL and load war3map.lua.
 # When the base map carries the bridge probe functions, exercise JASS -> Lua
 # immediately after LoadScript (the Lua handlers register synchronously).
-$loadScriptLines = $arrayAllocCall +
+# A map that is already patched keeps its existing calls: prepending or
+# appending duplicates is harmless at runtime but hides double injection.
+$arrayAllocCallForScript = $arrayAllocCall
+if ($arrayAllocCallForScript -and $jContent -match '(?m)^[ \t]*call[ \t]+JapiForceAllocArrays\b') {
+    $arrayAllocCallForScript = ''
+}
+$wrapperProbeForScript = $wrapperProbe
+if ($wrapperProbeForScript -and $jContent -match '(?m)^[ \t]*function[ \t]+JapiWrapperProbeActions[ \t]+takes\b') {
+    $wrapperProbeForScript = ''
+}
+$funcAddrProbeForScript = $funcAddrProbe
+if ($funcAddrProbeForScript -and $jContent -match '(?m)^[ \t]*function[ \t]+JapiGetFuncAddrProbeActions[ \t]+takes\b') {
+    $funcAddrProbeForScript = ''
+}
+$loadScriptLines = $arrayAllocCallForScript +
     '    call SaveStr(japi_ht, japi__key, 0, "()V")' + $nl +
-    '    call UnitId("LoadScript")' + $wrapperProbe + $funcAddrProbe
+    '    call UnitId("LoadScript")' + $wrapperProbeForScript + $funcAddrProbeForScript
 if ($jContent -match 'function LuaBridgeProbeCall') {
     $loadScriptLines += $nl +
         '    call LuaCallback1()' + $nl +
@@ -369,21 +698,28 @@ if ($jContent -match 'function LuaBridgeProbeCall') {
         '    set udg_lua_handle_result = LuaHandleProbeCall()'
 }
 
+$rebootProbeCall = ''
 if ($TestReboot) {
     # The VM reset must be driven by pure JASS: closing Lua from inside a Lua
     # frame would tear down a live lua_pcall. A one-shot timer keeps it off the
     # war3map.lua call stack.
-    $loadScriptLines += $nl +
-        '    call TimerStart(CreateTimer(), 6.00, false, function JapiRebootProbe)'
+    if ($jContent -notmatch '(?m)^[ \t]*call[ \t]+TimerStart[^\r\n]*function[ \t]+JapiRebootProbe\b') {
+        $rebootProbeCall = $nl +
+            '    call TimerStart(CreateTimer(), 6.00, false, function JapiRebootProbe)'
+        $loadScriptLines += $rebootProbeCall
+    }
     $rebootProbeFunc = 'function JapiRebootProbe takes nothing returns nothing' + $nl +
         '    call UnitId("SimulateMapBoot")' + $nl +
         'endfunction' + $nl + $nl
-    $rebootMain = [regex]::Match($jContent, '(?m)^[ \t]*function[ \t]+main[ \t]+takes')
+    $rebootMain = [regex]::Match($jContent, '(?m)^[ \t]*function[ \t]+main[ \t]+takes\b')
     if (-not $rebootMain.Success) {
-        throw "war3map.j has no 'function main takes' for -TestReboot: $BaseMap"
+        throw ("war3map.j has no 'function main takes' for -TestReboot.`n" +
+            "  JASS anchors: " + (Get-JassAnchorSummary $jContent) + "`n  Base map: $BaseMap")
     }
-    $jContent = $jContent.Substring(0, $rebootMain.Index) + $rebootProbeFunc +
-        $jContent.Substring($rebootMain.Index)
+    if ($jContent -notmatch '(?m)^[ \t]*function[ \t]+JapiRebootProbe\b') {
+        $jContent = $jContent.Substring(0, $rebootMain.Index) + $rebootProbeFunc +
+            $jContent.Substring($rebootMain.Index)
+    }
 }
 
 # Inject a self-contained bootstrap into a map that knows nothing about japi:
@@ -409,46 +745,96 @@ function Add-JapiBootstrap {
         $globalsDecl += '    integer japi__key = StringHash("jass")' + $nl
     }
 
-    $mainMatch = [regex]::Match($Content, '(?m)^[ \t]*function[ \t]+main[ \t]+takes')
+    $mainMatch = [regex]::Match($Content, '(?m)^[ \t]*function[ \t]+main[ \t]+takes\b')
     if (-not $mainMatch.Success) {
-        throw "war3map.j has no 'function main takes' to bootstrap: $BaseMap"
+        throw ("war3map.j has no 'function main takes' to bootstrap.`n" +
+            "  JASS anchors: " + (Get-JassAnchorSummary $Content) + "`n  Base map: $BaseMap")
     }
-    $endFunc = $Content.IndexOf('endfunction', $mainMatch.Index)
-    if ($endFunc -lt 0) { throw "war3map.j main() has no endfunction: $BaseMap" }
-    $Content = $Content.Substring(0, $endFunc) + '    call JapiBootstrap()' + $nl +
-        $Content.Substring($endFunc)
+    $endFunc = [regex]::Match($Content.Substring($mainMatch.Index), '(?m)^[ \t]*endfunction\b')
+    if (-not $endFunc.Success) {
+        throw ("war3map.j main() (line " + (Get-LineNumberFromIndex $Content $mainMatch.Index) +
+            ") has no matching 'endfunction'.`n  JASS anchors: " + (Get-JassAnchorSummary $Content) +
+            "`n  Base map: $BaseMap")
+    }
+    $endFuncAt = $mainMatch.Index + $endFunc.Index
+    $Content = $Content.Substring(0, $endFuncAt) + '    call JapiBootstrap()' + $nl +
+        $Content.Substring($endFuncAt)
 
-    $mainStart = [regex]::Match($Content, '(?m)^[ \t]*function[ \t]+main[ \t]+takes').Index
+    $mainStart = [regex]::Match($Content, '(?m)^[ \t]*function[ \t]+main[ \t]+takes\b').Index
     $Content = $Content.Substring(0, $mainStart) + $bootstrap + $Content.Substring($mainStart)
 
     if (-not $globalsDecl) { return $Content }
-    $endGlobals = [regex]::Match($Content, '(?m)^[ \t]*endglobals')
-    if ($endGlobals.Success) {
-        return $Content.Substring(0, $endGlobals.Index) + $globalsDecl + $Content.Substring($endGlobals.Index)
+    $anchors = Find-JassAnchors $Content
+    if ($anchors.Globals.Success -and -not $anchors.EndGlobals.Success) {
+        throw ("war3map.j has a 'globals' block (line " +
+            (Get-LineNumberFromIndex $Content $anchors.Globals.Index) +
+            ") but no 'endglobals'; cannot add japi_ht/japi__key safely.`n" +
+            "  JASS anchors: " + (Get-JassAnchorSummary $Content) + "`n  Base map: $BaseMap")
+    }
+    if ($anchors.EndGlobals.Success) {
+        $at = $anchors.EndGlobals.Index
+        return $Content.Substring(0, $at) + $globalsDecl + $Content.Substring($at)
     }
     return 'globals' + $nl + $globalsDecl + 'endglobals' + $nl + $nl + $Content
 }
 
-if ($jContent -match [regex]::Escape('call UnitId("LoadScript")')) {
-    $loadScriptReplacement = 'call UnitId("LoadScript")'
-    if ($arrayAllocCall) {
-        $loadScriptReplacement = 'call JapiForceAllocArrays()' + $nl + '    call UnitId("LoadScript")'
+$loadScriptMatches = [regex]::Matches($jContent,
+    '(?m)^[ \t]*call[ \t]+UnitId[ \t]*\([ \t]*"LoadScript"[ \t]*\)')
+$loadScriptMatch = $null
+if ($loadScriptMatches.Count -gt 0) { $loadScriptMatch = $loadScriptMatches[0] }
+if ($loadScriptMatches.Count -gt 1) {
+    $lines = @($loadScriptMatches | ForEach-Object { Get-LineNumberFromIndex $jContent $_.Index })
+    Write-Host ("  WARNING: found " + $loadScriptMatches.Count +
+        " LoadScript calls (lines " + ($lines -join ', ') + '); patching the first only')
+}
+$initPluginMatches = [regex]::Matches($jContent,
+    '(?m)^[ \t]*call[ \t]+initializePlugin[ \t]*\([ \t]*\)')
+
+if ($null -ne $loadScriptMatch) {
+    # Already patched (or a hand-written builtin-japi map). Add only the
+    # requested pieces that the script does not already contain.
+    $before = $arrayAllocCallForScript
+    $after = $wrapperProbeForScript + $funcAddrProbeForScript + $rebootProbeCall
+    if ($before -or $after) {
+        $replacement = $before + $loadScriptMatch.Value + $after
+        $jContent = $jContent.Substring(0, $loadScriptMatch.Index) + $replacement +
+            $jContent.Substring($loadScriptMatch.Index + $loadScriptMatch.Length)
+        $added = @()
+        if ($arrayAllocCallForScript) { $added += 'array prealloc' }
+        if ($wrapperProbeForScript) { $added += 'wrapper probe' }
+        if ($funcAddrProbeForScript) { $added += 'GetFuncAddr probe' }
+        if ($rebootProbeCall) { $added += 'VM reboot probe' }
+        Write-Host ("  Bootstrap: LoadScript anchor present; added " + ($added -join ', '))
+    } else {
+        Write-Host '  Bootstrap: LoadScript anchor present, nothing to add'
     }
-    if ($wrapperProbe) { $loadScriptReplacement += $wrapperProbe }
-    if ($loadScriptReplacement -ne 'call UnitId("LoadScript")') {
-        $jContent = $jContent.Replace('call UnitId("LoadScript")', $loadScriptReplacement)
+} elseif ($initPluginMatches.Count -gt 0) {
+    if ($initPluginMatches.Count -gt 1) {
+        $lines = @($initPluginMatches | ForEach-Object { Get-LineNumberFromIndex $jContent $_.Index })
+        Write-Host ("  WARNING: found " + $initPluginMatches.Count +
+            " initializePlugin calls (lines " + ($lines -join ', ') +
+            '); patching the first only')
     }
-    Write-Host '  Bootstrap: already present, left untouched'
-} elseif ($jContent -match [regex]::Escape('call initializePlugin(  )')) {
-    $jContent = $jContent.Replace('call initializePlugin(  )',
-        'call initializePlugin(  )' + $nl + $loadScriptLines)
+    $jContent = Insert-AfterJassMatch $jContent $initPluginMatches[0] ($nl + $loadScriptLines)
     Write-Host '  Bootstrap: plugin marker map'
 } else {
     if ($jContent -match 'UnitId\s*\(') {
-        Write-Host '  WARNING: map already uses UnitId(); review the injected bootstrap for conflicts'
+        Write-Host ('  WARNING: map already uses UnitId() but has neither a LoadScript call nor an ' +
+            'initializePlugin call; review the injected bootstrap for conflicts')
     }
     $jContent = Add-JapiBootstrap $jContent $loadScriptLines
     Write-Host '  Bootstrap: injected into map main() (foreign map)'
+}
+
+# The allocator function alone is not enough: without the call before
+# LoadScript the arrays stay lazy and jass.globals drops every index > 0 write
+# with only a debug-log line. Catch that here instead of in a live test.
+if ($arrayGlobals.Count -gt 0 -and
+    $jContent -notmatch '(?m)^[ \t]*call[ \t]+JapiForceAllocArrays\b') {
+    throw ("war3map.j declares " + $arrayGlobals.Count +
+        " array global(s) but the patched script has no JapiForceAllocArrays() call; " +
+        "jass.globals writes past index 0 would be ignored.`n" +
+        "  JASS anchors: " + (Get-JassAnchorSummary $jContent) + "`n  Base map: $BaseMap")
 }
 
 # Helper that materialises every declared array block. Defined right after
@@ -464,21 +850,34 @@ if ($arrayGlobals.Count -gt 0) {
         'function JapiForceAllocArrays takes nothing returns nothing' + $nl +
         $allocBody +
         'endfunction' + $nl + $nl
-    $endGlobals = [regex]::Match($jContent, '(?m)^[ \t]*endglobals')
+    $endGlobals = [regex]::Match($jContent, '(?m)^[ \t]*endglobals\b')
     if (-not $endGlobals.Success) {
-        throw "war3map.j declares array globals but has no endglobals anchor: $BaseMap"
+        throw ("war3map.j declares " + $arrayGlobals.Count +
+            " array global(s) but has no top-level 'endglobals' anchor, so JapiForceAllocArrays " +
+            "cannot be inserted safely (use -NoArrayPrealloc to skip it).`n" +
+            "  JASS anchors: " + (Get-JassAnchorSummary $jContent) + "`n  Base map: $BaseMap")
     }
-    $anchor = $endGlobals.Index + $endGlobals.Length
-    $jContent = $jContent.Substring(0, $anchor) + $nl + $nl + $allocFunc + $jContent.Substring($anchor)
-    Write-Host '  Array prealloc: JapiForceAllocArrays injected'
+    $existingAlloc = [regex]::Match($jContent,
+        '(?ms)^[ \t]*function[ \t]+JapiForceAllocArrays\b.*?^[ \t]*endfunction\b')
+    if ($existingAlloc.Success) {
+        $jContent = $jContent.Substring(0, $existingAlloc.Index) + $allocFunc +
+            $jContent.Substring($existingAlloc.Index + $existingAlloc.Length)
+        Write-Host '  Array prealloc: existing helper refreshed'
+    } else {
+        $anchor = $endGlobals.Index + $endGlobals.Length
+        $jContent = $jContent.Substring(0, $anchor) + $nl + $nl + $allocFunc + $jContent.Substring($anchor)
+        Write-Host '  Array prealloc: JapiForceAllocArrays injected'
+    }
 }
 
 # Wrapper block goes right after endglobals: pjass wants every function defined
 # before its first call, and both map code and the probe inside main() call them.
 if ($jassWrapperBlock) {
-    $endGlobals = [regex]::Match($jContent, '(?m)^[ 	]*endglobals')
+    $endGlobals = [regex]::Match($jContent, '(?m)^[ \t]*endglobals\b')
     if (-not $endGlobals.Success) {
-        throw "war3map.j has no endglobals anchor for -WithJassWrappers: $BaseMap"
+        throw ("war3map.j has no top-level 'endglobals' anchor for -WithJassWrappers; " +
+            "the generated wrapper block cannot be inserted.`n" +
+            "  JASS anchors: " + (Get-JassAnchorSummary $jContent) + "`n  Base map: $BaseMap")
     }
     $anchor = $endGlobals.Index + $endGlobals.Length
     $jContent = $jContent.Substring(0, $anchor) + $nl + $nl + $jassWrapperBlock + $jContent.Substring($anchor)
@@ -487,9 +886,11 @@ if ($jassWrapperBlock) {
 # GetFuncAddr helper block also goes right after endglobals: pjass wants every
 # function defined before its first call, and the probe timer calls it from main().
 if ($funcAddrBlock) {
-    $endGlobals = [regex]::Match($jContent, '(?m)^[ 	]*endglobals')
+    $endGlobals = [regex]::Match($jContent, '(?m)^[ \t]*endglobals\b')
     if (-not $endGlobals.Success) {
-        throw "war3map.j has no endglobals anchor for -WithGetFuncAddr: $BaseMap"
+        throw ("war3map.j has no top-level 'endglobals' anchor for -WithGetFuncAddr; " +
+            "the GetFuncAddr helper cannot be inserted.`n" +
+            "  JASS anchors: " + (Get-JassAnchorSummary $jContent) + "`n  Base map: $BaseMap")
     }
     $anchor = $endGlobals.Index + $endGlobals.Length
     $jContent = $jContent.Substring(0, $anchor) + $funcAddrBlock + $jContent.Substring($anchor)
@@ -503,6 +904,7 @@ if ($funcAddrDecl) {
     Write-Host '  GetFuncAddr: native SetHeroLevels declared at top of war3map.j'
 }
 Set-Content $JFile $jContent -Encoding ASCII -NoNewline
+Write-Host ("  JASS anchors after patch: " + (Get-JassAnchorSummary $jContent))
 
 # 3b. Parse the patched script before it ever reaches the game. JassHelper/vJass
 # maps can opt out with -SkipJassCheck.
@@ -698,6 +1100,11 @@ if ($WithDebugger) {
 }
 
 # 5. Repack
+if ($SkipRepack) {
+    Write-Host '  [5/5] Repack skipped (-SkipRepack); no .w3x written'
+    Write-Host "  Work dir: $WorkDir"
+    return
+}
 Write-Host '  [5/5] Repack'
 $outDir = Split-Path -Parent $OutFile
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory $outDir -Force | Out-Null }

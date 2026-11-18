@@ -3,7 +3,7 @@
 > 本文件是仓库中唯一的当前完成状态来源（single source of truth）。
 > `docs/planning/` 下的文件保留方案演进、阶段拆分和历史验收记录，其中的状态标记不代表当前状态。
 
-- 最后更新：2026-11-17
+- 最后更新：2026-11-18
 - 支持版本：Warcraft III 1.27a（当前偏移与实机验收版本）
 - 普通实机回归：`122 passed, 0 failed, 122 total`（2026-11-16 复跑，与 2026-11-15 同数字；含 8 项 JASS↔Lua bridge 回归、数组全局预分配后的 `jass.globals` 用例，以及 6 项 `SaveFunc` / `func_bind_trigger_name` 回归）
 - JASS wrapper 回归：`125 passed, 0 failed, 125 total`（2026-11-16 复跑同一数字；`deploy.ps1 -WithJassWrappers` 为 115 个 bridge handler 生成五部曲 wrapper 后跑 122 项基线 + 3 项 wrapper 断言；默认打包仍为 `122/122`，第 8c 节打印 `[SKIP]`）
@@ -12,10 +12,13 @@
 - UI 交互回归：`110 passed, 0 failed, 110 total`（真实鼠标悬停 + 命令卡显隐，2026-07-30，旧 108 基线；本次未重跑）
 - D3D 实机回归：`170 passed, 0 failed, 170 total`（2026-11-16 复跑；普通基线 122 项 + D3D 48 项 = 170，**D3D 夹具数量没变**（2026-11-15 的 `164 = 116 + 48` 是同一批夹具配旧 116 基线）：公共 SDK 功能 8 组 + 底层 bridge 13 组 + P4 Subscription 真实输入 1 组 + P5 生命周期 7 项 + shutdown 1 组 + §15.8 覆盖补齐 17 项（handler 往返 10 + 事件回调 3 + 交互期探针 3 + BLP2 实机 1）；handler 兼容面 54/54 已全部触达，仍不等于 164 个 API）
 - 波次防守 demo 回归：`33 passed, 0 failed, 33 total`（2026-11-16；`deploy.ps1 -Demo` 跑 `map/game/wave.lua` + `map/game/demo.lua` 的 33 条断言：世界构建、波次循环、伤害/击杀/计分、HUD 跟随、败北/胜利、restart、瞄准预览（世界圈型特效 + HUD `AIM` 行）、光标下怪物血条、伤害数字与受击闪白、脚本移动命令、Q 施法事件与 CD 门槛、选择可读，以及**每个单位头顶血条**（锚点高度实测：`hfoo` 88 / `hrif` 93 / `hkni` 161 / 基地 409 世界单位；打开引擎自带 `healthbars` 当基准，同帧内我们的条与原生条中心差 ≤1.4px）；真实 OS 级键鼠由 `tools/drive-demo.ps1` 驱动 `-Demo -Hold` 会话复核，同一构建下真 Q 施法、真 R 重开在日志里生效；1.27a 窗口模式的鼠标按钮不进 `message.hook`，所以移动用引擎自带左键命令，`message.order_point` 的落点必须落在当前镜头内）
-- 地图级 VM 重启回归：`9 passed, 0 failed, 9 total`（2026-11-16 复跑同一数字；同一进程内换图后旧 Lua VM 关闭、新图脚本重载、旧 session 资源归零；新增断言证明 `SaveFunc` 锚点与 `func_bind` 标签表随地图启动被清空）
+- 地图级 VM 重启回归：`10 passed, 0 failed, 10 total`（2026-11-17 本批复跑；原 9 项继续通过，新增事件计时器清理期间重入删除的实机断言：只统计该事件的两个计时器，确认清理前已移出注册表；同进程换图后新 VM/session 正常）
 - D3D 发布产物溯源：提交 `d151fd7`（SDK 0.4.0）的 detached clean worktree 构建（HEAD 精确一致、tracked diff 为零）用同一产物实跑交互 `164/164`、普通 `116/116`、地图级 VM 重置 `8/8`，游戏目录 proxy 与 sidecar 回读等于 clean proxy hash（2026-11-15；交互回归使用夹具修正提交 `65bceb5`，见第 4 节）。该记录保留当时口径：`164 = 116 + 48`、VM 重置夹具 8 项；2026-11-16 用 HEAD `498a308` 的同一条命令复跑为 `170 = 122 + 48` 与 `9/9`（见下条与第 4 节）
 - 地图作者 SDK 包：`docs/guide/SDK-QUICKSTART.md` / `SDK-GUIDE.md` / `SDK-COOKBOOK.md` 三份中文阶梯文档、`examples/` 十个最小示例（静态 + 打包 10/10 通过；`-Live` 10 个全部实机 `0 failed`，分两批跑完，见 §4）、`tools/new-project.ps1` 脚手架（生成的空工程实机 `Results: 9 passed, 0 failed, 9 total (0 skipped)`）、`CHANGELOG.md`（SDK 版本口径 = `jass.d3d` 的 `kVersion`）、`docs/RELEASE.md` + `tools/release-sdk.ps1`（clean worktree 出包；`-NoBuild` 实测 `build\sdk\0.4.0-498a308` 的 `SHA256SUMS.txt` 与独立 `Get-FileHash` 一致）、`tools/release-sdk.ps1 -SdkBundle` 另出 `sdk\` 自包含作者包（683 文件 / 90.2 MB，按仓库子集布局组装，作者脚本不用改路径就能当仓库根用；仓库外拷出后静态+打包 `10 passed, 0 failed`、脚手架生成的工程能直接 pack、包内 `deploy.ps1` 实机 `9/9`、包内 `-Live` 十例一轮跑完，见 §4）
-- 引擎接口面（2026-11-17）：新增原生接口一致性测试台 `tests/conformance/`（从 `src/` 注册表生成 `manifest.lua`，逐条断言模块/handler/返回类型/Set→Get 往返），实机 `Conformance: 170 passed, 0 failed, 4 skipped`；同批补上的通用能力：41 个 EX* 注册为真 JASS native、bridge 字符串返回 ABI 修正、`V` setter 返回 `true`、`jass.console`/`jass.log`/`jass.bignum`/`jass.storm.save`/`slk.misc` 真实现、`slk` 全表加载 + 整数 rawcode、`EXGet/SetUnitState` 与 `EXGet/SetAbilityString`、`jass.japi` 回落 bridge handler；普通回归仍是 `122/122`。入口 `tests\conformance\run.ps1`，见 §4
+- 引擎接口面（2026-11-17）：新增原生接口一致性测试台 `tests/conformance/`（从 `src/` 注册表生成 `manifest.lua`，逐条断言模块/handler/返回类型/Set→Get 往返），实机 `Conformance: 199 passed, 0 failed, 4 skipped`；同批补上的通用能力：39 个 `jass::japi_add` 声明（EX* 与 `GetMapName`/`GetGameVersion`/`GetPluginVersion`/`Hex`/`SetHeroLevels`）注册为真 JASS native、bridge 字符串返回 ABI 修正、`V` setter 返回 `true`、`jass.console`/`jass.log`/`jass.bignum`/`jass.storm.save`/`slk.misc` 真实现、`slk` 全表加载 + 整数 rawcode、`EXGet/SetUnitState` 与 `EXGet/SetAbilityString`、`jass.japi` 回落 bridge handler；普通回归仍是 `122/122`。入口 `tests\conformance\run.ps1`，见 §4
+- 首批 SDK 诊断与显式清理（2026-11-17，工作区改动）：`jass.japi.info(name)` / `jass.japi.counts()` 直接读活注册表，报告 engine native / japi native / UnitId bridge 的归属、spec 与可达路由；`jass.hook.unhook` 首次成功返回 `true`、重复返回 `false`，`hook[name] = nil` 同时清表项，hook 与 texture event 的回调引用按 owner 计数释放；`message.texture_remove_event` 返回布尔、`texture_destroy` 返回移除数量；`pack.ps1` 新增 `-RequireReport` / `-StrictRequires`（Lua 打包依赖分类）与 JASS 注入锚点摘要（缺失/错位带行号报错，多重调用锚点告警，`-SkipRepack` 可只检查 patch 结果）。实机：conformance `199/199`、普通 `122/122`、`-WithJassWrappers` `125/125`、`-WithGetFuncAddr` `126/126`、`-TestReboot` `10/10`（DLL 640000 B `F2C6EB08…`）；打包诊断 13/13。审查补充保留名拒绝、执行中 hook 卸载保护、卸载后 orig 安全报错、清理期间的重入删除保护。主工作区已恢复改动并实测；未提交、未发布，完整 D3D 交互和多人联机未在本轮重跑。
+- 第二批代码化物编与基础 UI（2026-11-18，主工作区未提交）：项目根 `objects.lua` 声明单位/技能，由 `tools/object-data` 按真实元数据生成 `.w3u`/`.w3a`，追加保留基座已有记录，声明文件不进入游戏 Lua；显式 ID/父 ID、字段类型、等级表与冲突验证，声明时快照防止复用 Lua 表改变既有对象。`map/lib/ui.lua` 提供按钮、嵌套行/列布局、间距/内边距、resize 重排、状态与幂等销毁。离线物编 `21/21` + 真实转换往返/基座 Hrif 保留；UI mock 5 组库测试 + 2 组实际示例流程回放；全部示例静态+打包 `12/12`。实机例 11 `4/4`，例 12 `3/3`（禁用点击、启用点击、真实窗口 resize、新位置点击与四类资源计数回到基线）；`verify-examples.ps1 -Filter '11|12' -Live -Timeout 160` exit 0。新增指南 [OBJECT-DATA-UI.md](guide/OBJECT-DATA-UI.md)。示例验证可驱动真实输入；发布脚本按 manifest 收集示例和附属模块，但本批尚未提交/发布 SDK 包。只覆盖单位/技能的明确字段子集与固定尺寸布局，不提供通用物编、文字测量/滚动或多人同步。
+- 第二批旁路回归记录（2026-11-18）：打包诊断 `13/13`；普通回归首轮 `121/122`（`LocalTargetOrder attack executes` 得到 order 0），同时退出受阻；检查时无 War3 残留，以 `deploy.ps1 -Job` 独占复跑为 `122/122` 且 creation handle 正常退出。未改动该断言或引擎来绕过失败，此环境/本地命令偶发情况仍需保留观察。物编最终源码另行实机复验 `4/4`；本轮没有重跑完整旧 D3D 交互、多人联机或 clean SDK 发布。
 - 默认测试场景：64×64 平坦空图，无基地、野怪、树木或预放物件；最终仅保留 1 个 10 级英雄火枪手 `Hrif`（2026-07-31）
 - 验收入口：先运行 `src\build.bat`，再按第 4 节选择普通或交互模式
 
@@ -23,7 +26,7 @@
 
 | 功能域 | 实现状态 | 验证状态 | 结论 |
 |---|---:|---:|---|
-| callback 注入、DLL 加载、Lua VM 启动与地图级重置 | 完成 | War3 1.27a 端到端 + 同进程换图 8/8 | 可用 |
+| callback 注入、DLL 加载、Lua VM 启动与地图级重置 | 完成 | War3 1.27a 端到端 + 同进程换图 10/10 | 可用 |
 | Lua 引擎模块 | 15/15（含 `jass.d3d`） | 自动回归 + 实机 + conformance A 组 | 全部可用；`jass.d3d` 的保留限制见下方 D3D 行与设计文档 15.8.4 |
 | 核心 runtime 能力 | 7/7 功能目标 | 自动回归 + 实机 | 可用 |
 | Lua DAP 调试器 | P0-P5 完成 | attach、断点、单步、栈、变量、求值实测 | 可用，需 `-WithDebugger` |
@@ -42,7 +45,7 @@
 | 示例验证器 `tools/verify-examples.ps1` + `tools/build-luac.ps1` | 三档：静态（目录结构 / A-B-C 契约 / 模块名 / 开关名与 `pack.ps1` 注册表比对 / 可选 `luac -p` 语法门禁）+ 打包（`-SkipPack` 关闭）+ `-Live`（串行部署、解析 `Results:` 行、跑完断言无 war3 残留、D3D 示例按 sidecar 哈希判 proxy 归属） | 静态 + 打包 10/10（日志 `build\verify-examples\lead\static-pack-luac.log`）；`-Live` 逐例实机结果见 §4 | **可用** |
 | 版本与变更记录 `CHANGELOG.md` | SDK 版本 = `jass.d3d` 的 `kVersion`（当前 `0.4.0`，`src/src/lua_engine/lua_engine/libs_d3d.cpp:35`），只有 Lua D3D 公开面变化才 bump；`[Unreleased]` 收 2026-11-16 的工具链与 JASS 侧通道；版本暴露面 = `d3d.version()`、`GetPluginVersion()`、`GetGameVersion()`、`d3d.status()/stats()`、日志首行 | `d3d.version()` 实机返回 `0.4.0`，由 `map/tests/test_d3d_sdk.lua:33` 断言精确字符串 | **完成** |
 | SDK 发布流程 `docs/RELEASE.md` + `tools/release-sdk.ps1` | 按设计文档 §14.4 的 clean-worktree 溯源流程落成脚本：解析 commit/version → `git worktree add --detach build\clean-<sha7>` → 断言 HEAD 与 tracked diff → Win32 Release 构建（或 `-NoBuild` 复用现有产物）→ 拷产物 + `SHA256SUMS.txt` + `manifest.json` → 删除 worktree | `-Commit 498a308 -NoBuild` 实测产出 `build\sdk\0.4.0-498a308`，三份产物 hash 与独立 `Get-FileHash` 一致（2026-11-16） | **可用**；全量构建分支沿用 §14.4 的 clean 构建记录 |
-| 原生接口一致性测试台（`tests/conformance`） | 独立最小地图 + 从 `src/` 注册表生成的 `manifest.lua`（66 个 bridge handler / 39 个声明 native），A–M 十三组断言：模块可加载、handler 可调用、`R`/`S`/`B` 返回类型、Set→Get 往返、slk/message/storm 契约、EX* 真 native、console/log/bignum、setter 返回值 | 实机 `Conformance: 170 passed, 0 failed, 4 skipped` / `Results: 170 passed, 0 failed, 170 total`（2026-11-17，DLL 633856 B `816E5F34…`） | **可用**；改了 `src/` 注册表要跑 `node tests\conformance\gen-manifest.mjs` 再跑测试 |
+| 原生接口一致性测试台（`tests/conformance`） | 独立最小地图 + 从 `src/` 注册表生成的 `manifest.lua`（80 个 bridge handler / 39 个声明 native；含 `libs_message.cpp` 的 `reg(...)` 注册），A–N 十四组断言：模块可加载、handler 可调用、`R`/`S`/`B` 返回类型、Set→Get 往返、slk/message/storm 契约、EX* 真 native、console/log/bignum、setter 返回值、`jass.japi.info/counts` 活注册表路由与 hook/texture event 显式清理 | 实机 `Conformance: 199 passed, 0 failed, 4 skipped` / `Results: 199 passed, 0 failed, 199 total`（2026-11-17，工作区 DLL 640000 B `F2C6EB0849D07FF6ACAA97FEAB854BB58AD950014F7DC7BD0B83EA662B7EE9E4`） | **可用**；改了 `src/` 注册表要跑 `node tests\conformance\gen-manifest.mjs` 再跑测试 |
 | 外部 YDWE 谱系图的通用接口面（2026-11-17） | 41 个 EX* 注册为真 JASS native；bridge 字符串返回 ABI（`resolve_string_result`）与 `V` setter 谓词语义；`jass.console`/`jass.log`/`jass.bignum`/真 `storm.save`/`slk.misc` 五个真模块；`slk` 7 表走 `mgr.load` 带地图物编合并 + 整数 rawcode；`EXGet/SetUnitState`、`EXGet/SetAbilityString`；`jass.japi` 回落 bridge handler | conformance J/K/L/M/C/F/E 组；引擎回归 122/125/126/9 + examples 静态 10/10 全 exit 0 | **可用**；只保证接口面与数据语义，具体某张图的玩法仍需按图验证 |
 
 ## 2. 已交付功能
@@ -447,14 +450,14 @@ unlink 的旧句柄）。两种症状都记在 `examples/README.md` 的「`-Live
 node .\tests\conformance\gen-manifest.mjs   # 改了 src/ 的注册表后刷新 manifest.lua
 ```
 
-实机（2026-11-17，`yd_japi.dll` 633856 B `816E5F347743538A9458B49431381A8B803B011697B41E6A19557215DBD44D26`）：`Conformance: 170 passed, 0 failed, 4 skipped` / `Results: 170 passed, 0 failed, 170 total`。4 条 `[SKIP]` 都需要本测试台给不了的东西（`-D3DProxy` 才能拿到的地图坐标、夹具物品、`EXPauseUnit` 的游戏侧相关性、不在引擎里的移植层模块 `lni`），逐条带原因，绝不静默跳过。
+实机（2026-11-17，工作区 cmake Win32 Release 构建 `yd_japi.dll` 640000 B `F2C6EB0849D07FF6ACAA97FEAB854BB58AD950014F7DC7BD0B83EA662B7EE9E4`）：`Conformance: 199 passed, 0 failed, 4 skipped` / `Results: 199 passed, 0 failed, 199 total`。其中 N 组覆盖 `jass.japi.info/counts` 的三张注册表归属/路由、双注册表 spec、运行时 Lua handler、`hook.unhook` 返回值/表项清理，以及 texture event 回调按 owner 释放（弱表 + 两轮 GC）。4 条 `[SKIP]` 都需要本测试台给不了的东西（`-D3DProxy` 才能拿到的地图坐标、夹具物品、`EXPauseUnit` 的游戏侧相关性、不在引擎里的移植层模块 `lni`），逐条带原因，绝不静默跳过。
 
 外部 YDWE 谱系图逼出来的通用引擎能力（都是通用改动，不是给某张图打的补丁）：
 
 - `src/src/lua_engine/lua_engine/libs_slk.cpp`：7 张表改为 `mgr.load(::slk::ROBJECT_TYPE::…, table)`（带地图物编合并；地图没有该表时 `ObjectManager` 自己回落基表），失败才回落原来的纯基表。
 - 同文件 `type_index`：接受数字 rawcode（大端 `YTfb` = 0x59546662），保留字符串键 —— `GetDestructableTypeId` 这类 native 返回的是整数。
 - `src/src/extensions/ex_natives/UnitState.cpp` + `Initialize.cpp`：`resolve_real_unit_state()` 填好 `RealGetUnitState`/`RealSetUnitState`（原本一直是空指针），新增 `EXGetUnitState`/`EXSetUnitState` 两个 bridge handler。
-- `src/src/lua_engine/lua_engine/libs_japi.cpp` + `bridge_dispatch.cpp/.h`：新增 `bridge::push_cpp_handler`，`jass.japi` 的 `__index` 在 `jass::japi_func` 取不到时回落它 —— 66 个 bridge handler 全部可被 Lua 当 native 调用，且不动 JASS 命名空间。
+- `src/src/lua_engine/lua_engine/libs_japi.cpp` + `bridge_dispatch.cpp/.h`：新增 `bridge::push_cpp_handler`，`jass.japi` 的 `__index` 在 `jass::japi_func` 取不到时回落它 —— 80 个 bridge handler（含 14 个 message handler）全部可被 Lua 当 native 调用，且不动 JASS 命名空间。
 - `Initialize.cpp` 的 `register_real_ex_natives()`：41 个 `jass::japi_add` 从此真的执行（原来 `initialize_ex_natives()` 只 `register_cpp_handler`，那些声明全是死代码）；`-WithJassWrappers` 仍 125/125，没有撞名。
 
 ## 5. 下一阶段顺序
@@ -519,6 +522,10 @@ node .\tests\conformance\gen-manifest.mjs   # 改了 src/ 的注册表后刷新 
     `tools/release-sdk.ps1` 把 §14.4 的 clean-worktree 溯源流程落成脚本。为支撑这些产物，`pack.ps1` 新增
     `-WorkDir`（并发打包互不覆盖），`deploy.ps1` 新增 `-MapDir`（把任意地图源目录透传给打包器）+ `-LogFile`
     位置告警 + 结果行 `failed > 0` 时 `exit 1`；`map/game/demo.lua` 未改动。
+12. 首批 SDK 诊断与显式清理（完成，2026-11-17；工作区改动未提交）：`jass.japi.info/counts` 把三张注册表的
+    归属/路由做成运行时可查；`jass.hook.unhook` + texture event 的返回值与回调引用释放让「显式清理」可观察；
+    `pack.ps1` 的 `-RequireReport`/`-StrictRequires` 把 Lua 打包依赖问题前移到打包期，JASS 注入锚点摘要让
+    缺失/错位带行号失败，多重调用锚点告警（`-SkipRepack` 可只检查 patch 结果）。实机验证见上列条目。
 
 ## 6. 文档职责
 

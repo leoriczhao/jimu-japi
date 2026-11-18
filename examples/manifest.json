@@ -124,6 +124,25 @@
       ],
       "d3d": false,
       "live": true
+    },
+    {
+      "id": "11-object-data",
+      "dir": "11-object-data",
+      "title": "代码化物编：自定义单位与多等级技能",
+      "modules": ["jass.common", "jass.slk"],
+      "pack": [],
+      "d3d": false,
+      "live": true
+    },
+    {
+      "id": "12-ui-components",
+      "dir": "12-ui-components",
+      "title": "基础 UI：按钮状态、线性布局与窗口重排",
+      "modules": ["jass.common", "jass.d3d"],
+      "pack": [],
+      "d3d": true,
+      "live": true,
+      "interactive": "ui-components"
     }
   ]
 }

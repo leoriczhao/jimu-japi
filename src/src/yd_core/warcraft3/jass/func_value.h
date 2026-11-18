@@ -33,6 +33,10 @@ namespace warcraft3::jass {
 		bool                              is_valid()    const;
 		std::vector<variable_type> const& get_param()   const;
 		variable_type const&              get_return()  const;
+		// Exact registration text, e.g. "(Hunit;I)Hability;". Only this form
+		// distinguishes handle subtypes; get_param()/get_return() keep letters.
+		// The returned pointer is owned by this func_value.
+		const char*                       get_spec()    const;
 		uintptr_t                         get_address() const;
 		bool                              has_sleep() const;
 		void                              set_sleep(bool v);
@@ -53,6 +57,7 @@ namespace warcraft3::jass {
 #pragma warning(push)
 #pragma warning(disable:4251)
 		std::vector<variable_type> param_;
+		std::string                spec_;
 #pragma warning(pop)
 		uintptr_t                  address_;
 		bool                       has_sleep_;

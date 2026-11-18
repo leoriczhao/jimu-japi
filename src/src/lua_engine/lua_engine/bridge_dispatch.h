@@ -6,7 +6,9 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <string>
 #include <lua.hpp>
 #include <warcraft3/jass.h>
 
@@ -33,6 +35,16 @@ namespace warcraft3::lua_engine::bridge {
     // True when a handler (Lua or C++) already owns this name. jass.japi uses
     // this to avoid silently shadowing built-in EX*/message/D3D handlers.
     bool has_handler(const char* name);
+
+    // Read-only registry introspection for jass.japi.info/counts. This reports
+    // the live maps, not the source-generated manifest, so a diagnostic cannot
+    // drift from what the engine actually registered.
+    size_t handler_count();
+    size_t cpp_handler_count();
+    size_t lua_handler_count();
+    bool handler_describe(const char* name, std::string* spec, bool* is_lua);
+    bool handshake_ready();
+    bool unitid_hooked();
 
     // Invoke an already-registered C++ handler directly, without touching the
     // shared JASS hashtable. Used by the input filter to query the D3D proxy's

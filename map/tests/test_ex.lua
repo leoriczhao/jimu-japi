@@ -513,6 +513,8 @@ local function test_mouse_orders()
     end)
 
     test("GetPlayerSelectedUnit after SelectUnit", function()
+        -- SelectUnit adds to the selection; remove any existing hero first.
+        jass.ClearSelection()
         jass.SelectUnit(fx.u, true)
         local sel = excall("GetPlayerSelectedUnit", "(I)Hunit;", 0)
         jass.SelectUnit(fx.u, false)

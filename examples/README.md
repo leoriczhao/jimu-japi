@@ -1,11 +1,14 @@
 # examples —— 可运行示例集
 
+> 2026-11-18 增补：当前清单共 12 例，静态+打包 `12/12` 通过；本轮新增物编例 11 实机 `4/4`、UI 例 12 实机 `3/3`，联合 `-Live` 命令 exit 0。下方 2026-11-16 的 10 例记录保留其历史口径，不代表本轮把旧例全部重新实机运行。
+
 > 日期：2026-11-16 ｜ 适用 SDK：本仓库 `src\build\bin\Release\yd_japi.dll`（SHA-256 `87C83BA1CE0E6E413CEA7B9D6018E9A289259EC9C2F01EE02E7827DAF6661908`，547328 字节）
 > 验证状态：`tools\verify-examples.ps1` 静态 + 打包 **10/10 通过**（静态里含 `luac -p` Lua 语法检查，见「Lua 语法检查」一节）；`-Live` **10 个示例全部实机 `0 failed`**（2026-11-16，同一 DLL，分两批：03:20/03:27 那批 9 个、03:48 那批含 05 的 6 个）。01/08/09/10 与 05 因另一会话占用 war3 单实例锁和共享日志，没能在同一批里跑完（原因见下文「-Live 撞车」）；**逐例数字在各示例 README 的「已验证 / 未验证」表里**，不在这里重复。**未跑过的项一律不在这里声明通过。**
 > 端到端实机证据（2026-11-16，lead 实测，同一 DLL）：「脚手架生成的工程」用 `-MapDir build\scratch\proj\MyMap` 进游戏跑出 ` Results: 9 passed, 0 failed, 9 total (0 skipped)` 与 `ALL CHECKS PASSED (9/9)`，说明 `deploy.ps1 -MapDir` → 打包 → 启动 → 日志这条链路在本 SDK 上可用；本目录示例的逐条 `-Live` 结果见各示例 README 的「已验证 / 未验证」表。
 
-每个示例都是一个完整的小地图工程：一个目录、一个 `war3map.lua`，没有 `lib\` 依赖，
-可以被 `tools\pack.ps1 -MapDir examples\<示例>` 直接打包，也可以整个目录复制走当自己的项目骨架。
+每个示例都是一个完整的小地图工程，可以用 `tools\pack.ps1 -MapDir examples\<示例>` 打包，也可以复制整个目录作为自己的项目骨架。01–10 的入口是单文件；11 另带构建专用的 `objects.lua`；12 自带可复用的 `lib/ui.lua`，这两例要连同附属文件一起复制。
+
+第二批入口见 [代码化物编与 UI 指南](../docs/guide/OBJECT-DATA-UI.md)。示例 12 的 `-Live` 会自动启动真实窗口输入驱动，进行禁用点击、启用点击、窗口 resize 和新位置点击；不要在验证期间另外操作游戏。
 
 ## 示例索引
 
@@ -21,6 +24,8 @@
 | 08 | [08-d3d-subscription](08-d3d-subscription/README.md) | `jass.common` `jass.d3d` | **是** | 无（需 d3d9 proxy） | hit_test 面板 + click 订阅 + 订阅生命周期/计数 |
 | 09 | [09-jass-wrappers](09-jass-wrappers/README.md) | `jass.common` `jass.globals` | 否 | `-WithJassWrappers` | JASS wrapper 与 Lua bridge 两条路径调同一个 native，结果对比 |
 | 10 | [10-getfunc-addr](10-getfunc-addr/README.md) | `jass.common` `jass.globals` `jass.debug` | 否 | `-WithGetFuncAddr` | 把 `code` 参数转成整数地址，反查绑定标签并当 `TriggerAddAction` 用 |
+| 11 | [11-object-data](11-object-data/README.md) | `jass.common` `jass.slk` | 否 | 自动发现 `objects.lua` | 构建单位与三级技能，再在游戏里核对创建、等级和 SLK |
+| 12 | [12-ui-components](12-ui-components/README.md) | `jass.common` `jass.d3d` + 自带 `lib.ui` | **是** | 无 | 按钮状态、嵌套布局、真实点击与 resize、资源回收 |
 
 ## 每个示例的固定结构
 
@@ -29,7 +34,7 @@
 ```lua
 -- (A) 头注释：编号 / 用途 / 需要的开关 / 预期日志 / 验证状态
 -- ============ 以下这段可以粘进自己的 war3map.lua ============
---     (B) 真正的功能代码：只 require "jass.*"，不依赖 lib，不跨目录 require
+--     (B) 真正的功能代码：require "jass.*" 或本示例自带模块，不跨示例目录 require
 -- ============ 以下为示例自检，粘到自己地图时可以删掉 ============
 --     (C) 内联自检 harness + 收尾 timer
 ```
@@ -44,7 +49,7 @@
 ========================================
 ```
 
-- `Results` 行由收尾 timer 在 **3.5~4.5s**（各示例实际是 3.8s）打出，之前所有异步工作必须完成。
+- 大部分旧示例在约 3.8 秒收尾；物编例在延迟初始化后验证，UI 组件例必须等待真实输入与 resize 完成。结果汇总只能在对应工作结束后输出。
 - `deploy.ps1` 的成功判定正则就是 `Results:.*total`，所以这一行必须**只有一条**、且 `failed` 必须为 0。
 - 健康环境下 `failed == 0` 且 `total >= 3`；`verify-examples.ps1` 就是按这个判定的。
 

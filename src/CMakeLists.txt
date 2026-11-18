@@ -213,3 +213,21 @@ add_dependencies(d3d_sdk_contract_test newD3d9)
 set_target_properties(d3d_sdk_contract_test PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+# Release binaries must not embed clock timestamps or checkout-specific paths.
+if(MSVC)
+    if(MSVC_VERSION LESS 1929)
+        message(FATAL_ERROR "Reproducible Release builds require MSVC 19.29 or newer")
+    endif()
+    foreach(target lua54 yd_japi newD3d9 d3d_sdk_contract_test)
+        target_compile_options(${target} PRIVATE
+            "$<$<CONFIG:Release>:/Brepro>"
+            "$<$<CONFIG:Release>:/pathmap:${CMAKE_SOURCE_DIR}=src>"
+            "$<$<CONFIG:Release>:/pathmap:${CMAKE_BINARY_DIR}=build>")
+    endforeach()
+    set_property(TARGET lua54 APPEND_STRING PROPERTY STATIC_LIBRARY_FLAGS_RELEASE " /Brepro")
+    foreach(target yd_japi newD3d9 d3d_sdk_contract_test)
+        target_link_options(${target} PRIVATE "$<$<CONFIG:Release>:/Brepro>"
+            "$<$<CONFIG:Release>:/INCREMENTAL:NO>" "$<$<CONFIG:Release>:/DEBUG:NONE>")
+    endforeach()
+endif()

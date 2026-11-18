@@ -47,4 +47,14 @@ if ($conformance) { Write-Host $conformance } else { Write-Host "Conformance 行
 if ($results)     { Write-Host $results }     else { Write-Host "Results 行缺失" }
 Write-Host ''
 Write-Host "完整日志: C:\ProgramData\japi_debug.txt"
-if (-not $conformance) { exit 1 }
+# A printed summary alone is not success: deploy may fail or time out. Require
+# both summaries to agree and explicitly report zero failures.
+$conformanceLast = @($conformance)[-1]
+$resultsLast = @($results)[-1]
+$c = [regex]::Match([string]$conformanceLast, 'Conformance:\s*(\d+) passed,\s*(\d+) failed,\s*(\d+) skipped')
+$r = [regex]::Match([string]$resultsLast, 'Results:\s*(\d+) passed,\s*(\d+) failed,\s*(\d+) total')
+if ($code -ne 0 -or -not $c.Success -or -not $r.Success -or
+    $c.Groups[2].Value -ne '0' -or $r.Groups[2].Value -ne '0' -or
+    $c.Groups[1].Value -ne $r.Groups[1].Value -or
+    $r.Groups[1].Value -ne $r.Groups[3].Value) { exit 1 }
+exit 0

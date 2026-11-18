@@ -150,22 +150,61 @@ namespace warcraft3::lua_engine::runtime {
 		return get_global_table(L, "_JASS_CALLBACK_TABLE", false);
 	}
 
+	// Refcounts for _JASS_CALLBACK_TABLE. callback_push() deduplicates by Lua
+	// function value, so a closure can be owned by a hook and a texture event at
+	// the same time; a release must not remove it while another owner exists.
+	static int callback_get_refs(lua_State* L)
+	{
+		return get_global_table(L, "_JASS_CALLBACK_REFS", false);
+	}
+
+	static void callback_increment(lua_State* L, int ref)
+	{
+		if (ref <= 0) return;
+		callback_get_refs(L);
+		lua_rawgeti(L, -1, ref);
+		lua_Integer count = lua_isinteger(L, -1) ? lua_tointeger(L, -1) : 0;
+		lua_pop(L, 1);
+		lua_pushinteger(L, count + 1);
+		lua_rawseti(L, -2, ref);
+		lua_pop(L, 1);
+	}
+
+	// Monotonic ref allocator. callback_release() leaves holes in the callback
+	// table, so 1 + lua_rawlen() is not a safe high-water mark: after releasing
+	// the highest live ref, rawlen can drop onto refs that are still owned and
+	// the next push would overwrite one. The counter lives in the refs table so
+	// it is scoped to the lua_State and dies with the VM.
+	static int callback_next_ref(lua_State* L)
+	{
+		callback_get_refs(L);
+		lua_pushliteral(L, "next");
+		lua_rawget(L, -2);
+		lua_Integer next = lua_isinteger(L, -1) ? lua_tointeger(L, -1) : 1;
+		lua_pop(L, 1);
+		lua_pushinteger(L, next + 1);
+		lua_setfield(L, -2, "next");
+		lua_pop(L, 1);
+		return (int)next;
+	}
+
 	int callback_push(lua_State* L, int idx)
 	{
 		callback_get_table(L);
-		
+
 		// read t[v]
 		lua_pushvalue(L, idx);
 		lua_rawget(L, -2);
 		if (lua_isnumber(L, -1))
 		{
-			int ret = lua_tointeger(L, -1);
+			int ret = (int)lua_tointeger(L, -1);
 			lua_pop(L, 2);
+			callback_increment(L, ret);
 			return ret;
 		}
 		lua_pop(L, 1);
 
-		int free = 1 + (int)lua_rawlen(L, -1);
+		int free = callback_next_ref(L);
 
 		// t[free] = v
 		lua_pushvalue(L, idx);
@@ -178,7 +217,55 @@ namespace warcraft3::lua_engine::runtime {
 
 		// pop t
 		lua_pop(L, 1);
+
+		callback_get_refs(L);
+		lua_pushinteger(L, 1);
+		lua_rawseti(L, -2, free);
+		lua_pop(L, 1);
 		return free;
+	}
+
+	int callback_release(lua_State* L, int ref)
+	{
+		if (ref <= 0) return -1;
+
+		callback_get_refs(L);
+		lua_rawgeti(L, -1, ref);
+		if (!lua_isinteger(L, -1))
+		{
+			lua_pop(L, 2);
+			return -1;
+		}
+		lua_Integer count = lua_tointeger(L, -1);
+		lua_pop(L, 1);
+
+		if (count > 1)
+		{
+			lua_pushinteger(L, count - 1);
+			lua_rawseti(L, -2, ref);
+			lua_pop(L, 1);
+			return (int)(count - 1);
+		}
+
+		// Last owner: drop both directions of the callback table mapping and
+		// the refcount entry so the closure becomes collectable.
+		lua_pushnil(L);
+		lua_rawseti(L, -2, ref);
+		lua_pop(L, 1);
+
+		callback_get_table(L);
+		lua_rawgeti(L, -1, ref);
+		if (!lua_isnil(L, -1))
+		{
+			lua_pushvalue(L, -1);
+			lua_pushnil(L);
+			lua_rawset(L, -4);   // t[v] = nil
+		}
+		lua_pop(L, 1);
+		lua_pushnil(L);
+		lua_rawseti(L, -2, ref); // t[ref] = nil
+		lua_pop(L, 1);
+		return 0;
 	}
 
 	int callback_read(lua_State* L, int ref)
@@ -200,7 +287,7 @@ namespace warcraft3::lua_engine::runtime {
 		}
 		else if (strcmp("handle_level", name) == 0)
 		{
-			handle_level = luaL_checkinteger(L, 3);
+			handle_level = (int)luaL_checkinteger(L, 3);
 		}
 		else if (strcmp("console", name) == 0)
 		{

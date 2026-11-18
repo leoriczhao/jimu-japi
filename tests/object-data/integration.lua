@@ -1,0 +1,11 @@
+local root, legacy, generated=assert(arg[1]),assert(arg[2]),assert(arg[3])
+local compiler=assert(loadfile(root..'/tools/object-data/compiler.lua'))()
+local function read(p) local f=assert(io.open(p,'rb')); local s=f:read('a'); f:close(); return s end
+local before=compiler.existing(read(legacy..'/war3map.w3u'),false)
+local after=compiler.existing(read(generated..'/war3map.w3u'),false)
+assert(before.ids.Hrif,'base-map Hrif missing')
+assert(after.ids.Hrif and after.ids.uO11,'base/new unit missing')
+assert(before.original==after.original,'base original records changed')
+assert(after.count==before.count+1,'wrong custom count')
+assert(after.custom:sub(1,#before.custom)==before.custom,'base custom bytes changed')
+print('Results: declaration-free pack and existing Hrif byte preservation passed')

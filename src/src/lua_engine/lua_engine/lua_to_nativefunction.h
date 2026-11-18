@@ -43,6 +43,13 @@ namespace warcraft3::lua_engine {
 
 		uintptr_t lua_function(const uintptr_t* paramlist)
 		{
+			// Unhook must not free the executable trampoline while this call
+			// will still return through it. safe_call_ref protects Lua errors.
+			struct call_guard {
+				unsigned& depth;
+				explicit call_guard(unsigned& value) : depth(value) { ++depth; }
+				~call_guard() { --depth; }
+			} guard(active_calls);
 			size_t param_size = funcdef->get_param().size();
 
 			for (size_t i = 0; i < param_size; ++i)
@@ -79,5 +86,6 @@ namespace warcraft3::lua_engine {
 		const jass::func_value* funcdef;
 		uintptr_t               funcentry;
 		void*                   userdata;
+		unsigned                active_calls = 0;
 	};
 }

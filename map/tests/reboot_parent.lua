@@ -6,8 +6,8 @@
 -- phase therefore only leaves state behind that a correct reset must destroy:
 -- a D3D session with live resources + a subscription, and a Lua bridge handler.
 --
--- Deliberately no JASS timers here: this VM is closed from outside, and any
--- timer trampoline created here would resume into a dead lua_State.
+-- Only event-owned, initially stopped timers are left behind: VM reset must
+-- destroy them before their Lua trampolines are released.
 
 local jass    = require "jass.common"
 local globals = require "jass.globals"
@@ -61,6 +61,32 @@ function M.run()
     -- udg_lua_test_value is the one probe global the injected JASS probes do not
     -- overwrite after LoadScript() returns.
     globals.udg_lua_test_value = session
+
+    -- Leave two event-owned JASS timers for reset_vm_state(true) to destroy.
+    -- The synthetic texture id is never rendered; this probes timer ownership.
+    local hook = require "jass.hook"
+    local event_timers, created = {}, 0
+    hook.hook("CreateTimer", function(orig)
+        local timer = orig()
+        event_timers[jass.GetHandleId(timer)] = true
+        created = created + 1
+        return timer
+    end)
+    local event = japi.TextureAddEvent(123456, 65, jass.code(function() end), 0)
+    hook.unhook("CreateTimer")
+    assert(event > 0 and created == 2, "reboot timer probe was not registered")
+    globals.udg_lua_test_array[2] = 0
+    globals.udg_lua_test_array[3] = 0
+    hook.hook("PauseTimer", function(timer, orig)
+        -- D3D polling has its own timer; count only this event's two timers.
+        if event_timers[jass.GetHandleId(timer)] then
+            globals.udg_lua_test_array[2] = globals.udg_lua_test_array[2] + 1
+            -- Re-enter removal while the outer reset is cleaning the same entry.
+            globals.udg_lua_test_array[3] = globals.udg_lua_test_array[3] + japi.GetTextureEventCount()
+            japi.TextureRemoveEvent(123456, event)
+        end
+        return orig(timer)
+    end)
 
     print(string.format(
         "[REBOOT] parent ready: session=%d font=%s text=%s subscription=%s font_err=%s",

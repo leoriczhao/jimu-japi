@@ -40,6 +40,8 @@ namespace warcraft3::lua_engine::message {
 		int      keycode;          // keyboard key (WARK_*), or -1 for mouse
 		uint32_t press_lua_ref;    // Lua registry ref for press callback
 		uint32_t release_lua_ref;  // Lua registry ref for release callback
+		bool     press_ref_owned;  // ref came from callback_push (safe to release)
+		bool     release_ref_owned;
 	};
 
 	static int g_next_texture_id = 1;
@@ -499,10 +501,17 @@ namespace warcraft3::lua_engine::message {
 		float norm_x = (float)pt.x / (float)(rt.right - rt.left);
 		float norm_y = (float)pt.y / (float)(rt.bottom - rt.top);
 
-		for (auto& kv : g_texture_events)
+		// Snapshot ids before dispatching: a callback may remove its own event
+		// (or another one), which would invalidate a range-for over the map.
+		std::vector<int> lua_ids;
+		lua_ids.reserve(g_texture_events.size());
+		for (const auto& kv : g_texture_events) lua_ids.push_back(kv.first);
+		for (int id : lua_ids)
 		{
 			if (!L) break;
-			const texture_event_entry& ev = kv.second;
+			auto found = g_texture_events.find(id);
+			if (found == g_texture_events.end()) continue;
+			const texture_event_entry& ev = found->second;
 			// Match key: -1 means mouse event (button), otherwise keyboard
 			if (ev.keycode != wark_key) continue;
 
@@ -525,9 +534,14 @@ namespace warcraft3::lua_engine::message {
 		// The bridge-facing D3D events use the real renderer hit-test registered
 		// by newD3d9.dll, then schedule the supplied JASS code on the event's
 		// retained timer. Timer handle ids and hashtable slots match builtin-japi.
-		for (auto& kv : g_d3d_texture_events)
+		std::vector<uint32_t> d3d_ids;
+		d3d_ids.reserve(g_d3d_texture_events.size());
+		for (const auto& kv : g_d3d_texture_events) d3d_ids.push_back(kv.first);
+		for (uint32_t id : d3d_ids)
 		{
-			const d3d_texture_event_entry& ev = kv.second;
+			auto found = g_d3d_texture_events.find(id);
+			if (found == g_d3d_texture_events.end()) continue;
+			const d3d_texture_event_entry& ev = found->second;
 			if (ev.keycode != wark_key) continue;
 
 			uint32_t texture_arg = ev.texture_id;
@@ -895,15 +909,54 @@ namespace warcraft3::lua_engine::message {
 		}
 	}
 
+	// Destroy both JASS timers retained by one bridge TextureAddEvent
+	// registration. TextureRemoveEvent and the simulated-boot reset share it so
+	// neither path can abandon a live timer.
+	static void destroy_d3d_texture_event(d3d_texture_event_entry& ev)
+	{
+		if (ev.press_timer) {
+			jass::call("PauseTimer", ev.press_timer);
+			jass::call("DestroyTimer", ev.press_timer);
+			jass::handle_unref(ev.press_timer);
+			ev.press_timer = 0;
+		}
+		if (ev.release_timer) {
+			jass::call("PauseTimer", ev.release_timer);
+			jass::call("DestroyTimer", ev.release_timer);
+			jass::handle_unref(ev.release_timer);
+			ev.release_timer = 0;
+		}
+	}
+
 	// The Lua VM is gone (map boot): forget the main thread and every registry
 	// reference. The message filter and WndProc hook stay installed — they pass
 	// everything through while ML == 0, and the next VM re-registers its hooks.
-	void reset_vm_state()
+	//
+	// jass_engine_alive distinguishes the in-process reboot test (the JASS VM
+	// survives, so its timers are valid and must be destroyed) from a real map
+	// boot (the handles belong to the replaced VM; touching them is unsafe).
+	void reset_vm_state(bool jass_engine_alive)
 	{
 		ML = 0;
 		g_lua_message_hook_registered = false;
 		g_textures.clear();
 		g_texture_events.clear();
+		// Timer natives can be hooked and re-enter TextureRemoveEvent. Detach
+		// registrations first so that nested removal cannot erase this iteration.
+		decltype(g_d3d_texture_events) retiring_events;
+		retiring_events.swap(g_d3d_texture_events);
+		const size_t timer_events = retiring_events.size();
+		if (jass_engine_alive) {
+			for (auto& kv : retiring_events) {
+				destroy_d3d_texture_event(kv.second);
+			}
+			DBG_LOG("[japi-message] VM reset: destroyed %u D3D texture-event timer(s)",
+				(unsigned)timer_events);
+		}
+		else if (timer_events) {
+			DBG_LOG("[japi-message] VM reset: skipped %u D3D texture-event timer(s) (JASS VM replaced)",
+				(unsigned)timer_events);
+		}
 		g_d3d_texture_events.clear();
 		for (int i = 0; i < 5; ++i) g_mouse_button_down[i] = false;
 		for (int i = 0; i < 3; ++i) g_mouse_pressed[i] = false;
@@ -1122,15 +1175,27 @@ namespace warcraft3::lua_engine::message {
 	{
 		int tex_id = (int)lua_tointeger(L, 1);
 		g_textures.erase(tex_id);
-		// Remove all events for this texture
+		// Remove all events for this texture and release the Lua closures the
+		// event owned. Returns the number removed so repeats are observable.
 		std::vector<int> to_remove;
 		for (auto& kv : g_texture_events)
 		{
 			if (kv.second.texture_id == tex_id)
 				to_remove.push_back(kv.first);
 		}
-		for (int id : to_remove) g_texture_events.erase(id);
-		return 0;
+		for (int id : to_remove)
+		{
+			auto it = g_texture_events.find(id);
+			if (it == g_texture_events.end()) continue;
+			if (it->second.press_ref_owned)
+				runtime::callback_release(L, it->second.press_lua_ref);
+			if (it->second.release_ref_owned)
+				runtime::callback_release(L, it->second.release_lua_ref);
+			g_texture_events.erase(it);
+		}
+		release_input_dispatch();
+		lua_pushinteger(L, (lua_Integer)to_remove.size());
+		return 1;
 	}
 
 	static int ltexture_set_visible(lua_State* L)
@@ -1189,16 +1254,19 @@ namespace warcraft3::lua_engine::message {
 		ev.keycode          = keycode;
 		ev.press_lua_ref    = 0;
 		ev.release_lua_ref  = 0;
+		ev.press_ref_owned  = false;
+		ev.release_ref_owned = false;
 
 		// Arg 3: press callback (Lua function)
 		if (lua_isfunction(L, 3))
 		{
 			// Store Lua ref for direct callback from the message filter
 			ev.press_lua_ref = runtime::callback_push(L, 3);
+			ev.press_ref_owned = true;
 		}
 		else if (lua_isnumber(L, 3))
 		{
-			// Already a Lua registry ref (integer)
+			// Already a Lua registry ref (integer); not owned by this event.
 			ev.press_lua_ref = (uint32_t)lua_tointeger(L, 3);
 		}
 
@@ -1206,6 +1274,7 @@ namespace warcraft3::lua_engine::message {
 		if (lua_isfunction(L, 4))
 		{
 			ev.release_lua_ref = runtime::callback_push(L, 4);
+			ev.release_ref_owned = true;
 		}
 		else if (lua_isnumber(L, 4))
 		{
@@ -1225,8 +1294,19 @@ namespace warcraft3::lua_engine::message {
 		// (texture_id is kept for API compatibility with builtin-japi but not strictly needed)
 		/*int tex_id =*/ (void)lua_tointeger(L, 1);
 		int ev_id = (int)lua_tointeger(L, 2);
-		g_texture_events.erase(ev_id);
-		return 0;
+		auto it = g_texture_events.find(ev_id);
+		const bool removed = (it != g_texture_events.end());
+		if (removed)
+		{
+			if (it->second.press_ref_owned)
+				runtime::callback_release(L, it->second.press_lua_ref);
+			if (it->second.release_ref_owned)
+				runtime::callback_release(L, it->second.release_lua_ref);
+			g_texture_events.erase(it);
+			release_input_dispatch();
+		}
+		lua_pushboolean(L, removed);
+		return 1;
 	}
 
 	// ============================================================
@@ -1450,18 +1530,11 @@ namespace warcraft3::lua_engine::message {
 			return 0;
 		}
 
-		uint32_t press_timer = it->second.press_timer;
-		uint32_t release_timer = it->second.release_timer;
+		d3d_texture_event_entry ev = it->second;
 		g_d3d_texture_events.erase(it);
-		jass::call("DestroyTimer", press_timer);
-		jass::call("DestroyTimer", release_timer);
-		jass::handle_unref(press_timer);
-		jass::handle_unref(release_timer);
-		if (!g_lua_message_hook_registered && g_texture_events.empty() &&
-			g_d3d_texture_events.empty() && !d3d::has_active_subscriptions()) {
-			uninstall();
-		}
-		return 0;
+		destroy_d3d_texture_event(ev);
+		release_input_dispatch();
+		return 1;
 	}
 
 	static uint32_t GetTextureEventCount_handler(const uint32_t*, size_t)
