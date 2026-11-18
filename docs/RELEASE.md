@@ -334,9 +334,9 @@ build\sdk\0.4.0-498a308\
     ├── README.md           # 由 tools\sdk-bundle\README.template.md 渲染
     ├── SHA256SUMS.txt      # 包内全部文件（含 vendor）的 SHA-256
     ├── CHANGELOG.md
-    ├── docs\               # guide 6 份 + STATUS/RELEASE + planning 2 份
-    ├── examples\           # 10 个示例 + manifest.json + README.md
-    ├── tools\              # 8 个脚本 + config.example.ps1 + pjass.exe + callback + w3x2lni\
+    ├── docs\               # docs\guide 全量（当前 8 份）+ STATUS/RELEASE + planning 2 份
+    ├── examples\           # 示例（数量以 manifest.json 为准，当前 12 个）+ README.md
+    ├── tools\              # 13 个脚本 + config.example.ps1 + pjass.exe + callback + object-data\ + w3x2lni\
     ├── reference\empty-map\
     └── src\
         ├── build\bin\Release\   # 3 个二进制 = pack/deploy 的默认 -DllPath / -D3DProxyPath
@@ -381,9 +381,10 @@ build\sdk\0.4.0-498a308\
 
 - **内容来源**：默认全部取自干净 worktree（发布提交）。两个例外：`tools\sdk-bundle\README.template.md`（模板本身，属生成器资产）和 `tools\w3x2lni\bin\*.dll`（19 个，被仓库 `.gitignore` 的 `*.dll` 排除，干净 worktree 拿不到；没有它们作者打不了包）。覆盖数量记在 manifest 的 `sdk_bundle.vendor.overlaid_files`。
 - **`sdk\src\src\` 只放 3 个注册表源**：`extensions\ex_natives\Initialize.cpp`、`lua_engine\lua_engine\libs_message.cpp`、`d3d9\handler_manifest.json`。`pack.ps1 -WithJassWrappers`（示例 09 用它）要 regex 扫这三份文本生成 JASS wrapper；只当数据读，不参与编译 —— 漏掉它们时示例 09 的 `[pack]` 会以 `handler registry not found` 失败（实测踩过）。
+- **示例 11/12 的额外依赖**：`tools\object-data\`（`build.lua`+`compiler.lua`，示例 11 的 `objects.lua` 由 pack.ps1 步骤 [1c] 编译）与 `tools\drive-ui-components.ps1`（示例 12 的 `-Live` 驱动）必须进包；缺任何一个，包外的 `verify-examples.ps1` 都会在 11 或 12 上失败。
 - **入口是 `sdk\README.md`**：包里有什么 / 三分钟上手 / 怎么验证包（含 `SHA256SUMS.txt` 校验片段）/ 脚本清单 / 7 条必读坑 / 版本与来源。模板在 `tools\sdk-bundle\README.template.md`，占位符 `@@VERSION@@`、`@@ARTIFACTROWS@@`、`@@TREEFILES@@` 等由脚本填充，残留未替换的占位符会 `throw`。
 - **不放进包**：`src/src/` 其余源码、`map/`、`docs/architecture|analysis/`、`tools\debugger\`、`tools\release-sdk.ps1` 自身（需要现场编译）。README 里明说这些链接打不开属预期。
-- **自包含门槛（必须做，否则不许发）**：把 `sdk\` 整个拷到仓库外，①`tools\verify-examples.ps1` 静态+打包 **10/10**；②`tools\new-project.ps1` 生成空工程后 `tools\pack.ps1` 必须出图；③`tools\deploy.ps1` 实机一次（2026-11-16 已做到：`Results: 9 passed, 0 failed, 9 total (0 skipped)`）。
+- **自包含门槛（必须做，否则不许发）**：把 `sdk\` 整个拷到仓库外，①`tools\verify-examples.ps1` 静态+打包**全部通过**（数量以 examples\manifest.json 为准，当前 12）；②`tools\new-project.ps1` 生成空工程后 `tools\pack.ps1` 必须出图；③`tools\deploy.ps1` 实机一次（2026-11-16 已做到：`Results: 9 passed, 0 failed, 9 total (0 skipped)`）。
 
 2026-11-16 实测（`build\sdk\0.4.0-c14b043\sdk\` 整个拷到 `%TEMP%\sdk-standalone-c14b043`，全程在仓库外执行）：
 

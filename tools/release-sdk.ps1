@@ -6,15 +6,21 @@
 #      src/src/lua_engine/lua_engine/libs_d3d.cpp (kVersion), unless -Version overrides it
 #   2. create a detached clean worktree at build\clean-<sha7> and assert that it is
 #      at that exact commit with an empty "git status --porcelain"
-#   3. build it (vcvars32 + CMake "Visual Studio 17 2022" -A Win32 --config Release),
-#      or with -NoBuild copy the already-built files from src\build\bin\Release
+#   3. build it (vcvars32 + CMake "Visual Studio 17 2022" -A Win32 --config Release)
+#      into build\cmake-<sha7> — outside the clean worktree, so the worktree stays
+#      clean after a build and stays reusable across runs — or with -NoBuild copy
+#      the already-built files from src\build\bin\Release
 #   4. copy yd_japi.dll, newD3d9.dll and d3d_sdk_contract_test.exe into
-#      build\sdk\<version>-<sha7>\ together with SHA256SUMS.txt and manifest.json
+#      build\sdk\<version>-<sha7>\
 #   5. with -SdkBundle also assemble build\sdk\<version>-<sha7>\sdk\ : the author-facing
 #      package (docs, examples, scaffold/pack/deploy scripts, the empty base map, the three
 #      binaries and the w3x2lni vendor runtime) in the same repository shape the author
 #      scripts expect, plus its own README.md and SHA256SUMS.txt
-#   6. remove the clean worktree again unless -Keep is passed
+#   6. write manifest.json, then SHA256SUMS.txt last: it covers the artifacts, the
+#      manifest and every file under sdk\ (the bundle also keeps its own, relative
+#      to sdk\)
+#   7. remove the clean worktree again — but only one this run created, and only
+#      unless -Keep is passed
 #
 # Usage:
 #   .\tools\release-sdk.ps1                                    # release HEAD with a real clean build
@@ -186,7 +192,8 @@ function Get-BuildSettings {
 function Find-Vcvars32 {
     if (Test-Path -LiteralPath $BuildBat) {
         $text = Get-Content -LiteralPath $BuildBat -Raw
-        $m = [regex]::Match($text, '"([A-Za-z]:\\[^"]*vcvars32\.bat)"')
+        # Both shapes build.bat has used: call "<path>" and set "VCVARS=<path>".
+        $m = [regex]::Match($text, '"(?:[A-Za-z_][A-Za-z0-9_]*=)?([A-Za-z]:\\[^"]*vcvars32\.bat)"')
         if ($m.Success -and (Test-Path -LiteralPath $m.Groups[1].Value)) {
             return $m.Groups[1].Value
         }
@@ -250,7 +257,10 @@ if (-not $OutDir) {
 }
 $OutDir = Resolve-Abs $OutDir
 $buildRoot = [System.IO.Path]::GetFullPath((Join-Path $Root 'build'))
-if (-not $OutDir.StartsWith($buildRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+# Trailing separator: "build" alone would also accept "build-anything", which is
+# outside the directory this script is allowed to clear.
+$buildRootPrefix = $buildRoot.TrimEnd('\') + '\'
+if (-not $OutDir.StartsWith($buildRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw ('refusing to write the package outside ' + $buildRoot + ': ' + $OutDir)
 }
 if (Test-Path -LiteralPath $OutDir) {
@@ -285,7 +295,10 @@ if (Test-Path -LiteralPath $workPath) {
     Write-Host ('  created worktree: ' + $workPath)
     $worktreeAdded = $true
 }
-$worktreeAdded = $true
+# No unconditional "$worktreeAdded = $true" here: a worktree this run reused
+# (left over from -Keep) must not be removed on behalf of its owner, and a
+# worktree this run created must be removed even though the branch above is not
+# the only way to reach this point.
 
 $headNow = (@(Invoke-Git -GitArgs @('rev-parse', 'HEAD') -WorkDir $workPath) -join '').Trim()
 if ($headNow -ne $commitSha) {
@@ -315,15 +328,21 @@ if ($NoBuild) {
 } else {
     $vcvars = Find-Vcvars32
     $cleanSrc = Join-Path $workPath 'src'
+    # Build outside the worktree. CMake drops hundreds of untracked files
+    # (CMakeCache.txt, CMakeFiles\, *.vcxproj, *.obj) into its build directory and
+    # only "build/" is gitignored, so an in-worktree "src\build-clean" left the
+    # clean worktree dirty: the very next run on the same commit failed the
+    # "git status --porcelain" assertion and nobody could tell why. Keeping the
+    # build beside the package makes the worktree reusable and disposable.
+    $cmakeDir = Join-Path $buildRoot ('cmake-' + $sha7)
     $tempCmd = Join-Path $env:TEMP ('japi-release-' + $sha7 + '.cmd')
     $cmdLines = @(
         '@echo off',
         ('call "' + $vcvars + '" >nul'),
         'if errorlevel 1 exit /b 2',
-        ('cd /d "' + $cleanSrc + '"'),
-        ('cmake -S . -B build-clean -G "' + $Generator + '" -A ' + $Arch),
+        ('cmake -S "' + $cleanSrc + '" -B "' + $cmakeDir + '" -G "' + $Generator + '" -A ' + $Arch),
         'if errorlevel 1 exit /b 3',
-        ('cmake --build build-clean --config ' + $Config),
+        ('cmake --build "' + $cmakeDir + '" --config ' + $Config),
         'exit /b %ERRORLEVEL%'
     )
     [System.IO.File]::WriteAllText($tempCmd, (($cmdLines -join [Environment]::NewLine) + [Environment]::NewLine), (New-Object System.Text.ASCIIEncoding))
@@ -337,11 +356,11 @@ if ($NoBuild) {
         throw ('clean build failed with exit code ' + $buildExit + ' (worktree kept: ' + $workPath + ')')
     }
     $buildCommand = ($cmdLines -join ' & ')
-    $artifactDir = Join-Path $cleanSrc ('build-clean\bin\' + $Config)
+    $artifactDir = Join-Path $cmakeDir ('bin\' + $Config)
 }
 Write-Host ('  artifacts: ' + $artifactDir)
 
-Write-Step '4. Copy artifacts and write checksums'
+Write-Step '4. Copy artifacts'
 $artifacts = @()
 foreach ($name in $ExpectedArtifacts) {
     $source = Join-Path $artifactDir $name
@@ -356,13 +375,11 @@ foreach ($name in $ExpectedArtifacts) {
     Write-Host ('  ' + $name + '  ' + $item.Length + ' bytes  ' + $hash)
 }
 
-$sumLines = @()
-foreach ($artifact in $artifacts) {
-    $sumLines += ($artifact['sha256'] + '  ' + $artifact['name'])
-}
+# SHA256SUMS.txt is written at the very end of the run (step 6b), once the
+# manifest and the optional sdk\ bundle exist: a checksum file that only covers
+# the three binaries says nothing about the manifest that lists them, or about
+# the 600-file bundle shipped beside it.
 $sumPath = Join-Path $OutDir 'SHA256SUMS.txt'
-[System.IO.File]::WriteAllText($sumPath, (($sumLines -join [char]10) + [char]10), (New-Object System.Text.ASCIIEncoding))
-Write-Host ('  wrote   : ' + $sumPath)
 
 $builtAtUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 
@@ -381,10 +398,16 @@ if ($SdkBundle) {
     Write-Host '  content : docs/examples/tools/base map from the clean worktree (the released commit)'
     $bundleSrc = $workPath
 
-    $guideNames = @(
-        'SDK-QUICKSTART.md', 'SDK-GUIDE.md', 'SDK-COOKBOOK.md',
-        'D3D-LUA-QUICKSTART.md', 'D3D-LUA-API.md', 'D3D-LUA-MIGRATION.md'
-    )
+    # Enumerated, not listed: every guide added under docs\guide must reach the
+    # bundle, because examples\README.md and the guides link each other by
+    # relative path and a missing file is a dead link in the shipped package.
+    # (A hand-maintained list silently fell two guides behind: OBJECT-DATA-UI.md
+    # and MINIMAL-GAME-LOOP.md were linked but not shipped.)
+    $guideNames = @(Get-ChildItem -LiteralPath (Join-Path $bundleSrc 'docs\guide') -Filter '*.md' -File |
+        Sort-Object Name | ForEach-Object { $_.Name })
+    if ($guideNames.Count -lt 6) {
+        throw ('sdk bundle: docs\guide has only ' + $guideNames.Count + ' guides; expected at least 6')
+    }
     foreach ($name in $guideNames) {
         Copy-FileTo -Source (Join-Path $bundleSrc ('docs\guide\' + $name)) -Destination (Join-Path $sdkDir ('docs\guide\' + $name)) -Label ('docs/guide/' + $name)
     }
@@ -400,7 +423,7 @@ if ($SdkBundle) {
     foreach ($relative in $extraDocs) {
         Copy-FileTo -Source (Join-Path $bundleSrc $relative) -Destination (Join-Path $sdkDir $relative) -Label $relative
     }
-    Write-Host ('  docs    : ' + ($guideNames.Count + $extraDocs.Count) + ' markdown files (6 guides + STATUS + RELEASE + 2 planning docs + CHANGELOG)')
+    Write-Host ('  docs    : ' + ($guideNames.Count + $extraDocs.Count) + ' markdown files (' + $guideNames.Count + ' guides + STATUS + RELEASE + 2 planning docs + CHANGELOG)')
 
     Copy-DirTo -Source (Join-Path $bundleSrc 'examples') -Destination (Join-Path $sdkDir 'examples') -Label 'examples'
     $exampleDirs = @(Get-ChildItem -LiteralPath (Join-Path $sdkDir 'examples') -Directory -Force | Where-Object { $_.Name -match '^[0-9][0-9]-' })
@@ -409,10 +432,28 @@ if ($SdkBundle) {
             throw ('sdk bundle: example without war3map.lua: ' + $dir.FullName)
         }
     }
-    if ($exampleDirs.Count -ne 10) {
-        throw ('sdk bundle: expected 10 examples, found ' + $exampleDirs.Count)
+    # The catalogue, not a constant: examples\manifest.json is what
+    # verify-examples.ps1 and the docs drive, so the bundle asserting against it
+    # cannot drift the way a hardcoded "10" did when examples 11 and 12 landed.
+    $exampleManifestPath = Join-Path $sdkDir 'examples\manifest.json'
+    $exampleManifest = @()
+    if (Test-Path -LiteralPath $exampleManifestPath) {
+        $exampleManifest = @((Get-Content -LiteralPath $exampleManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json).examples)
     }
-    Write-Host ('  examples: ' + $exampleDirs.Count + ' directories + manifest.json + README.md')
+    if ($exampleManifest.Count -eq 0) {
+        throw ('sdk bundle: examples\manifest.json is missing or empty: ' + $exampleManifestPath)
+    }
+    if ($exampleDirs.Count -ne $exampleManifest.Count) {
+        throw ('sdk bundle: manifest lists ' + $exampleManifest.Count + ' examples but ' +
+            $exampleDirs.Count + ' directories are present')
+    }
+    $manifestIds = @($exampleManifest | ForEach-Object { $_.dir })
+    foreach ($dir in $exampleDirs) {
+        if ($manifestIds -notcontains $dir.Name) {
+            throw ('sdk bundle: example directory not in manifest.json: ' + $dir.Name)
+        }
+    }
+    Write-Host ('  examples: ' + $exampleDirs.Count + ' directories (manifest.json matches) + README.md')
 
     Copy-DirTo -Source (Join-Path $bundleSrc 'reference\empty-map') -Destination (Join-Path $sdkDir 'reference\empty-map') -Label 'reference/empty-map'
     $baseMapFiles = @(Get-ChildItem -LiteralPath (Join-Path $sdkDir 'reference\empty-map') -Recurse -File -Force).Count
@@ -441,16 +482,30 @@ if ($SdkBundle) {
     }
     Write-Host ('  registry: ' + $registryFiles.Count + ' registry sources for gen-jass-wrappers.ps1 (pack.ps1 -WithJassWrappers, example 09)')
 
+    # Every script the bundled scripts reach for through $PSScriptRoot, plus the
+    # drivers verify-examples.ps1 launches. Missing one turns into a runtime
+    # failure only when the bundle is used outside the repo, which is exactly the
+    # wall people hit: drive-ui-components.ps1 (example 12) and object-data
+    # (example 11) were both reachable from the bundle but not shipped in it.
     $toolNames = @(
         'new-project.ps1', 'pack.ps1', 'deploy.ps1', 'verify-examples.ps1',
-        'build-luac.ps1', 'd3d-proxy.ps1', 'drive-interactive-d3d.ps1',
+        'build-luac.ps1', 'd3d-proxy.ps1', 'drive-interactive-d3d.ps1', 'drive-ui-components.ps1',
         'gen-jass-wrappers.ps1', 'config.example.ps1', 'pjass.exe', 'callback',
         '_war3ctl.ps1', 'kill-war3.ps1'
     )
     foreach ($name in $toolNames) {
         Copy-FileTo -Source (Join-Path $bundleSrc ('tools\' + $name)) -Destination (Join-Path $sdkDir ('tools\' + $name)) -Label ('tools/' + $name)
     }
-    Write-Host ('  tools   : ' + $toolNames.Count + ' files (release-sdk.ps1, tools\debugger and tools\core stay in the repo)')
+    # pack.ps1 step [1c] runs tools\object-data\build.lua whenever a project has
+    # objects.lua (example 11, and any author project that opts into code-defined
+    # object data). The compiler is three Lua files read at pack time, so it ships
+    # as-is; without it the bundle cannot pack example 11 at all.
+    Copy-DirTo -Source (Join-Path $bundleSrc 'tools\object-data') -Destination (Join-Path $sdkDir 'tools\object-data') -Label 'tools/object-data'
+    $objectCompiler = Join-Path $sdkDir 'tools\object-data\build.lua'
+    if (-not (Test-Path -LiteralPath $objectCompiler -PathType Leaf)) {
+        throw ('sdk bundle: object compiler missing: ' + $objectCompiler + ' (pack.ps1 [1c] would fail on example 11)')
+    }
+    Write-Host ('  tools   : ' + $toolNames.Count + ' files + tools\object-data\ (release-sdk.ps1, tools\debugger and tools\core stay in the repo)')
 
     $vendor = [ordered]@{ included = $false; files = [int64]0; bytes = [int64]0; overlaid_files = [int64]0; source = ''; note = '' }
     if ($NoVendor) {
@@ -557,6 +612,7 @@ if ($SdkBundle) {
         docs = @($guideNames | ForEach-Object { 'docs/guide/' + $_ }) + @($extraDocs)
         examples = @($exampleDirs | ForEach-Object { 'examples/' + $_.Name })
         tools = @($toolNames | ForEach-Object { 'tools/' + $_ })
+        object_compiler = 'tools/object-data/ (build.lua + compiler.lua; pack.ps1 -MapDir with objects.lua)'
         base_map = 'reference/empty-map (' + $baseMapFiles + ' files)'
         binaries = @($ExpectedArtifacts | ForEach-Object { 'src/build/bin/Release/' + $_ })
         registries = @($registryFiles | ForEach-Object { $_ -replace '\\', '/' })
@@ -628,6 +684,27 @@ $json = ($manifest | ConvertTo-Json -Depth 8)
 [System.IO.File]::WriteAllText($manifestPath, ($json + [Environment]::NewLine), (New-Object System.Text.UTF8Encoding($false)))
 Write-Host ('  wrote   : ' + $manifestPath)
 
+Write-Step '6b. Write SHA256SUMS.txt (package-wide)'
+# One checksum file for the whole package: the three artifacts, the manifest that
+# documents them, and every file of the sdk\ bundle. Written last because the
+# manifest and the bundle only exist by now; sdk\SHA256SUMS.txt lists the bundle
+# relative to sdk\, this one lists everything relative to the package root.
+$sumEntries = @()
+foreach ($artifact in $artifacts) { $sumEntries += $artifact['name'] }
+if (Test-Path -LiteralPath $manifestPath -PathType Leaf) { $sumEntries += 'manifest.json' }
+if ($bundleInfo -and (Test-Path -LiteralPath (Join-Path $OutDir 'sdk') -PathType Container)) {
+    foreach ($file in @(Get-ChildItem -LiteralPath (Join-Path $OutDir 'sdk') -Recurse -File -Force | Sort-Object FullName)) {
+        $sumEntries += ($file.FullName.Substring($OutDir.Length + 1) -replace '\\', '/')
+    }
+}
+$sumLines = @()
+foreach ($relative in $sumEntries) {
+    $full = Join-Path $OutDir ($relative -replace '/', '\')
+    $sumLines += ((Get-Sha256 $full) + '  ' + $relative)
+}
+[System.IO.File]::WriteAllText($sumPath, (($sumLines -join [char]10) + [char]10), (New-Object System.Text.ASCIIEncoding))
+Write-Host ('  wrote   : ' + $sumPath + '  (' + $sumLines.Count + ' files hashed)')
+
 Write-Step '7. Summary'
 Write-Host ('  version : ' + $Version)
 Write-Host ('  commit  : ' + $sha7 + '  (' + $commitDate + ')')
@@ -662,7 +739,7 @@ if ($bundleInfo) {
     Write-Host ''
     Write-Host '  4. author SDK bundle: prove it is self-contained by using it outside this repository:'
     Write-Host ('       Copy-Item "' + (Join-Path $OutDir 'sdk') + '" "' + $scratch + '" -Recurse -Force')
-    Write-Host ('       cd "' + $scratch + '"; .\tools\verify-examples.ps1            # static + pack, expect 10/10')
+    Write-Host ('       cd "' + $scratch + '"; .\tools\verify-examples.ps1            # static + pack, expect ' + $exampleDirs.Count + '/' + $exampleDirs.Count)
     Write-Host ('       cd "' + $scratch + '"; .\tools\new-project.ps1 -Name Smoke -Path "' + $smokeProject + '" -Force')
     Write-Host '     then pack/deploy the scaffolded project from the bundle (sdk\README.md section 3).'
 }

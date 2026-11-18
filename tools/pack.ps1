@@ -156,6 +156,55 @@ function Insert-AfterJassMatch {
     return $Content.Substring(0, $at) + $Text + $Content.Substring($at)
 }
 
+# ── war3map.j encoding ──────────────────────────────────────────
+# The JASS script belongs to the map, not to this tool: it can be plain ASCII,
+# UTF-8 (with or without BOM) or the system ANSI code page — GBK on a Chinese
+# Windows, which is where the map's own strings (quest text, tooltips, unit
+# names) live. Reading it as ASCII maps every byte >= 0x80 to '?' and writing it
+# back as ASCII makes that loss permanent, so the encoding is detected once and
+# reused verbatim on the way out. The base map (reference/empty-map) is pure
+# ASCII, which is why this only shows up on a real map.
+function Read-JassScript {
+    param([string]$Path)
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $preamble = @()
+    $offset = 0
+    $encoding = $null
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        $encoding = New-Object System.Text.UTF8Encoding($false)
+        $preamble = @(0xEF, 0xBB, 0xBF)
+        $offset = 3
+    } elseif ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
+        $encoding = New-Object System.Text.UnicodeEncoding($false, $false)
+        $preamble = @(0xFF, 0xFE)
+        $offset = 2
+    } else {
+        # No BOM: a byte sequence that is valid UTF-8 is UTF-8, anything else is
+        # the ANSI code page the map editor wrote.
+        $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+        try {
+            [void]$strictUtf8.GetString($bytes)
+            $encoding = New-Object System.Text.UTF8Encoding($false)
+        } catch {
+            $ansi = [System.Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage
+            $encoding = [System.Text.Encoding]::GetEncoding($ansi)
+        }
+    }
+    $text = $encoding.GetString($bytes, $offset, $bytes.Length - $offset)
+    return [pscustomobject]@{
+        Path = $Path; Text = $text; Encoding = $encoding; Preamble = $preamble
+    }
+}
+
+function Write-JassScript {
+    param($Script, [string]$Text)
+    $body = [byte[]]$Script.Encoding.GetBytes($Text)
+    if ($Script.Preamble.Count -gt 0) {
+        $body = [byte[]](@($Script.Preamble) + @($body))
+    }
+    [System.IO.File]::WriteAllBytes($Script.Path, $body)
+}
+
 # ── Lua bundler ─────────────────────────────────────────────────
 # Collects all .lua files under $MapDir, converts paths to module names,
 # and inlines require() calls into a single war3map.lua.
@@ -501,20 +550,36 @@ if (-not (Test-Path $JFile)) {
 }
 
 # 2. Bundle Lua sources
+# The DLL loads the bundle from script\war3map.lua, so that is the only copy that
+# belongs in the archive. Writing it there directly (instead of into the work-dir
+# root and copying afterwards) keeps a second, unreferenced copy of the full Lua
+# source out of the packed map: it doubled the script payload and shipped the
+# bundle's source next to the compiled-ready one.
 Write-Host '  [2/5] Bundle Lua'
-Bundle-Lua $MapDir "$WorkDir\war3map.lua"
+$scriptDir = "$WorkDir\script"
+if (-not (Test-Path $scriptDir)) { New-Item -ItemType Directory $scriptDir -Force | Out-Null }
+$staleRootLua = "$WorkDir\war3map.lua"
+if (Test-Path -LiteralPath $staleRootLua) {
+    # Left behind by an older pack.ps1 run or by a base map that carried one; the
+    # engine never reads it, and keeping it would repack it into the archive.
+    Remove-Item -LiteralPath $staleRootLua -Force
+    Write-Host '  Removed stale war3map.lua from the archive root (the engine loads script\war3map.lua)'
+}
+Bundle-Lua $MapDir "$scriptDir\war3map.lua"
 if ($TestReboot) {
     # Second script, loaded by the DLL after it resets the VM so the reboot
     # regression can assert the new state from inside the fresh Lua state.
     Write-Host '  [2b] Bundle reboot child script'
-    $rebootScriptDir = "$WorkDir\script"
-    if (-not (Test-Path $rebootScriptDir)) { New-Item -ItemType Directory $rebootScriptDir -Force | Out-Null }
-    Bundle-Lua $MapDir "$rebootScriptDir\reboot_child.lua" -Entry "tests.reboot_child"
+    Bundle-Lua $MapDir "$scriptDir\reboot_child.lua" -Entry "tests.reboot_child"
 }
 
 # 3. war3map.j — inject the japi bootstrap (plugin maps and foreign maps)
 Write-Host '  [3/5] Patching war3map.j'
-$jContent = Get-Content $JFile -Raw -Encoding ASCII
+$jassScript = Read-JassScript $JFile
+$jContent = $jassScript.Text
+$bomNote = ''
+if ($jassScript.Preamble.Count -gt 0) { $bomNote = ' (BOM preserved)' }
+Write-Host ('  JASS encoding: ' + $jassScript.Encoding.WebName + $bomNote)
 $nl = [string][char]13 + [string][char]10
 Write-Host ("  JASS anchors: " + (Get-JassAnchorSummary $jContent))
 
@@ -903,7 +968,7 @@ if ($funcAddrDecl) {
     $jContent = $funcAddrDecl + $jContent
     Write-Host '  GetFuncAddr: native SetHeroLevels declared at top of war3map.j'
 }
-Set-Content $JFile $jContent -Encoding ASCII -NoNewline
+Write-JassScript $jassScript $jContent
 Write-Host ("  JASS anchors after patch: " + (Get-JassAnchorSummary $jContent))
 
 # 3b. Parse the patched script before it ever reaches the game. JassHelper/vJass
@@ -1063,11 +1128,8 @@ foreach ($f in $needed) {
     }
 }
 
-# DLL loads war3map.lua from script\war3map.lua in the MPQ
-# Create script subdirectory and copy the bundled lua there
-$scriptDir = "$WorkDir\script"
-if (-not (Test-Path $scriptDir)) { New-Item -ItemType Directory $scriptDir -Force | Out-Null }
-Copy-Item "$WorkDir\war3map.lua" "$scriptDir\war3map.lua" -Force
+# DLL loads war3map.lua from script\war3map.lua in the MPQ. Step [2/5] already
+# wrote the bundle there; only the listfile entries are still missing.
 if ($existing -notmatch "script\\\\war3map\.lua") {
     Add-Content $listfile "`nscript\war3map.lua" -Encoding ASCII
 }
