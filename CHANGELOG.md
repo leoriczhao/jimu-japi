@@ -31,6 +31,24 @@
 
 ## [Unreleased]
 
+### 新增：钩子补丁可回滚（2026-11-19，工作区未提交）
+
+- `warcraft3::jass::inline_hook_info` + `inline_hook_uninstall()`：`inline_hook_install` 新增可选第 3 参，记录 target / stolen / trampoline / 原始字节；卸载时先还原字节再释放 trampoline（顺序不能反，否则路过 trampoline 的线程会跳进已释放内存）。对应内置 JAPI `0x10045C86` 的 target/backup/len/old_prot 记录。
+- `base::hook::patch_guard`：备份后写字节，`restore()`/析构还原，二次 `apply` 先隐式还原；`kMaxSize` 上限 64 字节，越界/空指针直接拒绝。
+- 新增 `hook_rollback_test.exe`（`src/tests/hook_rollback_test.cpp`，独立 CMake 目标）：35 项断言覆盖"装→卸→再装"的字节级可逆、trampoline 语义、幂等与非法入参。
+- 钩子登记表：`inline_hook_install` 按 target 幂等（同 target + 同 detour 直接返回已有 trampoline，不再二次打补丁；detour 变了则替换）；新增 `inline_hook_reassert_all()`（地图重开时按保存的记录检查 JMP 是否还在，被引擎改写的重新打上）、`inline_hook_reset_all()`、`inline_hook_count()`。
+- 地图重开路径接线：`Initialize()` 的 `Initialize() again: map boot` 分支与 `SimulateMapBoot` 回归入口都会调 `reassert_inline_hooks()`，日志 `Step 0: inline hooks reasserted (N tracked, M re-patched)`。之所以是"重新落实"而不是"先卸再装"：钩子补的是 game 代码，跨地图有效，先卸会让这一步之后的初始化拿到未打补丁的地址。
+- 验证：`srcuild.bat` 通过；`hook_rollback_test` 56/56 PASS（含幂等安装、模拟引擎改写后 reassert、reset_all、detour 替换）；`-TestReboot` 10/10（日志 `SimulateMapBoot: inline hooks reasserted (1 tracked, 0 re-patched)`）；全量回归 `122/122`（`inline_hook_install` 两参调用点未改动，默认参数兼容）。
+
+### 新增：D3D 代理随地图分发（2026-11-19，工作区未提交）
+
+- `tools/pack.ps1`：**每张地图都携带** `newD3d9.dll` 与 `D3DX9_42.dll`（写作 `d3d9.tga` / `d3dx9_42.tga`，附 `d3d9.tga.sha256`），**没有开关**——缺代理的地图在没装代理的机器上完全没有 `jass.d3d`，代理文件缺失时打包直接报错；`-D3dxPath` 默认按 `reference\builtin-japi\extracted` → `src\build\bin\Release` → `SysWOW64` → `System32` 取第一个存在的（`*.dll` 被 gitignore，干净克隆里没有副本）。对标内置 JAPI 把 `newD3d9.dll` 嵌进 `wenhao_plugin.tga` 的做法。
+- `yd_japi.dll`（`stage_d3d_proxy_from_map`）：会话里没有本项目代理时，从 MPQ 读取这两个文件写到 `war3.exe` 同目录，并写入 `.japi_d3d_proxy.sha256` 让 `tools\d3d-proxy.ps1` 仍能认领；已存在且字节不同则只记日志、不覆盖。代理只能在进程启动时绑定，因此**下一局生效**。
+- `src/CMakeLists.txt`：两个 DLL 连同静态链接的 Lua 改成 **静态 CRT（`/MT`）**，与内置 JAPI 一致。原先是 `/MD`，代理只依赖 `MSVCP140` / `VCRUNTIME140`；随地图发到没装 VC++ 运行库的机器上，`d3d9.dll` 加载失败会直接带走整个游戏。
+- 验证（2026-11-19 实机）：`src\build.bat` 通过，`newD3d9.dll` 依赖仅 `ole32/KERNEL32/USER32/GDI32`、`yd_japi.dll` 仅 `KERNEL32/USER32`（导出 157 项含 `lua_newstate`/`luaL_newstate`、`Initialize`）；`d3d_sdk_contract_test.exe` PASS（ABI v1 / stress=1000）；两局回归 `122/122`；`deploy.ps1 -Demo` D3D 切片 `33/33`。
+- 验证（打包）：`pack.ps1` 产物解包回读含 `d3d9.tga`(90112B) / `d3dx9_42.tga`(1886208B) / `d3d9.tga.sha256`(64B)；带代理的地图回归 `122/122`。
+- 验证（暂存链路，实机）：卸掉代理后跑带代理的地图 → 日志 `D3D: staged d3d9.dll from the map` / `staged D3DX9_42.dll from the map` / `proxy staged next to war3.exe; restart War3 to activate it`，同局仍报 `D3D handlers unavailable`；`d3d-proxy.ps1 -Verify` 认出 `D3D proxy=Owned`；下一局日志变为 `D3D: InitializeD3DAPI DONE`，即暂存的代理已生效；该局回归仍 `122/122`。Lua 原生 D3D API 未变，版本仍为 `0.4.0`。
+
 ### 新增：代码化物编与基础 UI（2026-11-18，工作区未提交）
 
 - `tools/object-data`：构建专用 `unit` / `ability` 声明，使用四字符 ID、原生父对象与原始字段 ID；读取 w3x2lni 元数据验证类型、等级与冲突，追加到版本 1/2 物编并保留既有记录字节。声明时复制字段和等级表，复用 Lua 配置表不改变先前对象。`pack.ps1` 自动发现根 `objects.lua`，该文件不进入游戏模块。

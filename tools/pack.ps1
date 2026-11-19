@@ -16,6 +16,8 @@
 #   .\tools\pack.ps1 -SkipRepack                        # stop after patching; inspect -WorkDir, write no .w3x
 param(
     [string]$DllPath  = "",
+    [string]$ProxyPath = "",
+    [string]$D3dxPath  = "",
     [string]$BaseMap  = "",
     [string]$OutFile  = "",
     [string]$MapDir   = "",
@@ -42,6 +44,27 @@ $Script  = "$W3x2Lni\script"
 
 # Defaults
 if (-not $DllPath)  { $DllPath  = "$Root\src\build\bin\Release\yd_japi.dll" }
+# EVERY map carries the D3D proxy. Not a switch: a map handed to somebody whose
+# game directory has no proxy otherwise loses jass.d3d completely, and "the map
+# does not run" is the bug report you get for that. The proxy is a d3d9.dll
+# replacement, so it cannot be activated inside a running session; it travels in
+# the map and is staged next to war3.exe by yd_japi.dll (stage_d3d_proxy_from_map)
+# for the next launch. Builtin-japi did the same by embedding newD3d9.dll in its
+# loader, which itself lives in the map MPQ as wenhao_plugin.tga.
+if (-not $ProxyPath) { $ProxyPath = "$Root\src\build\bin\Release\newD3d9.dll" }
+if (-not $D3dxPath) {
+    # D3DX9_42.dll is a Microsoft redistributable and *.dll is gitignored, so a
+    # clean clone has no copy in the tree — fall back to the local one, then to
+    # the Windows DX redist.
+    $d3dxCandidates = @(
+        "$Root\reference\builtin-japi\extracted\D3DX9_42.dll",
+        "$Root\src\build\bin\Release\D3DX9_42.dll",
+        (Join-Path $env:WINDIR 'SysWOW64\D3DX9_42.dll'),
+        (Join-Path $env:WINDIR 'System32\D3DX9_42.dll')
+    )
+    $D3dxPath = $d3dxCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $D3dxPath) { $D3dxPath = $d3dxCandidates[0] }
+}
 if (-not $BaseMap)  { $BaseMap = "$Root\reference\empty-map" }
 if (-not $OutFile)  { $OutFile  = "$Root\build\output.w3x" }
 if (-not $MapDir)   { $MapDir   = "$Root\map" }
@@ -54,6 +77,8 @@ function Resolve-Abs($p) {
     return [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PWD.Path, $p))
 }
 $DllPath = Resolve-Abs $DllPath
+$ProxyPath = Resolve-Abs $ProxyPath
+$D3dxPath  = Resolve-Abs $D3dxPath
 $BaseMap = Resolve-Abs $BaseMap
 $OutFile = Resolve-Abs $OutFile
 $MapDir  = Resolve-Abs $MapDir
@@ -62,6 +87,14 @@ $WorkDir = Resolve-Abs $WorkDir
 # Validate
 if (-not (Test-Path $BaseMap)) { throw "Base map or source directory not found: $BaseMap" }
 if (-not (Test-Path $DllPath)) { throw "DLL not found: $DllPath`n  Build first: src\build.bat" }
+# Every map carries the proxy, so a missing proxy file is a hard error, never a
+# silent downgrade to a map without jass.d3d.
+if (-not (Test-Path $ProxyPath)) {
+    throw "D3D proxy not found: $ProxyPath`n  Build first: src\build.bat (or pass -ProxyPath)"
+}
+if (-not (Test-Path $D3dxPath)) {
+    throw "D3DX9_42.dll not found (checked reference\builtin-japi\extracted, src\build\bin\Release, SysWOW64, System32).`n  Pass -D3dxPath."
+}
 if (-not (Test-Path $Lua))     { throw "w3x2lni not found: $Lua" }
 if (-not (Test-Path $CbSrc))   { throw "callback not found: $CbSrc" }
 if (-not (Test-Path $MapDir))  { throw "Map dir not found: $MapDir" }
@@ -72,6 +105,7 @@ if (-not (Test-Path $MainLua)) { throw "war3map.lua not found: $MainLua" }
 Write-Host "  Base map: $BaseMap"
 Write-Host "  Map dir:  $MapDir"
 Write-Host "  DLL:      $DllPath"
+Write-Host "  Proxy:    $ProxyPath (+ $D3dxPath)"
 Write-Host "  Output:   $OutFile"
 
 # ── w3x2lni helper ──────────────────────────────────────────────
@@ -217,7 +251,8 @@ $EngineModules = [System.Collections.Generic.HashSet[string]]::new()
 foreach ($engineModule in @(
     'jass.common', 'jass.globals', 'jass.japi', 'jass.hook', 'jass.runtime',
     'jass.debug', 'jass.message', 'jass.sleep', 'jass.storm', 'jass.slk',
-    'jass.debugger', 'jass.d3d', 'jass.console', 'jass.log', 'jass.bignum')) {
+    'jass.debugger', 'jass.d3d', 'jass.console', 'jass.log', 'jass.bignum',
+    'jass.selector')) {
     [void]$EngineModules.Add($engineModule)
 }
 $engineModuleSource = "$Root\src\src\lua_engine\lua_engine\open_lua_engine.cpp"
@@ -993,6 +1028,20 @@ Write-Host '  [4/5] Inject DLL + callback'
 Copy-Item $DllPath "$WorkDir\japi.tga" -Force
 Copy-Item $CbSrc  "$WorkDir\callback" -Force
 
+# D3D proxy pair, disguised with .tga names like japi.tga. yd_japi.dll reads them
+# from the MPQ and writes d3d9.dll / D3DX9_42.dll next to war3.exe when they are
+# not there yet (stage_d3d_proxy_from_map in src/src/extensions/dllmain.cpp), so
+# a map can be handed out without a separate proxy install. The proxy only binds
+# at process start, so a freshly staged copy takes effect on the next launch.
+Copy-Item $ProxyPath "$WorkDir\d3d9.tga"      -Force
+Copy-Item $D3dxPath  "$WorkDir\d3dx9_42.tga"  -Force
+# Hash sidecar for the staged copy: yd_japi.dll writes it as
+# .japi_d3d_proxy.sha256 next to war3.exe so tools\d3d-proxy.ps1 keeps
+# recognising the proxy it staged as its own.
+$proxySha = (Get-FileHash -Algorithm SHA256 -LiteralPath $ProxyPath).Hash.ToUpperInvariant()
+Set-Content "$WorkDir\d3d9.tga.sha256" $proxySha -Encoding Ascii -NoNewline
+Write-Host "  D3D proxy: bundled as d3d9.tga + d3dx9_42.tga ($proxySha)"
+
 
 # Deterministic BLP2 fixtures for the D3D SDK asset acceptance. They are written
 # into the map MPQ only: asset:// decoding goes through the in-memory palette /
@@ -1113,6 +1162,7 @@ if ($Demo -or $InteractiveD3D) {
 # Update MPQ listfile so w3x2lni includes the new files
 $listfile = "$WorkDir\(listfile)"
 $needed = @("callback", "japi.tga")
+$needed += @("d3d9.tga", "d3d9.tga.sha256", "d3dx9_42.tga")
 if ($InteractiveD3D) {
     $needed += @("d3d-sdk-probe.png", "d3d-sdk-corrupt.png")
     $needed += @("d3d-sdk-blp2-raw.blp", "d3d-sdk-blp2-palette.blp",

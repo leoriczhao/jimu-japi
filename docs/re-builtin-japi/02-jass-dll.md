@@ -48,10 +48,10 @@ jass.dll 是"内置 JAPI"插件包中的 **JASS 引擎层**：它被打包进地
 | KERNEL32.dll | 148 个，含 `GetModuleHandleA/W`、`GetProcAddress`、`LoadLibraryA/W/ExW`、`VirtualAlloc/Free/Protect/Query`、`WriteProcessMemory`、`ReadProcessMemory`、`CreateThread`、`CreateFileMappingA/W`、`MapViewOfFile`、`FindFirstFileA/FindNextFileA`、`DeleteFileA`、`Sleep`、`SetUnhandledExceptionFilter`、`GetCurrentProcessId` 等 | 内存搜索、inline hook 写码、线程、文件映射、清理 `<pid>.dll` |
 | USER32.dll | `MessageBoxA`、`SetWindowsHookExA`、`CallNextHookEx`、`keybd_event`、`FindWindowA/ExA`、`GetWindowLongW`、`SetWindowPos`、`DrawTextA/W`、`GetSystemMenu`、`RemoveMenu` 等 | 消息框报错（print 系列）、键盘模拟、窗口操作 |
 | GDI32.dll | `CreateCompatibleDC`、`CreateDIBSection`、`CreateFontIndirectA`、`SelectObject`、`SetBkColor/SetBkMode/SetTextColor`、`DeleteDC/DeleteObject` | 屏幕文字绘制（FPS 显示等） |
-| ADVAPI32.dll | `RegOpenKeyA/RegOpenKeyExA`、`RegQueryValueExA`、`RegCloseKey` | 读注册表（`SOFTWARE\Blizzard Entertainment\Warcraft III\Video` 的 `reswidth`/`resheight`，字符串见文件偏移 0x12442c/0x124460/0x124420） |
+| ADVAPI32.dll | `RegOpenKeyA/RegOpenKeyExA`、`RegQueryValueExA`、`RegCloseKey` | 读注册表（`SOFTWARE\Blizzard Entertainment\Warcraft III\Video` 的 `reswidth`/`resheight`，字符串见文件偏移 0x12442c/0x124460/0x124420）。**2026-11-19 修正：值在 `DLL_PROCESS_ATTACH` 期读入 `0x1016FC00`/`0x1016FBFC` 后零次读取（dead store），没有任何消费方**；另一族 `RegOpenKeyA` 读的是 `HKLM\Software\Microsoft\Direct3D\DisableMMX`（CRT 探测）。详见 [09](09-runtime-gates-and-dormant-code.md) 第六节 |
 | SHELL32.dll | `CommandLineToArgvW`、`SHGetFolderPathW` | 命令行解析、目录定位 |
 | PSAPI.DLL | `GetModuleFileNameExW` | 进程模块查询 |
-| WININET.dll | `InternetOpenA`、`InternetConnectA`、`HttpOpenRequestA`、`HttpAddRequestHeadersA`、`HttpSendRequestA`、`HttpQueryInfoA`、`InternetReadFile`、`InternetCloseHandle`、`InternetGetConnectedState` | **具备 HTTP 联网能力**（用途未在 jass.dll 内证实，见存疑点） |
+| WININET.dll | `InternetOpenA`、`InternetConnectA`、`HttpOpenRequestA`、`HttpAddRequestHeadersA`、`HttpSendRequestA`、`HttpQueryInfoA`、`InternetReadFile`、`InternetCloseHandle`、`InternetGetConnectedState` | **2026-11-19 查明：不是更新检查/遥测，而是 StormLib 的 HTTP 只读文件后端**（Agent `"StormLib HTTP MPQ reader"`、`GET`、`Range: bytes=%u-%u`、端口 80）。唯一入口是文件名以字面量 `http:` 开头 → `flags&3==2` → `.rdata 0x1011FBB8` → `InstallHttpFile 0x10097760`；二进制里无人构造这种名字，故休眠。详见 [09](09-runtime-gates-and-dormant-code.md) 第五节 |
 
 **关键否定证据**：导入表中**没有 game.dll / Storm.dll / war3.exe**。jass.dll 对游戏内部函数的全部依赖都是运行时解析的：先 `GetModuleHandleW(L"Game.dll")` 取基址，再用特征码/字符串交叉引用搜索定位目标函数（见 §3.2）。字符串 `Storm.dll` 仅作为名字出现（文件偏移 0x125198，RVA 0x10126598，供 `storm_dll::load()` 运行时加载）。
 
@@ -175,7 +175,9 @@ guard 置位后调用 0x100575cd 并把返回值存入 0x1017185c。0x100575cd �
 100363b7: call 0x100361c4               ; 清理函数（下述）
 ```
 
-**机制结论**：加载链中存在一个以 **当前进程 PID 命名的辅助 DLL**（`<pid>.dll`，导出函数 `get`）。`call` 导出启动的线程先等它的 `get()` 返回真（表示插件其余部分就绪），随后从磁盘删除该辅助文件、睡 10 秒，最后运行 0x100361c4：该函数 `GetModuleFileNameA` 取本 DLL 路径，拼 `\*.dll`（字符串在文件偏移 0x124164），`FindFirstFileA/FindNextFileA` 遍历，把文件名中数字落在合法 PID 范围（`edi-0x400001 <= 0x1ffffe`，即 0x400001..0x5fffff）的 `.dll` 文件 `DeleteFileA` 删掉——即**清理历代 `<pid>.dll` 残留**。
+**机制结论**：加载链中存在一个以 **当前进程 PID 命名的辅助 DLL**（`<pid>.dll`，导出函数 `get`）。`call` 导出启动的线程先等它的 `get()` 返回真（表示插件其余部分就绪），随后从磁盘删除该辅助文件、睡 10 秒，最后运行 0x100361c4：该函数 `GetModuleFileNameA` 取本 DLL 路径，拼 `\*.dll`（字符串在文件偏移 0x124164），`FindFirstFileA/FindNextFileA` 遍历，把 **`atoi(去扩展名后的文件名) > 0`（纯数字名）且 `nFileSizeLow ∈ [0x400001, 0x5FFFFF]`（4–6MB）** 的 `.dll` 用 `DeleteFileA` 删掉——即**清理历代 `<pid>.dll` 残留**。
+
+> **2026-11-19 修正**：早先把 `edi-0x400001 <= 0x1ffffe` 读成"数字落在合法 PID 范围"是误读。`edi` 取自 `WIN32_FIND_DATAA.nFileSizeLow`（`esp+0x64 = wfd+0x20`，与 `esp+0x70 = wfd+0x2C = cFileName`、`wfd = esp+0x44`、路径缓冲 `esp+0x184` 三者栈帧互证），过滤的是**文件大小**。另外明确否证：全库 `FindFirstFileA` 只有这 1 处、`LoadLibraryA` 只有 2 处（d3d8/d3d8d 与 newD3d9.dll）、`GetProcAddress(...,"get")` 只有 1 处（`<pid>.dll`），**不存在"枚举 `*.dll` → LoadLibrary → 按 `get` 注册"的插件机制**。详见 [09](09-runtime-gates-and-dormant-code.md) 第三节。
 
 证据字节：文件偏移 0x12416c 起 `%i.dll\0`，0x124174 起 `get\0`（dd 实测）。
 
@@ -204,11 +206,11 @@ guard 置位后调用 0x100575cd 并把返回值存入 0x1017185c。0x100575cd �
 1005ab4a: push 5
 1005ab4c: mov esi,0xe8
 1005ab51: add eax,0x4
-1005ab56: call 0x10053430        ; next_opcode(addr, 0xe8, 5)：在 addr 后 5 字节内找 call 指令
+1005ab56: call 0x10053430        ; next_opcode(addr, 0xe8, 5)：按指令边界解码，找"长度=5 且首字节=0xE8"的那条（0x10053430 内部用 0x10048a07 解指令长度，不是字节扫描）
 1005ab5e: mov ecx,[eax+0x1]
 1005ab61: add ecx,0x5
 1005ab64: add eax,ecx            ; eax = call 的目标（rel32 解算）
-1005ab67: ...                    ; 同样的方式再跟两级 call
+1005ab67: ...                    ; 再跟一级 call，然后一级 **E9 jmp 跳板**（0x1005ab74：mov eax,[ecx+6]; add ecx,0xa; add eax,ecx），最后一级 call
 1005ab85: mov ecx,[eax+0x1]
 1005ab88: add eax,0x5
 1005ab8b: add eax,ecx            ; fnA 最终地址
@@ -225,7 +227,7 @@ fnA 的调用约定为 **ecx 传单参**（类 thiscall）：包装函数 0x1005
 | 导出（RVA） | 反汇编 | 结论 |
 |---|---|---|
 | `get_native_function_hashtable`（0x5621c） | `push 0x5; pop ecx; call [eax+0x20]; add eax,0x18` | **native 哈希表 = env + 0x18** |
-| `get_jass_vm`（0x561ce） | `call fnA(5); mov eax,[eax+0x90]; mov esi,[eax+0x4]`，随后按版本 `> 0x17ba` 与否减 4 或 0 | jass_vm = `[[env+0x90]+0x4]`（版本 ≤6074 时再 −4） |
+| `get_jass_vm`（0x561ce） | `call fnA(5); mov eax,[eax+0x90]; mov esi,[eax+0x4]`，随后按版本 `> 0x17ba` 与否减 4 或 0 | jass_vm = `[[env+0x90]+0x4]`（**2026-11-19 订正：`version >= 6074` 才 −4**，`<6074` 调整量为 0；本机 52240 被 `search_version` 归一为 0x1B58=7000，走 −4） |
 | `get_jass_thread`（0x56206） | `call fnA(5); mov ecx,[eax+0x14]; mov eax,[eax+0xc]; mov eax,[eax+ecx*4-0x4]` | jass_thread = `[[env+0xc] + [env+0x14]*4 − 4]`（数组末元素） |
 | `get_current_jass_pos`（0x5622d） | `call 0x56206; mov eax,[eax+0x20]; sub eax,0x8` | jass_pos = `[jass_thread+0x20] − 8` |
 | `global_variable` 构造（0x56239） | `call 0x561ce; mov ecx,[eax+0x285c]`，再调查表函数 0x100562f5 | **全局变量哈希表在 jass_vm + 0x285c** |
@@ -509,11 +511,11 @@ EX 系列 native 的实际注册点（示例，RVA 0x49ad6 起的大注册块）
 
 1. **fnA（单例 +0x20）的游戏语义未证实**：它以 ecx=5 被调用并返回"jass 环境基址"（派生出 env+0x18 native 表、env+0x90、env+0xc/0x14 线程数组等），但 fnA 本身在 game.dll 中的函数名/语义无法从 jass.dll 内部证实；"config\0" 只是它的定位特征。
 2. **initialize_mapping 只向后遍历**：0x10059cd8 从 "Deg2Rad" 引用点起 `esi += 0x14` 单方向枚举 native 注册块，未见向前遍历代码；若锚点不在块首，jass_function 映射是否覆盖全部原生 native 存疑（也可能 "Deg2Rad" 恰为块首条目，未证实）。
-3. **WININET 联网用途**：jass.dll 导入完整 HTTP 客户端 API，但本次分析未定位到调用点的业务用途（更新检查？遥测？），未证实。
-4. **事件双映射**：Init*Hook 安装写入 map 0x1016fc88，而 `get_map_event()` 返回 map 0x1016fbc8；两者关系（同一份数据的两个视图，还是安装期/订阅期两份）未完全证实。
-5. **hook() flags 的 0x4(register_hook) 目标**：其 `search_string_ptr(name)` 找的是"名字字符串的引用点"再 +5 inline hook，该策略对非名字引用的函数无效；具体哪些 native 适合走这一路，需逐案例验证。
-6. **from_string 的形式参数类型**：导出签名为 `from_string(unsigned int)`，但反汇编把它当指针解引用（`[arg+8]`→`[+0x1c]`）；对外的"uint 字符串 id"语义由 `from_stringid`（0x598c9）/SetJstringToChar 承担，from_string 的参数实为表项指针。命名与语义不完全一致，引用时注意。
-7. **0x101701cc / 0x101701e4 两张 async 登记表的消费点**：async_hook/async_once_hook 只写表，实际打 hook 的安装时机（推测在 §3.1 的回调分发或每帧钩子里）未逐行证实。
+3. ~~**WININET 联网用途**：jass.dll 导入完整 HTTP 客户端 API，但本次分析未定位到调用点的业务用途（更新检查？遥测？），未证实。~~ **已查明（2026-11-19）**：StormLib 的 HTTP 只读文件后端，`http:` 前缀触发，实际休眠，与遥测/更新无关。见 [09](09-runtime-gates-and-dormant-code.md)。
+4. ~~**事件双映射**：Init*Hook 安装写入 map 0x1016fc88，而 `get_map_event()` 返回 map 0x1016fbc8；两者关系未完全证实。~~ **已查明（2026-11-19）**：是**两张不同的 map**——`0x1016FC88` = `map<string, shared_ptr<patch_record>>`（安装账本，结点 0x30），`0x1016FBC8` = `map<string, vector<uint>>`（事件总线，结点 0x34，`get_map_event()` 直接返回其地址）。二者靠运行期的**事件名字符串**桥接；`Init*Hook` 这些 key 从不进入分发，真正会触发的只有 `endGame` 与 `brokenNetwork`。见 [10](10-tables-hooks-and-game-side.md) 第五节。
+5. ~~**hook() flags 的 0x4(register_hook) 目标**：`search_string_ptr(name)` 找"名字字符串的引用点"再 +5 做 inline hook。~~ **已查明（2026-11-19）**：不是 inline hook，是 `base::hook::replace_pointer`（`0x10045D49`）**改 game.dll 注册块里 `mov ecx,imm32` 的 4 字节立即数**（注册块 `68 sig / BA name / B9 impl / E8 call`，每条 0x14 字节，`found+5` 正好落在 `B9` 的 imm 槽）；**下次 native 注册才生效**，当前局无效。japi/EX 名必然失败（字符串只在 jass.dll，搜索范围是 Game.dll）。见 [10](10-tables-hooks-and-game-side.md) 第三节。
+6. **from_string 的形式参数类型**：导出签名为 `from_string(unsigned int)`，反汇编却按指针解引用（`[arg+8]`→`[+0x1c]`）。**2026-11-19 确认**：参数就是**字符串表项指针**（`base + id*0x10`，表项 `+0x08`→串对象、`+0x1C`→`char*`），`newD3d9.dll` 静态导入该符号后自己换算并 `inc [entry+0xC]` 再调用即为硬证；接纯 id 的是 `from_stringid`（另一张表、4 字节元素、读 `+0x14`），两者不可互换。见 [10](10-tables-hooks-and-game-side.md) 第四节。
+7. ~~**0x101701cc / 0x101701e4 两张 async 登记表的消费点**：只写表，安装时机未逐行证实。~~ **已查明（2026-11-19）**：两张都是 `std::vector<Record>`（元素 0x20B），消费点 `0x100565C6`——遍历后逐条调 `table_hook`（即 flags 0x1 那一路），once 版 flush 后清空。触发者是 **IAT hook**（`Game.dll!Storm.dll#401` 与 `TlsGetValue`），在 VM 初始化期派发，不是每帧。见 [10](10-tables-hooks-and-game-side.md) 第二节。
 8. **0x189c(6300)/0x17ba(6074)/0x1901(6401) 与补丁版本的对应**：代码仅做数值比较，哪个构建号对应 1.27a 未在 DLL 内标注（版本号本身解析自 game.dll 的 "Warcraft III (build N)" 串）。
 9. **fnB（单例 +0x24）语义未证实**：经 "EnableSelect" 字符串引用定位，以 ecx+edx 双参被 0x1005a9ac/0x1005a9be 两个包装调用（后者把返回值规整为布尔）；未见更上层的业务调用点。
 10. **GBK/中文串**：本次在 jass.dll 的字符串证据中**未发现**实质中文字符串（错误信息均为英文）；`GetModuleHandleW` 使用的模块名为 ASCII 子集，无编码歧义问题。

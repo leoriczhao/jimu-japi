@@ -171,6 +171,9 @@ if ($Demo) { $packArgs["Demo"] = $true }
 if ($TestReboot) { $packArgs["TestReboot"] = $true }
 if ($WithJassWrappers) { $packArgs["WithJassWrappers"] = $true }
 if ($WithGetFuncAddr) { $packArgs["WithGetFuncAddr"] = $true }
+# The D3D runs below install the proxy into the game directory for this session.
+# The map itself always carries the same pair (pack.ps1 does that unconditionally),
+# so a deployed .w3x stays self-contained on a machine without the proxy.
 $packResult = & $PackScript @packArgs 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host $packResult

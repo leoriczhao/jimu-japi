@@ -84,6 +84,8 @@ cd src
 | `src/src/extensions/` | 自定义扩展 native |
 | `src/vendor/lua-5.4/` | Lua 5.4 源码（静态编译） |
 
+**改机器码必须可回滚**：字节补丁用 `base::hook::patch_guard`（备份后写、`restore()`/析构还原），inline hook 用 `warcraft3::jass::inline_hook_install(target, detour, &info)` + `inline_hook_uninstall(&info)`。裸写 `VirtualProtect` + `memcpy` 会丢掉原始字节。安装按 target 幂等（重复安装返回已有 trampoline，不会二次打补丁），地图重开时 `Initialize()` / `SimulateMapBoot` 会调 `inline_hook_reassert_all()` 把被引擎改写的 JMP 按记录补回去。合同由 `hook_rollback_test.exe` 钉住。
+
 **添加自定义 native**：
 
 1. 编辑 `src/src/extensions/custom_natives.cpp`
@@ -117,7 +119,14 @@ cd src
 3. 合并 `map/` 下 Lua → `build/work/war3map.lua`（UTF-8 无 BOM；`__modcache` 模块缓存）；`require` 按「地图模块 / 引擎 `jass.*` / 缺失」分类，`-RequireReport` 打印逐条来源，`-StrictRequires` 让无法内联的模块在打包期失败
 4. **patch `build/work/war3map.j`**：先打印所有注入锚点（`globals` / `endglobals` / `main` / `initializePlugin` / `LoadScript` / 首个函数 / 探针全局）的行号；在 `call initializePlugin(...)` 后插入 `SaveStr + UnitId("LoadScript")`，或在已存在的 `LoadScript` 前后补齐数组预分配与探针；锚点缺失/错位时抛出带锚点摘要的错误
 5. 复制 DLL → `build/work/japi.tga`，复制 callback，复制 `war3map.lua` → `script\war3map.lua`，更新 `(listfile)`
-6. 重新打包为 `build/output.w3x`；`-SkipRepack` 在 patch 后停止，只保留 `-WorkDir` 供检查
+6. 把 D3D 代理带进地图（**无条件**）：`newD3d9.dll` → `d3d9.tga`、`D3DX9_42.dll` → `d3dx9_42.tga`，外加 `d3d9.tga.sha256`（代理哈希）；连同 `(listfile)` 写入。没有开关：代理文件缺失直接报错，不会静默出一张没有 `jass.d3d` 的图
+7. 重新打包为 `build/output.w3x`；`-SkipRepack` 在 patch 后停止，只保留 `-WorkDir` 供检查
+
+**D3D 代理随地图分发**：代理本体是 `d3d9.dll` 的替身，只能在进程启动时被游戏加载，**地图内无法对当前这一局生效**。所以每张地图都由 `yd_japi.dll` 在 `Initialize` 时把 `d3d9.tga` / `d3dx9_42.tga` 从 MPQ 写到 `war3.exe` 所在目录（`stage_d3d_proxy_from_map`，日志 `D3D: staged d3d9.dll from the map`），并写入 `.japi_d3d_proxy.sha256` 供 `tools\d3d-proxy.ps1` 认领；**下一次启动**才生效。目标位置已有文件时不覆盖（字节相同视为"已就位"，不同视为别人的 wrapper，只记日志）。这与内置 JAPI 把 `newD3d9.dll` 塞进 `wenhao_plugin.tga` 的思路一致，区别只是我们的模块必须提前一局落地。
+
+`D3DX9_42.dll` 是微软再发行文件且被 `*.dll` 忽略，干净克隆里没有副本，所以 `-D3dxPath` 的默认值按 `reference\builtin-japi\extracted` → `src\build\bin\Release` → `SysWOW64` → `System32` 顺序取第一个存在的。
+
+两个 DLL 走**静态 CRT（`/MT`）**（`src/CMakeLists.txt` 的 `CMAKE_MSVC_RUNTIME_LIBRARY`），所以产物只依赖系统 DLL，不依赖 `MSVCP140` / `VCRUNTIME140`。新增第三方库时不要再引入 `/MD` 目标，否则链接期 `LNK2038`，或者编出来的代理在没装 VC 运行库的机器上直接加载失败。
 
 **Lua 侧注册 JAPI 函数**：
 
@@ -197,6 +206,8 @@ cd src; .\build.bat; cd ..
 | `-RequireReport` | 关 | 打印每个 `require` 的分类（地图内联/缓存/引擎 `jass.*`/缺失）与未使用的 Lua 文件 |
 | `-StrictRequires` | 关 | 有缺失或无法内联的地图模块时打包失败（默认只 WARNING） |
 | `-SkipRepack` | 关 | patch 完 `-WorkDir` 后停止，不写 `.w3x`，用于检查注入锚点/脚本 |
+| `-ProxyPath` | `src\build\bin\Release\newD3d9.dll` | 打进地图的代理文件（每张图都带，无开关） |
+| `-D3dxPath` | 依次探测 `reference\builtin-japi\extracted` → `src\build\bin\Release` → `SysWOW64` → `System32` | 打进地图的 D3DX 再发行文件 |
 
 **deploy.ps1**：
 

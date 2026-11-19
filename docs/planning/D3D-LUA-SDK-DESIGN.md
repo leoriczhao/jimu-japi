@@ -622,7 +622,10 @@ Texture v1 支持：
   由调用者显式结束会话后重试；
 - 任一未知 <code>d3d9.dll</code> 都必须拒绝覆盖和删除；
 - <code>deploy.ps1 -InteractiveD3D</code> 复用该工具，不再复制一份部署逻辑；
-- Map 包必须包含 Lua SDK binding 所需的 <code>yd_japi.dll</code>，但 proxy 仍是显式外部安装项；
+- Map 包必须包含 Lua SDK binding 所需的 <code>yd_japi.dll</code>；proxy 默认仍是显式外部安装项
+  （2026-11-19 补充：<code>pack.ps1</code> 无条件把代理与 D3DX 一起带进地图，
+  由 <code>yd_japi.dll</code> 在首次运行时写到 <code>war3.exe</code> 旁并写入所有权 sidecar，
+  下一局启动才生效——见 <code>AGENT.md</code>「D3D 代理随地图分发」）；
 - SDK 不可用时给地图作者明确安装提示，不让非 D3D 地图崩溃。
 
 发布产物必须带构建 provenance：source commit、dirty=false、构建配置、proxy SHA-256 和部署时间。

@@ -14,6 +14,17 @@ cd src; .\build.bat                      # 编译 yd_japi.dll + newD3d9.dll
 切片跑绿说明 proxy、Lua VM、D3D 绘制和输入都正常；此时窗口里能看到 HUD 文字和底板。
 详细入口见 [STATUS.md 第 4 节](../STATUS.md)。
 
+### 让地图自带代理
+
+```powershell
+.\tools\pack.ps1        # 代理每次都会打进去，没有开关
+```
+
+代理和 D3DX 会一起进地图（`d3d9.tga` / `d3dx9_42.tga` / `d3d9.tga.sha256`），别人拿到 `.w3x`
+不用再单独装一遍。代理是 `d3d9.dll` 的替身，只能随进程启动加载，所以**第一次**运行地图时
+它只是被写到 `war3.exe` 旁边（日志 `D3D: staged d3d9.dll from the map`），**重开一次游戏**
+才生效。机器上已经有同版本代理时直接跳过；已有别人的 `d3d9.dll` 时不覆盖，只记日志。
+
 ## 1. 最小 HUD（可直接粘进 war3map.lua 的函数）
 
 ```lua
@@ -131,7 +142,7 @@ d3d.shutdown()   -- 批量销毁同 session 内 SDK 创建的全部资源并取�
 
 | 现象 | 先查 |
 |---|---|
-| `d3d.is_available()` 为 false | `d3d.status().error`；proxy 是否随地图部署（`deploy.ps1` 会自动装） |
+| `d3d.is_available()` 为 false | `d3d.status().error`；代理是否已落地（地图自带，但首次运行只是写到 `war3.exe` 旁，需重开一次游戏；`deploy.ps1` 会当场装） |
 | 构造返回 `nil, err` | 错误文本就是原因（`D3D asset not found: ...` 等），见 API 文档错误表 |
 | 订阅收不到事件 | 窗口是否前台；是否 `hover_only`；是否按了正确的 WARK 键码 |
 | 运行日志 | `C:\ProgramData\japi_debug.txt`（`[D3D SDK]` 前缀） |

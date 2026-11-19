@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <base/win/pe_reader.h>
+#include <base/hook/patch.h>
 #include <warcraft3/jass.h>
 
 // === base::win::pe_reader ===
@@ -68,6 +69,49 @@ namespace base::hook {
             VirtualProtect((void*)address, sizeof(uintptr_t), old_protect, &old_protect);
         }
         return old_value;
+    }
+}
+
+// === base::hook::patch_guard ===
+// Backup-then-write byte patch. The free patch() above is one-shot; this one can
+// be undone, which is what map-level hook lifetimes need (see patch.h).
+namespace base::hook {
+    bool patch_guard::apply(uintptr_t address, const void* value, size_t size)
+    {
+        if (!address || !value || size == 0 || size > kMaxSize) return false;
+        if (active()) restore();
+
+        DWORD old_protect = 0;
+        if (!VirtualProtect((void*)address, size, PAGE_EXECUTE_READWRITE, &old_protect)) {
+            return false;
+        }
+        memcpy(original_, (const void*)address, size);
+        size_ = size;
+        address_ = address;
+        memcpy((void*)address, value, size);
+        FlushInstructionCache(GetCurrentProcess(), (void*)address, size);
+        VirtualProtect((void*)address, size, old_protect, &old_protect);
+        return true;
+    }
+
+    bool patch_guard::restore()
+    {
+        if (!active()) return true;
+
+        DWORD old_protect = 0;
+        bool ok = false;
+        if (VirtualProtect((void*)address_, size_, PAGE_EXECUTE_READWRITE, &old_protect)) {
+            memcpy((void*)address_, original_, size_);
+            FlushInstructionCache(GetCurrentProcess(), (void*)address_, size_);
+            VirtualProtect((void*)address_, size_, old_protect, &old_protect);
+            ok = true;
+        }
+        // Forget the record either way: a half-restored guard must not be
+        // replayed, and a failed VirtualProtect means the page is gone.
+        address_ = 0;
+        size_ = 0;
+        memset(original_, 0, sizeof(original_));
+        return ok;
     }
 }
 

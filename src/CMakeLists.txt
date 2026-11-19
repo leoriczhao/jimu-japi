@@ -1,6 +1,15 @@
 cmake_minimum_required(VERSION 3.15)
 project(yd_japi LANGUAGES C CXX)
 
+# Static CRT (/MT), the same choice builtin-japi made. A packed map now carries
+# yd_japi.dll and the d3d9 proxy (pack.ps1 -WithD3dProxy) to machines we do not
+# control, where MSVCP140.dll / VCRUNTIME140.dll are not guaranteed. A proxy
+# that fails to load takes the whole game down with it, so both DLLs — and the
+# Lua static library linked into yd_japi — carry the runtime in. Do not mix:
+# every object in one DLL must use the same runtime.
+cmake_policy(SET CMP0091 NEW)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -199,6 +208,37 @@ set_target_properties(newD3d9 PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     PREFIX ""
     SUFFIX ".dll"
+)
+
+# Hook rollback contract: inline_hook_install/uninstall and patch_guard must be
+# reversible, because a map-level hook lifetime (hook on entry, unhook on exit,
+# re-hook on the next entry) depends on it. Standalone: it only needs the hook
+# sources, not the whole DLL.
+add_executable(hook_rollback_test
+    tests/hook_rollback_test.cpp
+    src/stubs.cpp
+    src/yd_core/warcraft3/jass/inline_hook.cpp
+    src/yd_core/warcraft3/udis86/udis86.c
+    src/yd_core/warcraft3/udis86/udis86_decode.c
+    src/yd_core/warcraft3/udis86/udis86_itab.c
+)
+target_include_directories(hook_rollback_test PRIVATE
+    "${CMAKE_SOURCE_DIR}/src"
+    "${CMAKE_SOURCE_DIR}/src/yd_core"
+)
+target_compile_definitions(hook_rollback_test PRIVATE
+    YDWE_WAR3_INLINE
+    YDWE_BASE_INLINE
+    SLKLIB_INLINE
+    WIN32
+    _WINDOWS
+    _CRT_SECURE_NO_WARNINGS
+)
+if(MSVC)
+    target_compile_options(hook_rollback_test PRIVATE /W3 /EHsc)
+endif()
+set_target_properties(hook_rollback_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
 # Native ABI/lifecycle contract harness. It loads the built proxy dynamically,

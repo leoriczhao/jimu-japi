@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <warcraft3/jass.h>
 #include <warcraft3/jass/nf_register.h>
@@ -18,6 +19,7 @@
 #include <warcraft3/hashtable.h>
 #include "../lua_engine/lua_engine/lua_loader.h"
 #include "../lua_engine/lua_engine/bridge_dispatch.h"
+#include "../lua_engine/lua_engine/storm.h"
 #include "debug_log.h"
 #include "ex_natives/FuncBind.h"
 #include <warcraft3/jass/func_value.h>
@@ -200,25 +202,190 @@ static uint32_t __cdecl create_rect_handle(float min_x, float min_y,
         "Rect", (uintptr_t)&x0, (uintptr_t)&y0, (uintptr_t)&x1, (uintptr_t)&y1);
 }
 
+typedef void (__cdecl *initialize_d3d_fn)(
+    void (*)(const char*, const char*, warcraft3::lua_engine::bridge::cpp_handler_fn),
+    const char* (*)(uint32_t),
+    uint32_t (*)(const char*),
+    bool (*)(uint32_t, float*, float*, float*, float*),
+    uint32_t (*)(float, float, float, float));
+
+// ── D3D proxy staging ────────────────────────────────────────────────────
+// The renderer is a d3d9.dll replacement, so it only binds when the game loads
+// it at process start — a map cannot inject it into the running session. What a
+// map *can* do is carry it: pack.ps1 -WithD3dProxy stores the built proxy as
+// `d3d9.tga` and the D3DX redist as `d3dx9_42.tga` in the MPQ, and the code
+// below writes them next to war3.exe the first time the map runs on a machine
+// that does not have them. The next launch then starts with the proxy loaded.
+// Builtin-japi solved the same problem by embedding newD3d9.dll inside its
+// loader (wenhao_plugin.tga), which itself travels in the map.
+static bool read_whole_file(const char* path, std::string& out)
+{
+    HANDLE h = CreateFileA(path, GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    char chunk[64 * 1024];
+    DWORD got = 0;
+    bool ok = true;
+    while (ReadFile(h, chunk, sizeof(chunk), &got, nullptr) && got > 0) {
+        out.append(chunk, got);
+    }
+    CloseHandle(h);
+    return ok;
+}
+
+static bool write_whole_file(const char* path, const void* data, size_t size)
+{
+    HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    const char* p = static_cast<const char*>(data);
+    size_t left = size;
+    bool ok = true;
+    while (left > 0) {
+        DWORD chunk = (DWORD)(left > (1u << 20) ? (1u << 20) : left);
+        DWORD wrote = 0;
+        if (!WriteFile(h, p, chunk, &wrote, nullptr) || wrote == 0) { ok = false; break; }
+        p += wrote;
+        left -= wrote;
+    }
+    CloseHandle(h);
+    return ok;
+}
+
+static std::string game_directory()
+{
+    char path[MAX_PATH] = {0};
+    if (!GetModuleFileNameA(nullptr, path, MAX_PATH)) return std::string();
+    char* slash = strrchr(path, '\\');
+    if (!slash) return std::string();
+    *slash = '\0';
+    return std::string(path);
+}
+
+// Read one map-embedded file out of the MPQ (search_scope 1 covers the map,
+// which is where pack.ps1 -WithD3dProxy puts d3d9.tga / d3dx9_42.tga).
+static bool read_map_file(const char* name, std::string& out)
+{
+    auto& storm = warcraft3::storm_s::instance();
+    if (!storm.valid()) return false;
+
+    const void* data = nullptr;
+    size_t size = 0;
+    if (!storm.load_file(name, &data, &size) || !data || size == 0) return false;
+    out.assign(static_cast<const char*>(data), size);
+    storm.unload_file(data);
+    return true;
+}
+
+enum stage_result {
+    STAGE_ABSENT,   // this map does not carry the file
+    STAGE_WRITTEN,  // copied out just now
+    STAGE_OURS,     // already there, byte-identical to the map copy
+    STAGE_FOREIGN,  // already there but someone else's; left alone
+    STAGE_FAILED    // wanted to write, could not
+};
+
+// Copy one bundled binary from the map MPQ to <war3 dir>\<target_name>.
+// An existing file is never replaced: an unknown d3d9.dll belongs to someone
+// else (dgVoodoo, another proxy, a vendor wrapper) and clobbering it would
+// break their setup.
+static stage_result stage_from_map(const std::string& dir, const char* mpq_name,
+                                   const char* target_name)
+{
+    std::string blob;
+    if (!read_map_file(mpq_name, blob)) return STAGE_ABSENT;
+
+    std::string target = dir + "\\" + target_name;
+    std::string existing;
+    char buf[MAX_PATH + 160];
+
+    if (read_whole_file(target.c_str(), existing)) {
+        if (existing == blob) {
+            snprintf(buf, sizeof(buf), "D3D: %s already staged (%s)", target_name, target.c_str());
+            japi_log::sync_write(buf);
+            return STAGE_OURS;
+        }
+        snprintf(buf, sizeof(buf),
+                 "D3D: %s exists but differs from the map copy; left untouched (%s)",
+                 target_name, target.c_str());
+        japi_log::sync_write(buf);
+        return STAGE_FOREIGN;
+    }
+
+    if (!write_whole_file(target.c_str(), blob.data(), blob.size())) {
+        snprintf(buf, sizeof(buf),
+                 "D3D: cannot write %s (error %lu); install the proxy manually "
+                 "(tools\\d3d-proxy.ps1 -Install)", target.c_str(),
+                 (unsigned long)GetLastError());
+        japi_log::sync_write(buf);
+        return STAGE_FAILED;
+    }
+
+    snprintf(buf, sizeof(buf), "D3D: staged %s from the map (%s)", target_name, target.c_str());
+    japi_log::sync_write(buf);
+    return STAGE_WRITTEN;
+}
+
+// tools\d3d-proxy.ps1 identifies its own files through .japi_d3d_proxy.sha256 and
+// refuses to touch a d3d9.dll it cannot prove it owns. A staged copy therefore
+// has to bring the sidecar along, or a later -Install/-Uninstall would classify
+// our own proxy as a stranger. The hash ships with the map (d3d9.tga.sha256),
+// written at pack time, so nothing has to be hashed here.
+static void ensure_proxy_sidecar(const std::string& dir, std::string expected)
+{
+    while (!expected.empty() &&
+           (expected.back() == '\r' || expected.back() == '\n' ||
+            expected.back() == ' ' || expected.back() == '\t')) {
+        expected.pop_back();
+    }
+    if (expected.size() != 64) return;
+
+    std::string target = dir + "\\.japi_d3d_proxy.sha256";
+    std::string current;
+    if (read_whole_file(target.c_str(), current) && current == expected) return;
+    if (!write_whole_file(target.c_str(), expected.data(), expected.size())) {
+        japi_log::sync_write("D3D: cannot write .japi_d3d_proxy.sha256 next to war3.exe");
+    }
+}
+
+static void stage_d3d_proxy_from_map()
+{
+    std::string dir = game_directory();
+    if (dir.empty()) return;
+
+    bool fresh = false;
+
+    stage_result proxy = stage_from_map(dir, "d3d9.tga", "d3d9.dll");
+    if (proxy == STAGE_WRITTEN) fresh = true;
+    if (proxy == STAGE_WRITTEN || proxy == STAGE_OURS) {
+        std::string sha;
+        if (read_map_file("d3d9.tga.sha256", sha)) ensure_proxy_sidecar(dir, sha);
+    }
+
+    if (stage_from_map(dir, "d3dx9_42.tga", "D3DX9_42.dll") == STAGE_WRITTEN) {
+        fresh = true;
+    }
+
+    if (fresh) {
+        japi_log::sync_write(
+            "D3D: proxy staged next to war3.exe; restart War3 to activate it");
+    }
+}
+
 static bool initialize_d3d_api()
 {
     HMODULE d3d = GetModuleHandleA("d3d9.dll");
-    if (!d3d) {
-        japi_log::sync_write("D3D: d3d9.dll is not loaded; D3D handlers unavailable");
-        return false;
-    }
-
-    typedef void (__cdecl *initialize_d3d_fn)(
-        void (*)(const char*, const char*, warcraft3::lua_engine::bridge::cpp_handler_fn),
-        const char* (*)(uint32_t),
-        uint32_t (*)(const char*),
-        bool (*)(uint32_t, float*, float*, float*, float*),
-        uint32_t (*)(float, float, float, float));
-
-    auto init = reinterpret_cast<initialize_d3d_fn>(
-        GetProcAddress(d3d, "InitializeD3DAPI"));
+    auto init = d3d ? reinterpret_cast<initialize_d3d_fn>(
+                          GetProcAddress(d3d, "InitializeD3DAPI"))
+                    : nullptr;
     if (!init) {
-        japi_log::sync_write("D3D: loaded d3d9.dll is not the project proxy; D3D handlers unavailable");
+        // This session runs without the project proxy. If the map carries one,
+        // put it in place for the next launch before reporting the limitation.
+        stage_d3d_proxy_from_map();
+        japi_log::sync_write(d3d
+            ? "D3D: loaded d3d9.dll is not the project proxy; D3D handlers unavailable"
+            : "D3D: d3d9.dll is not loaded; D3D handlers unavailable");
         return false;
     }
 
@@ -274,6 +441,21 @@ static uintptr_t find_linked_list_func_addr(const char* name)
         if (*(uintptr_t*)cur == first_node) break;
     }
     return 0;
+}
+
+// Map boot (real reload or the in-process SimulateMapBoot regression) rebuilds
+// the engine's native tables and may rewrite code we patched. Every tracked
+// inline hook re-checks its bytes: intact ones are left alone (never patched
+// twice — a second JMP would make the trampoline jump to itself), rewritten
+// ones are re-applied from the record saved at install time.
+static void reassert_inline_hooks(const char* tag)
+{
+    size_t tracked = warcraft3::jass::inline_hook_count();
+    size_t repatched = warcraft3::jass::inline_hook_reassert_all();
+    char buf[160];
+    snprintf(buf, sizeof(buf), "%s: inline hooks reasserted (%u tracked, %u re-patched)",
+             tag, (unsigned)tracked, (unsigned)repatched);
+    SYNC_LOG(buf);
 }
 
 // Sweep stale <pid>.dll files left in the game directory by dead runs.
@@ -349,6 +531,8 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
         warcraft3::lua_engine::lua_loader::on_map_boot(false);
         // Code addresses belong to the script that produced them.
         warcraft3::japi::clear_func_bind();
+
+        reassert_inline_hooks("Step 0");
     }
 
     // Step 1: Install ExecuteFunc hook; the Lua VM is created lazily on the
@@ -449,6 +633,7 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
             SYNC_LOG("SimulateMapBoot: resetting the Lua VM");
             warcraft3::lua_engine::lua_loader::on_map_boot(true);
             warcraft3::japi::clear_func_bind();
+            reassert_inline_hooks("SimulateMapBoot");
             warcraft3::lua_engine::lua_loader::load_script_file("script\\reboot_child.lua");
             SYNC_LOG("SimulateMapBoot: done");
             return 0;
