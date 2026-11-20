@@ -5,6 +5,8 @@
 local M = {}
 
 M.bridge = {
+    { name = 'EXBlendButtonIcon', spec = '(SSS)B' },
+    { name = 'EXDclareButtonIcon', spec = '(S)V' },
     { name = 'EXDisplayChat', spec = '(IIS)V' },
     { name = 'EXEffectMatReset', spec = '(I)V' },
     { name = 'EXEffectMatRotateX', spec = '(IR)V' },
@@ -30,7 +32,6 @@ M.bridge = {
     { name = 'EXGetUnitArrayString', spec = '(III)S' },
     { name = 'EXGetUnitInteger', spec = '(II)I' },
     { name = 'EXGetUnitReal', spec = '(II)R' },
-    { name = 'EXGetUnitState', spec = '(II)R' },
     { name = 'EXGetUnitString', spec = '(II)S' },
     { name = 'EXPauseUnit', spec = '(IB)V' },
     { name = 'EXSetAbilityAEmeDataA', spec = '(II)B' },
@@ -52,7 +53,6 @@ M.bridge = {
     { name = 'EXSetUnitInteger', spec = '(III)B' },
     { name = 'EXSetUnitMoveType', spec = '(II)V' },
     { name = 'EXSetUnitReal', spec = '(IIR)B' },
-    { name = 'EXSetUnitState', spec = '(IIR)V' },
     { name = 'EXSetUnitString', spec = '(IIS)B' },
     { name = 'func_bind_trigger_name', spec = '(IS)V' },
     { name = 'GetChatState', spec = '()B' },

@@ -894,18 +894,46 @@ namespace warcraft3::japi {
 		}
 	}
 
+	// Rewrite the native names themselves — same thing builtin-japi does in its
+	// InitGame (jass.dll 0x10033764 / 0x1003377b): point the native table entry
+	// at the fake and remember the original. No EX* alias, no code patching.
+	//
+	// The game rebuilds its native table on every map, so this runs once per
+	// Initialize(). It is skipped when the entry already holds our fake: taking
+	// it as "the real address" would make the fake call itself.
+	void InstallUnitStateHooks()
+	{
+		struct target_t { const char* name; uintptr_t* real; uintptr_t fake; };
+		target_t targets[] = {
+			{ "GetUnitState", &RealGetUnitState, (uintptr_t)FakeGetUnitState },
+			{ "SetUnitState", &RealSetUnitState, (uintptr_t)FakeSetUnitState },
+		};
+
+		char buf[128];
+		for (auto& t : targets) {
+			hashtable::native_func_node* node = get_native_function_hashtable()->find(t.name);
+			if (!node || !node->func_address_) {
+				snprintf(buf, sizeof(buf), "UnitState: %s missing from the native table", t.name);
+				japi_log::sync_write(buf);
+				continue;
+			}
+			if (node->func_address_ == (uint32_t)t.fake) {
+				snprintf(buf, sizeof(buf), "UnitState: %s already hooked", t.name);
+				japi_log::sync_write(buf);
+				continue;
+			}
+			*t.real = (uintptr_t)node->func_address_;
+			node->func_address_ = (uint32_t)t.fake;
+			snprintf(buf, sizeof(buf), "UnitState: %s hooked (real=0x%08X)", t.name, (uint32_t)*t.real);
+			japi_log::sync_write(buf);
+		}
+	}
+
 	void InitializeUnitState()
 	{
-		// NOTE: the GetUnitState/SetUnitState *hooks* stay disabled — japi_hook
-		// rewrites existing JASS natives, which conflicts with the callback
-		// exploit's own hooks.
-		//
-		// The fake implementations are exposed as the EXGetUnitState /
-		// EXSetUnitState bridge handlers instead (handler section at the bottom
-		// of this file + initialize_ex_natives()). They are deliberately *not*
-		// added with jass::japi_add: a JASS native carrying an EX* name would
-		// collide with the war3map.j wrappers that tools/gen-jass-wrappers.ps1
-		// derives from the very same handler registry.
+		InstallUnitStateHooks();
+		// Fallback for a table that was not there yet: resolve through
+		// jass_func() so an unhandled state can still reach the real native.
 		resolve_real_unit_state();
 	}
 
@@ -951,16 +979,4 @@ namespace warcraft3::japi {
 		EXSetUnitFacing(a[0], (jass::jreal_t*)&a[1]); return 0;
 	}
 
-	// GetUnitState/SetUnitState with the extended state enum (YDWE semantics:
-	// 0x10..0x12 attack damage, 0x20 armor, 0x25 attack interval, 0x51 rate of
-	// fire, ...). Standard states fall through to the real natives.
-	uint32_t EXGetUnitState_handler(const uint32_t* a, size_t) {
-		resolve_real_unit_state();
-		return FakeGetUnitState(a[0], a[1]);
-	}
-	uint32_t EXSetUnitState_handler(const uint32_t* a, size_t) {
-		resolve_real_unit_state();
-		FakeSetUnitState(a[0], a[1], (uint32_t*)&a[2]);
-		return 0;
-	}
 }

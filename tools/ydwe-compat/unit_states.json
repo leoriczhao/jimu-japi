@@ -1,0 +1,365 @@
+{
+  "format": 1,
+  "source": "src/src/extensions/ex_natives/UnitState.cpp (YDWE yd_jass_api/UnitState.cpp port)",
+  "note": "Only states handled by the existing EXGetUnitState/EXSetUnitState bridge handlers. Values 0..3 stay vanilla and are never migrated. 4..7 are UjAPI-only and unsupported here.",
+  "vanilla": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "states": [
+    {
+      "value": 16,
+      "name": "UNIT_STATE_ATTACK1_DAMAGE_DICE",
+      "short": "ATTACK1_DAMAGE_DICE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 17,
+      "name": "UNIT_STATE_ATTACK1_DAMAGE_SIDE",
+      "short": "ATTACK1_DAMAGE_SIDE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 18,
+      "name": "UNIT_STATE_ATTACK1_DAMAGE_BASE",
+      "short": "ATTACK1_DAMAGE_BASE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 19,
+      "name": "UNIT_STATE_ATTACK1_DAMAGE_BONUS",
+      "short": "ATTACK1_DAMAGE_BONUS",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 20,
+      "name": "UNIT_STATE_ATTACK1_DAMAGE_MIN",
+      "short": "ATTACK1_DAMAGE_MIN",
+      "get": true,
+      "set": false,
+      "note": "EXSetUnitState accepts this case but deliberately writes nothing (derived from dice/side/base/bonus). Migration leaves SetUnitState calls unchanged."
+    },
+    {
+      "value": 21,
+      "name": "UNIT_STATE_ATTACK1_DAMAGE_MAX",
+      "short": "ATTACK1_DAMAGE_MAX",
+      "get": true,
+      "set": false,
+      "note": "EXSetUnitState accepts this case but deliberately writes nothing (derived from dice/side/base/bonus). Migration leaves SetUnitState calls unchanged."
+    },
+    {
+      "value": 22,
+      "name": "UNIT_STATE_ATTACK1_RANGE",
+      "short": "ATTACK1_RANGE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 32,
+      "name": "UNIT_STATE_ARMOR",
+      "short": "ARMOR",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 33,
+      "name": "UNIT_STATE_ATTACK1_DAMAGE_LOSS_FACTOR",
+      "short": "ATTACK1_DAMAGE_LOSS_FACTOR",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 34,
+      "name": "UNIT_STATE_ATTACK1_WEAPON_SOUND",
+      "short": "ATTACK1_WEAPON_SOUND",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 35,
+      "name": "UNIT_STATE_ATTACK1_ATTACK_TYPE",
+      "short": "ATTACK1_ATTACK_TYPE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 36,
+      "name": "UNIT_STATE_ATTACK1_MAX_TARGETS",
+      "short": "ATTACK1_MAX_TARGETS",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 37,
+      "name": "UNIT_STATE_ATTACK1_INTERVAL",
+      "short": "ATTACK1_INTERVAL",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 38,
+      "name": "UNIT_STATE_ATTACK1_INITIAL_DELAY",
+      "short": "ATTACK1_INITIAL_DELAY",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 39,
+      "name": "UNIT_STATE_ATTACK1_RANGE_BUFFER",
+      "short": "ATTACK1_RANGE_BUFFER",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 40,
+      "name": "UNIT_STATE_ATTACK1_BACK_SWING",
+      "short": "ATTACK1_BACK_SWING",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 41,
+      "name": "UNIT_STATE_ATTACK1_TARGET_TYPES",
+      "short": "ATTACK1_TARGET_TYPES",
+      "get": true,
+      "set": true,
+      "note": "Compat difference: our port has the missing break fixed and returns attack1_targs; YDWE's original falls through and returns attack1_spill_dist. Documented rather than replicated."
+    },
+    {
+      "value": 48,
+      "name": "UNIT_STATE_ATTACK2_DAMAGE_DICE",
+      "short": "ATTACK2_DAMAGE_DICE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 49,
+      "name": "UNIT_STATE_ATTACK2_DAMAGE_SIDE",
+      "short": "ATTACK2_DAMAGE_SIDE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 50,
+      "name": "UNIT_STATE_ATTACK2_DAMAGE_BASE",
+      "short": "ATTACK2_DAMAGE_BASE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 51,
+      "name": "UNIT_STATE_ATTACK2_DAMAGE_BONUS",
+      "short": "ATTACK2_DAMAGE_BONUS",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 52,
+      "name": "UNIT_STATE_ATTACK2_DAMAGE_LOSS_FACTOR",
+      "short": "ATTACK2_DAMAGE_LOSS_FACTOR",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 53,
+      "name": "UNIT_STATE_ATTACK2_WEAPON_SOUND",
+      "short": "ATTACK2_WEAPON_SOUND",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 54,
+      "name": "UNIT_STATE_ATTACK2_ATTACK_TYPE",
+      "short": "ATTACK2_ATTACK_TYPE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 55,
+      "name": "UNIT_STATE_ATTACK2_MAX_TARGETS",
+      "short": "ATTACK2_MAX_TARGETS",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 56,
+      "name": "UNIT_STATE_ATTACK2_INTERVAL",
+      "short": "ATTACK2_INTERVAL",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 57,
+      "name": "UNIT_STATE_ATTACK2_INITIAL_DELAY",
+      "short": "ATTACK2_INITIAL_DELAY",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 64,
+      "name": "UNIT_STATE_ATTACK2_RANGE",
+      "short": "ATTACK2_RANGE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 65,
+      "name": "UNIT_STATE_ATTACK2_RANGE_BUFFER",
+      "short": "ATTACK2_RANGE_BUFFER",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 66,
+      "name": "UNIT_STATE_ATTACK2_DAMAGE_MIN",
+      "short": "ATTACK2_DAMAGE_MIN",
+      "get": true,
+      "set": false,
+      "note": "EXSetUnitState accepts this case but deliberately writes nothing (derived from dice/side/base/bonus). Migration leaves SetUnitState calls unchanged."
+    },
+    {
+      "value": 67,
+      "name": "UNIT_STATE_ATTACK2_DAMAGE_MAX",
+      "short": "ATTACK2_DAMAGE_MAX",
+      "get": true,
+      "set": false,
+      "note": "EXSetUnitState accepts this case but deliberately writes nothing (derived from dice/side/base/bonus). Migration leaves SetUnitState calls unchanged."
+    },
+    {
+      "value": 68,
+      "name": "UNIT_STATE_ATTACK2_BACK_SWING",
+      "short": "ATTACK2_BACK_SWING",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 69,
+      "name": "UNIT_STATE_ATTACK2_TARGET_TYPES",
+      "short": "ATTACK2_TARGET_TYPES",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 70,
+      "name": "UNIT_STATE_ATTACK2_SPILL_DIST",
+      "short": "ATTACK2_SPILL_DIST",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 71,
+      "name": "UNIT_STATE_ATTACK2_SPILL_RADIUS",
+      "short": "ATTACK2_SPILL_RADIUS",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 80,
+      "name": "UNIT_STATE_ARMOR_TYPE",
+      "short": "ARMOR_TYPE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 81,
+      "name": "UNIT_STATE_RATE_OF_FIRE",
+      "short": "RATE_OF_FIRE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 82,
+      "name": "UNIT_STATE_ACQUISITION_RANGE",
+      "short": "ACQUISITION_RANGE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 83,
+      "name": "UNIT_STATE_LIFE_REGEN",
+      "short": "LIFE_REGEN",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 84,
+      "name": "UNIT_STATE_MANA_REGEN",
+      "short": "MANA_REGEN",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 85,
+      "name": "UNIT_STATE_MIN_RANGE",
+      "short": "MIN_RANGE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 86,
+      "name": "UNIT_STATE_ATTACK1_SPILL_DIST",
+      "short": "ATTACK1_SPILL_DIST",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 87,
+      "name": "UNIT_STATE_ATTACK1_SPILL_RADIUS",
+      "short": "ATTACK1_SPILL_RADIUS",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 88,
+      "name": "UNIT_STATE_ATTACK1_WEAPON_TYPE",
+      "short": "ATTACK1_WEAPON_TYPE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 89,
+      "name": "UNIT_STATE_ATTACK2_WEAPON_TYPE",
+      "short": "ATTACK2_WEAPON_TYPE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 96,
+      "name": "UNIT_STATE_AS_TARGET_TYPE",
+      "short": "AS_TARGET_TYPE",
+      "get": true,
+      "set": true
+    },
+    {
+      "value": 97,
+      "name": "UNIT_STATE_TYPE",
+      "short": "TYPE",
+      "get": true,
+      "set": true
+    }
+  ],
+  "ujapi_only": [
+    {
+      "value": 4,
+      "name": "UNIT_STATE_REGEN_LIFE"
+    },
+    {
+      "value": 5,
+      "name": "UNIT_STATE_REGEN_MANA"
+    },
+    {
+      "value": 6,
+      "name": "UNIT_STATE_BONUS_LIFE"
+    },
+    {
+      "value": 7,
+      "name": "UNIT_STATE_BONUS_MANA"
+    }
+  ]
+}

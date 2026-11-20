@@ -26,6 +26,28 @@ target_include_directories(lua54 PUBLIC "${CMAKE_SOURCE_DIR}/vendor/lua-5.4/src"
 # GetProcAddress(yd_japi.dll, "lua_newstate") (see docs/planning/LUA-DEBUGGER-DESIGN.md)
 target_compile_definitions(lua54 PRIVATE LUA_USE_WINDOWS LUA_BUILD_AS_DLL)
 
+# Standalone image module for command-button icons. It has no game or D3D
+# dependency: BLP1/BLP2 decode (JPEG via WIC) and BLP1 palette encode are the
+# same codecs used by the offline tool and button_icon_test. The D3D proxy
+# keeps its own device-bound decoder.
+add_library(japi_image STATIC
+    src/image/blp_codec.cpp
+    src/image/button_icon.cpp
+    src/image/wic_decode.cpp
+)
+target_include_directories(japi_image PUBLIC
+    "${CMAKE_SOURCE_DIR}/src"
+)
+target_link_libraries(japi_image PUBLIC windowscodecs ole32)
+if(MSVC)
+    target_compile_options(japi_image PRIVATE /W3 /EHsc)
+endif()
+target_compile_definitions(japi_image PRIVATE
+    WIN32
+    _WINDOWS
+    _CRT_SECURE_NO_WARNINGS
+)
+
 # yd_core (from ydwar3)
 set(YD_CORE_SOURCES
     src/yd_core/warcraft3/jass.cpp
@@ -76,6 +98,8 @@ set(LUA_ENGINE_SOURCES
     src/lua_engine/lua_engine/libs_console.cpp
     src/lua_engine/lua_engine/libs_log.cpp
     src/lua_engine/lua_engine/libs_bignum.cpp
+    src/lua_engine/lua_engine/libs_selector.cpp
+    src/lua_engine/lua_engine/libs_ydwe.cpp
     src/lua_engine/lua_engine/fix_baselib.cpp
     src/lua_engine/lua_engine/bridge_dispatch.cpp
 )
@@ -102,6 +126,9 @@ set(EXT_SOURCES
     src/extensions/custom_natives.cpp
     src/extensions/ex_natives/Initialize.cpp
     src/extensions/ex_natives/UnitState.cpp
+    src/extensions/ex_natives/BuiltinCompat.cpp
+    src/base/hook/iat.cpp
+    src/base/hook/detail/import_address_table.cpp
     src/extensions/ex_natives/GameInfo.cpp
     src/extensions/ex_natives/CodeRunLogs.cpp
     src/extensions/ex_natives/FuncBind.cpp
@@ -111,6 +138,7 @@ set(EXT_SOURCES
     src/extensions/ex_natives/EventDamageData.cpp
     src/extensions/ex_natives/DisplayChat.cpp
     src/extensions/ex_natives/GameUI.cpp
+    src/extensions/ex_natives/ButtonIcon.cpp
     src/stubs.cpp
 )
 
@@ -128,7 +156,7 @@ target_include_directories(yd_japi PRIVATE
     "${CMAKE_SOURCE_DIR}/vendor/bee-lua"
 )
 
-target_link_libraries(yd_japi PRIVATE lua54)
+target_link_libraries(yd_japi PRIVATE lua54 japi_image)
 
 target_compile_definitions(yd_japi PRIVATE
     YDWE_WAR3_INLINE
@@ -238,6 +266,29 @@ if(MSVC)
     target_compile_options(hook_rollback_test PRIVATE /W3 /EHsc)
 endif()
 set_target_properties(hook_rollback_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+# Offline command-button icon module tests and the build-time asset tool.
+# Neither target loads the game, hooks anything, or touches the pack/deploy
+# executable payload path.
+add_executable(button_icon_test tests/button_icon_test.cpp)
+target_link_libraries(button_icon_test PRIVATE japi_image)
+target_include_directories(button_icon_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+if(MSVC)
+    target_compile_options(button_icon_test PRIVATE /W3 /EHsc)
+endif()
+set_target_properties(button_icon_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_executable(ydwe_button_icon src/image/tool_main.cpp)
+target_link_libraries(ydwe_button_icon PRIVATE japi_image)
+target_include_directories(ydwe_button_icon PRIVATE "${CMAKE_SOURCE_DIR}/src")
+if(MSVC)
+    target_compile_options(ydwe_button_icon PRIVATE /W3 /EHsc)
+endif()
+set_target_properties(ydwe_button_icon PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 

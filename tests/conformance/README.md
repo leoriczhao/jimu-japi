@@ -23,6 +23,11 @@
 被测 DLL：`src\build\bin\Release\yd_japi.dll`，640000 B，
 SHA256 `F2C6EB0849D07FF6ACAA97FEAB854BB58AD950014F7DC7BD0B83EA662B7EE9E4`（cmake Win32 Release 构建）。
 
+> 2026-11-20：`manifest.lua` 重新生成，bridge handler 从 80 增至 82（新增
+> `EXDclareButtonIcon (S)V` / `EXBlendButtonIcon (SSS)B`），A 组新增 `jass.ydwe`。
+> 本轮约束禁止启动 War3，因此上面的 199 项实机结果没有复跑；下一次实机运行预计增加
+> 2 条 C 组断言与 1 条 A 组断言。
+
 4 条 `[SKIP]` 都需要本测试台给不了的东西（D3D 代理才能拿到的地图坐标、夹具物品、`EXPauseUnit` 的游戏侧相关性），
 每条都打印原因；断言名和原因一起进日志，所以「为什么跳过」不会随时间丢失。
 
@@ -75,11 +80,11 @@ tools\pack.ps1 -MapDir tests\conformance -WorkDir build\scratch\conf -OutFile bu
 | B | `jass.common` 基础 native 与 JASS 常量回落 | 基础调用通道坏了（外部脚本全靠它） |
 | C | `manifest.bridge` 里每个 handler 在 `jass.japi` 上可调用（一条一行） | `push_cpp_handler` 回落通道漏了某个名字 |
 | D | 按 spec 的 ret 字符校验返回类型（`R` 数字 / `S` 字符串 / `B` 布尔） | bridge ABI 把字符串/实数推错了 |
-| E | Set→Get 往返：`EXSetUnitState`、`EXSetUnitFacing`、`EXPauseUnit`、`EXSetAbilityDataInteger/Real/String`、`EXSetAbilityString`、`EXGetAbilityId`、`EXGetUnitAbilityByIndex` | 写进去了读不回来 |
+| E | Set→Get 往返：`SetUnitState`、`EXSetUnitFacing`、`EXPauseUnit`、`EXSetAbilityDataInteger/Real/String`、`EXSetAbilityString`、`EXGetAbilityId`、`EXGetUnitAbilityByIndex` | 写进去了读不回来 |
 | J | 真 JASS native 注册（`EXGetUnitAbility` / `EXGetAbilityDataReal` / `EXSetAbilityDataString` / `EXDisplayChat` / `Hex` / `GetMapName`）、`jass.japi` 仍走 bridge、JASS 级派发（`EXGetUnitAbility -> EXGetAbilityId`、字符串返回 `Hex`） | `register_real_ex_natives()` 没生效，或真 native 与 bridge 抢了同一个名字 |
 | K | `jass.console`（`enable` 读写回环、`write` 多参数）与 `jass.log`（`path` 自动补尾部分隔符、`info`/`error` 真写文件、保留 builtin-japi 的 `warnning` 拼写） | 两个模块退化成空壳，日志不再落盘 |
 | L | `jass.bignum`：`modpow` 小案例 + 256 位模数（2^255-19）、`bin`、`sha1` 标准向量（`"abc"` / 空串）、`sha1 -> bin -> new -> tostring` 往返 | 大数/哈希实现与标准不符 |
-| M | setter 的谓词语义：`EXSetAbilityString` / `EXSetUnitState` / `EXPauseUnit` 返回 `true` | bridge 的 `V` 声明把返回值吞了，Lua 侧拿到 `nil` |
+| M | setter 的谓词语义：`EXSetAbilityString` / `SetUnitState` / `EXPauseUnit` 返回 `true` | bridge 的 `V` 声明把返回值吞了，Lua 侧拿到 `nil` |
 | N | `jass.japi.info/counts` 的活注册表诊断（三张表归属、routes、effective spec、运行时 Lua handler、未知名字/参数校验、manifest 逐条一致、D3D 条件表面不虚报、诊断保留名）与显式清理（`hook.unhook` 返回值 / `hook[name]=nil`、texture event 回调按 owner 释放、`texture_destroy` 计数、执行中的 hook 不可卸载、卸载后 orig 安全报错） | 诊断与真实注册表漂移，或移除事件/hook 后回调仍被强引用 |
 | F | slk 各表 + `slk.unit["hfoo"]` + `slk.destructable[整数 rawcode]` + `slk.misc` | 外部地图物编查不到（`libs_slk` 的整表加载/回退坏了） |
 | G | `jass.message` 的 8 个成员存在 + `hook` 的读写回环 | 输入/命令链路的表结构变了 |

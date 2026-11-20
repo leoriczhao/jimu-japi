@@ -7,6 +7,7 @@
 // no absolute game.dll address is hardcoded.
 
 #include <warcraft3/jass.h>
+#include <warcraft3/jass/hook.h>
 #include <warcraft3/war3_searcher.h>
 #include <warcraft3/version.h>
 #include <base/hook/fp_call.h>
@@ -263,6 +264,96 @@ uint32_t SetLittleMapY_handler(const uint32_t* a, size_t)
 	if (!ensure_console_frames()) return 0;
 	g_console.little_map[1] = jass::from_real((jass::jreal_t)a[0]);
 	return 0;
+}
+
+// Big map / ConsoleUI frames — builtin-japi jass.dll 0x1004EF5D..0x1004F0B6.
+// Same two floats per frame (frame+0xF8 = x, frame+0xFC = y), same layout-space
+// units as the little map: 0.0 is the frame's home position, +/-2.0 pushes it
+// off screen. Get with an unresolved frame returns 0.0, Set is a silent no-op
+// (that is what the builtin does, it does not report failures).
+
+// GetBigMapX() -> real
+uint32_t GetBigMapX_handler(const uint32_t*, size_t)
+{
+	if (!ensure_console_frames()) return jass::to_real(0.0f);
+	return jass::to_real(g_console.big_map[0]);
+}
+
+// SetBigMapX(real x)
+uint32_t SetBigMapX_handler(const uint32_t* a, size_t)
+{
+	if (!ensure_console_frames()) return 0;
+	g_console.big_map[0] = jass::from_real((jass::jreal_t)a[0]);
+	return 0;
+}
+
+// GetBigMapY() -> real
+uint32_t GetBigMapY_handler(const uint32_t*, size_t)
+{
+	if (!ensure_console_frames()) return jass::to_real(0.0f);
+	return jass::to_real(g_console.big_map[1]);
+}
+
+// SetBigMapY(real y)
+uint32_t SetBigMapY_handler(const uint32_t* a, size_t)
+{
+	if (!ensure_console_frames()) return 0;
+	g_console.big_map[1] = jass::from_real((jass::jreal_t)a[0]);
+	return 0;
+}
+
+// GetConsoleUIX() -> real
+uint32_t GetConsoleUIX_handler(const uint32_t*, size_t)
+{
+	if (!ensure_console_frames()) return jass::to_real(0.0f);
+	return jass::to_real(g_console.console_ui[0]);
+}
+
+// SetConsoleUIX(real x)
+uint32_t SetConsoleUIX_handler(const uint32_t* a, size_t)
+{
+	if (!ensure_console_frames()) return 0;
+	g_console.console_ui[0] = jass::from_real((jass::jreal_t)a[0]);
+	return 0;
+}
+
+// GetConsoleUIY() -> real
+uint32_t GetConsoleUIY_handler(const uint32_t*, size_t)
+{
+	if (!ensure_console_frames()) return jass::to_real(0.0f);
+	return jass::to_real(g_console.console_ui[1]);
+}
+
+// SetConsoleUIY(real y)
+uint32_t SetConsoleUIY_handler(const uint32_t* a, size_t)
+{
+	if (!ensure_console_frames()) return 0;
+	g_console.console_ui[1] = jass::from_real((jass::jreal_t)a[0]);
+	return 0;
+}
+
+// ── JASS-facing natives (builtin registers these 8 with japi_add) ───────────
+// Get* return the real's bits in eax; Set* receive a pointer to the 4-byte real
+// (that is how War3 1.27 passes `real` arguments to natives).
+uint32_t __cdecl GetBigMapX_native()                  { return GetBigMapX_handler(nullptr, 0); }
+void     __cdecl SetBigMapX_native(const float* x)    { SetBigMapX_handler((const uint32_t*)x, 0); }
+uint32_t __cdecl GetBigMapY_native()                  { return GetBigMapY_handler(nullptr, 0); }
+void     __cdecl SetBigMapY_native(const float* y)    { SetBigMapY_handler((const uint32_t*)y, 0); }
+uint32_t __cdecl GetConsoleUIX_native()               { return GetConsoleUIX_handler(nullptr, 0); }
+void     __cdecl SetConsoleUIX_native(const float* x) { SetConsoleUIX_handler((const uint32_t*)x, 0); }
+uint32_t __cdecl GetConsoleUIY_native()               { return GetConsoleUIY_handler(nullptr, 0); }
+void     __cdecl SetConsoleUIY_native(const float* y) { SetConsoleUIY_handler((const uint32_t*)y, 0); }
+
+void InitializeGameUiExtra()
+{
+	jass::japi_add((uintptr_t)GetBigMapX_native,    "GetBigMapX",    "()R");
+	jass::japi_add((uintptr_t)SetBigMapX_native,    "SetBigMapX",    "(R)V");
+	jass::japi_add((uintptr_t)GetBigMapY_native,    "GetBigMapY",    "()R");
+	jass::japi_add((uintptr_t)SetBigMapY_native,    "SetBigMapY",    "(R)V");
+	jass::japi_add((uintptr_t)GetConsoleUIX_native, "GetConsoleUIX", "()R");
+	jass::japi_add((uintptr_t)SetConsoleUIX_native, "SetConsoleUIX", "(R)V");
+	jass::japi_add((uintptr_t)GetConsoleUIY_native, "GetConsoleUIY", "()R");
+	jass::japi_add((uintptr_t)SetConsoleUIY_native, "SetConsoleUIY", "(R)V");
 }
 
 }

@@ -31,6 +31,25 @@
 
 ## [Unreleased]
 
+### 新增：YDWE 地图接口兼容（2026-11-20，工作区未提交，离线）
+
+- **单位状态**：新增 `tools/ydwe-compat/migrate_unit_state.py`（字节级 JASS 源码迁移）与 `jass.ydwe` Lua 兼容层。复用现有 `EXGetUnitState (II)R` / `EXSetUnitState (IIR)V` bridge handler，覆盖 47 个 YDWE 扩展状态；vanilla `0..3`、UjAPI-only `4..7`、未知值、Set no-op `0x14/0x15/0x42/0x43` 不改；注释/字符串/rawcode/BOM/CRLF/GBK 字节保持原样。未 hook `GetUnitState`/`SetUnitState`，二进制地图与动态状态表达式不覆盖。
+- **命令按钮图标**：新增独立 `src/src/image` 模块（BLP1/BLP2 解码、BLP1 palette 编码、YDWE `BlpDisable`/`BlpBlend`、PasButton 数据、WIC CMYK→BGRA/alpha 修正）。`EXDclareButtonIcon (S)V` / `EXBlendButtonIcon (SSS)B` 按历史名字注册为 bridge handler，真实读取 MPQ、生成/合成并写到 `<地图目录>\japi-button-icons\`；提供 `ydwe_button_icon.exe` 构建期 CLI（输出标准 `CommandButtonsDisabled\DIS*.blp` 并更新 `(listfile)`）。
+- **明确未做**：没有移植 Storm `SFileLoadFile` 拦截/虚拟 MPQ，运行中的命令卡不会在本局看到生成物；图标必须在构建期打进地图。1.27a 对 `alphaBits=8` BLP1 palette + 多 mip 命令卡图标的接受度、loose file 搜索链、图标缓存刷新均未实机验证。`EXGetUnitState` 的 0x29 与 YDWE 原版缺失 break 的行为差异未复刻。
+- **验证（离线，未启动 War3/未打包/未部署）**：`src\build.bat` 通过；`tests\ydwe-compat\run.ps1` 4 步全过 —— Python 迁移 25 项、`jass.ydwe` 17 项、C++ 图像模块 47 项、图标 CLI 11 项；迁移输出 + wrapper 经 `tools\pjass.exe`（1.27.1 `common.j`/`blizzard.j`）编译通过；独立 Python 逐像素复算 disabled/blend raw BGRA 精确相等；`war3mapMap.blp` 首像素 CMYK 修正为 `(53,99,142,255)`。`tests/conformance/manifest.lua` 已重新生成（bridge 80→82），实机 199 项基线未复跑。
+- **未改载荷处理**：**没有修改** `pack.ps1` / `deploy.ps1`（包括其 DLL/callback/D3D 载荷段）；`jass.ydwe` 在仓库检出中由 `open_lua_engine.cpp` 自动发现，冻结的 `-SdkBundle` 静态清单未更新。PasButton/算法来自 YDWE（GPL），分发前需确认许可证义务。
+
+### 变更：对齐内置 JAPI 的 native 面（2026-11-20，工作区未提交）
+
+- **删掉自造的 EX 别名**：`EXGetUnitState` / `EXSetUnitState` 不再是 bridge 名（`EXGetUnitMaxLife` 本来就只是注释示例）。conformance manifest 与用例同步移除。
+- **`GetUnitState` / `SetUnitState` 接管原生名**（内置 jass.dll `0x10033764`/`0x1003377b` 的 table_hook 做法）：`InstallUnitStateHooks()` 每局 `Initialize()` 重打，已是 fake 则跳过；日志 `UnitState: GetUnitState hooked (real=0x…)`。
+- **新增内置有、我们缺的 native**（`src/src/extensions/ex_natives/BuiltinCompat.cpp` + `GameUI.cpp`）：
+  * `timer_start` / `timer_end` / `timer_destroy`（`(I)R` 秒表，QPC + 8 字节堆块，不是 CTimer）
+  * `GetBigMapX/Y`、`SetBigMapX/Y`、`GetConsoleUIX/Y`、`SetConsoleUIX/Y`（CGameUI frame `+0xF8/+0xFC`，与 little-map 同源）
+  * `ReplacePath` `(SS)V`：整串精确匹配的路径重定向表 + **消费端已接**（照内置）：`base::hook::iat(Game.dll, "Storm.dll", ordinal 279, wrapper)`，detour 为 5 参 `__stdcall`、改第 1 参（资源路径）后原样转发其余四个。cdb 在 `Storm!Ordinal279` 上实测：`a1=units\human\Rifleman\Rifleman.mdx`、`a2/a3/a5`=调用方栈指针、`a4=1`，地图加载期被调几十次。
+- **根因（之前三次崩溃）**：`stubs.cpp` 的 `pe_reader::get_directory_entry()` 返回 RVA，而 YDWE 原版返回**绝对地址**；`base/hook/iat.cpp` 直接把它当指针用 → 走到 0x19999999 一类垃圾地址（cdb 抓到的 AV 就是 `Game!GameMain+0x27f27` 读 `[eax+0x1C]`）。修好后 detour 立即正常。另外把 `base/hook/iat.cpp` + `detail/import_address_table.cpp` 真正编进了构建（此前 `iat()` 是返回 0 的 stub）。
+- 诊断开关：`JAPI_STORM_IMPORTS=1` 会列出每个 Storm 导入项（序号 / IAT 槽 / 目标）。
+- 验证（实机）：`srcuild.bat` 通过；回归 122 → **126/126**（新增 4 项 compat 用例：BigMap 取值、ConsoleUIY 往返、timer 三件套、ReplacePath 重定向）；ReplacePath 端到端可见——注册 `ReplacePath: "Textures\Knight.blp" -> "...BTNRifleman.blp" (1 entries)`，随后 Storm#279 命中同一路径并替换（`mapped=1`，日志无 "(N entries)" 那条）；日志显示两个 UnitState hook、两个别名、SaveGame 补丁全部落地。
 ### 新增：钩子补丁可回滚（2026-11-19，工作区未提交）
 
 - `warcraft3::jass::inline_hook_info` + `inline_hook_uninstall()`：`inline_hook_install` 新增可选第 3 参，记录 target / stolen / trampoline / 原始字节；卸载时先还原字节再释放 trampoline（顺序不能反，否则路过 trampoline 的线程会跳进已释放内存）。对应内置 JAPI `0x10045C86` 的 target/backup/len/old_prot 记录。

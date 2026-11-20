@@ -32,8 +32,8 @@ namespace warcraft3::japi {
 	uint32_t EXSetUnitCollisionType_handler(const uint32_t* args, size_t nargs);
 	uint32_t EXSetUnitMoveType_handler(const uint32_t* args, size_t nargs);
 	uint32_t EXSetUnitFacing_handler(const uint32_t* args, size_t nargs);
-	uint32_t EXGetUnitState_handler(const uint32_t* args, size_t nargs);
-	uint32_t EXSetUnitState_handler(const uint32_t* args, size_t nargs);
+	uint32_t EXDclareButtonIcon_handler(const uint32_t* args, size_t nargs);
+	uint32_t EXBlendButtonIcon_handler(const uint32_t* args, size_t nargs);
 
 	uint32_t EXGetUnitAbility_handler(const uint32_t* args, size_t nargs);
 	uint32_t EXGetUnitAbilityByIndex_handler(const uint32_t* args, size_t nargs);
@@ -108,6 +108,9 @@ uint32_t EXSetAbilityString_handler(const uint32_t* args, size_t nargs);
 	//
 	// jass.japi prefers the bridge handler (libs_japi.cpp japi_index), so adding
 	// the native cannot change what Lua sees.
+	void InitializeUnitState();   // hooks the GetUnitState/SetUnitState native names
+	void InitializeGameUiExtra(); // GetBigMapX/Y, SetBigMapX/Y, GetConsoleUIX/Y, SetConsoleUIX/Y
+	void InitializeBuiltinCompat(); // timer_start/end/destroy, ReplacePath, gold/teleport aliases, save disable
 	void InitializeAbilityState();
 	void InitializeEffect();
 	void InitializeItemState();
@@ -130,6 +133,9 @@ uint32_t EXSetAbilityString_handler(const uint32_t* args, size_t nargs);
 	void initialize_ex_natives()
 	{
 		install_event_damage_hooks();
+		InitializeUnitState();
+		InitializeGameUiExtra();
+		InitializeBuiltinCompat();
 
 		// Unit state
 		register_cpp_handler("EXGetUnitString",        "(II)S",  EXGetUnitString_handler);
@@ -144,10 +150,14 @@ uint32_t EXSetAbilityString_handler(const uint32_t* args, size_t nargs);
 		register_cpp_handler("EXSetUnitCollisionType", "(BII)V", EXSetUnitCollisionType_handler);
 		register_cpp_handler("EXSetUnitMoveType",      "(II)V",  EXSetUnitMoveType_handler);
 		register_cpp_handler("EXSetUnitFacing",        "(IR)V",  EXSetUnitFacing_handler);
-		// Extended GetUnitState/SetUnitState (YDWE enum: armor, attack damage,
-		// attack interval, rate of fire, ...). Standard states fall through.
-		register_cpp_handler("EXGetUnitState",         "(II)R",  EXGetUnitState_handler);
-		register_cpp_handler("EXSetUnitState",         "(IIR)V", EXSetUnitState_handler);
+
+		// Historical YDWE command-button icon API. The names (including the
+		// "Dclare" typo) are part of the map contract. They perform real BLP
+		// decode + disabled/blend + palette encode, write below
+		// <map dir>\japi-button-icons\, and do NOT hook SFileLoadFile; see
+		// ButtonIcon.cpp for the in-session limitation.
+		register_cpp_handler("EXDclareButtonIcon",     "(S)V",   EXDclareButtonIcon_handler);
+		register_cpp_handler("EXBlendButtonIcon",      "(SSS)B", EXBlendButtonIcon_handler);
 
 		// Ability state
 		register_cpp_handler("EXGetUnitAbility",       "(II)I",  EXGetUnitAbility_handler);

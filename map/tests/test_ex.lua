@@ -912,6 +912,53 @@ local function test_gameui()
 end
 
 -- ── run ──────────────────────────────────────────────────────
+
+-- ── builtin-compat natives (BigMap / ConsoleUI / stopwatch) ────────────────
+-- These are real JASS natives (japi_add), so they are called through jass.call
+-- rather than the UnitId bridge.
+local function test_compat()
+    test("GetBigMapX/Y return numbers", function()
+        local x = jass.call("GetBigMapX")
+        local y = jass.call("GetBigMapY")
+        assert(type(x) == "number" and type(y) == "number",
+            "x=" .. tostring(x) .. " y=" .. tostring(y))
+    end)
+
+    test("ConsoleUIY set/get round-trip", function()
+        -- Y is the only frame coordinate ShowConsole does not rewrite, so it is
+        -- the safe one to exercise.
+        local before = jass.call("GetConsoleUIY")
+        assert(type(before) == "number", "before=" .. tostring(before))
+        jass.call("SetConsoleUIY", before + 0.1)
+        local after = jass.call("GetConsoleUIY")
+        jass.call("SetConsoleUIY", before)
+        assert(math.abs(after - (before + 0.1)) < 0.01,
+            "before=" .. tostring(before) .. " after=" .. tostring(after))
+    end)
+
+    test("ReplacePath remaps a resource loaded afterwards", function()
+        -- Register the mapping, then force a first-time load of that exact path
+        -- (creating a knight makes the game pull its model + skin). If the
+        -- consumer works, the detour substitutes the path and logs it.
+        -- The knight model references this texture by this exact name
+        -- (confirmed by tracing the Storm#279 hits).
+        jass.call("ReplacePath", [[Textures\Knight.blp]],
+                  [[ReplaceableTextures\CommandButtons\BTNRifleman.blp]])
+        local u = jass.CreateUnit(jass.Player(0), fourcc("hkni"), fx.x + 512, fx.y, 270)
+        assert(u ~= nil, "CreateUnit(hkni) failed")
+        jass.SetUnitInvulnerable(u, true)
+    end)
+
+    test("timer_start / timer_end / timer_destroy", function()
+        local handle = jass.call("timer_start")
+        assert(type(handle) == "number" and handle ~= 0, "handle=" .. tostring(handle))
+        local elapsed = jass.call("timer_end", handle)
+        jass.call("timer_destroy", handle)
+        assert(type(elapsed) == "number" and elapsed >= 0 and elapsed < 60,
+            "elapsed=" .. tostring(elapsed))
+    end)
+end
+
 local function run(done)
     fx_setup()
     test_unit_data()
@@ -923,6 +970,7 @@ local function run(done)
     test_info()
     test_mouse_orders()
     test_gameui()
+    test_compat()
     test_interactive_ui_async(function()
         test_local_orders_async(function()
             fx_teardown()

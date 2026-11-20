@@ -34,7 +34,9 @@ namespace base::win {
     uintptr_t pe_reader::get_directory_entry(uint32_t directory) const {
         auto nt = get_nt_headers();
         if (!nt || directory >= IMAGE_NUMBEROF_DIRECTORY_ENTRIES) return 0;
-        return nt->OptionalHeader.DataDirectory[directory].VirtualAddress;
+        // Absolute address, matching base/win/pe_reader.cpp: callers
+        // (import/export address tables) cast the result straight to a pointer.
+        return rva_to_addr(nt->OptionalHeader.DataDirectory[directory].VirtualAddress);
     }
     uint32_t pe_reader::get_directory_entry_size(uint32_t directory) const {
         auto nt = get_nt_headers();
@@ -128,17 +130,7 @@ namespace base::console {
     }
 }
 
-// === base::hook::iat (minimal stubs) ===
-namespace base::hook {
-    uintptr_t iat(HMODULE module_handle, const char* dll_name, const char* api_name, uintptr_t new_function) {
-        (void)module_handle; (void)dll_name; (void)api_name; (void)new_function;
-        return 0;
-    }
-    uintptr_t iat(const wchar_t* module_name, const char* dll_name, const char* api_name, uintptr_t new_function) {
-        (void)module_name; (void)dll_name; (void)api_name; (void)new_function;
-        return 0;
-    }
-}
+// === base::hook::iat: the real implementation is compiled in (base/hook/iat.cpp) ===
 
 // === warcraft3::jass::from_real / to_real ===
 namespace warcraft3::jass {

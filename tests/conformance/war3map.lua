@@ -118,7 +118,7 @@ print("-- A. jass.* 模块（引擎 package.preload 供给 + 6 个已知缺口�
 local REQUIRED_MODULES = {
     "jass.common", "jass.globals", "jass.japi", "jass.hook", "jass.runtime",
     "jass.debug", "jass.message", "jass.sleep", "jass.storm", "jass.slk",
-    "jass.debugger", "jass.d3d",
+    "jass.debugger", "jass.d3d", "jass.ydwe",
 }
 for _, name in ipairs(REQUIRED_MODULES) do
     check("module " .. name .. " 可 require", function()
@@ -272,14 +272,14 @@ do
             "EXSetAbilityString bridge=" .. tostring(s and s.bridge and s.bridge.spec))
     end)
 
-    check("N5 bridge-only EX: EXSetUnitState", function()
-        local e = japi.info("EXSetUnitState")
-        assert(e and e.bridge and e.bridge.spec == "(IIR)V", "bridge 缺失或 spec 不符")
-        assert(e.japi_native == nil and e.engine_native == nil, "EXSetUnitState 不应有 native 条目")
+    check("N5 bridge-only EX: EXSetUnitMoveType", function()
+        local e = japi.info("EXSetUnitMoveType")
+        assert(e and e.bridge and e.bridge.spec == "(II)V", "bridge 缺失或 spec 不符")
+        assert(e.japi_native == nil and e.engine_native == nil, "EXSetUnitMoveType 不应有 native 条目")
         assert(not e.routes.lua_call and e.routes.lua_japi and e.routes.jass_unitid,
-            "EXSetUnitState 路由不符")
-        assert(not pcall(function() return jass.call("EXSetUnitState", unit, 0, 1.0) end),
-            "jass.call(EXSetUnitState) 不应成功")
+            "EXSetUnitMoveType 路由不符")
+        assert(not pcall(function() return jass.call("EXSetUnitMoveType", unit, 0) end),
+            "jass.call(EXSetUnitMoveType) 不应成功")
     end)
 
     check("N6 japi-only: SetHeroLevels", function()
@@ -530,16 +530,16 @@ check("夹具单位已创建", function()
 end)
 
 if unit ~= nil then
-    check("D8 EXGetUnitState == GetUnitState(MAX_LIFE)", function()
-        local ex = japi.EXGetUnitState(unit, jass.ConvertUnitState(1))
-        local native = jass.GetUnitState(unit, jass.ConvertUnitState(1))
-        assert(math.abs(ex - native) < 0.01,
-            string.format("EX=%s native=%s", tostring(ex), tostring(native)))
+    check("D8 GetUnitState(ARMOR) 走扩展实现", function()
+        -- 原生名字被接管后，0x20（armor）必须返回攻防表里的护甲，而不是 0
+        local armor = jass.GetUnitState(unit, jass.ConvertUnitState(0x20))
+        assert(armor ~= nil, "GetUnitState 返回 nil")
+        assert(type(armor) == "number", "GetUnitState 返回类型不是 real")
     end)
-    check("D8 EXSetUnitState(LIFE) 往返", function()
+    check("D8 SetUnitState(LIFE) 往返", function()
         -- 取 100（低于 hfoo 的 420 上限）——游戏会把生命值夹到最大值，之前的 500 是被夹的
-        japi.EXSetUnitState(unit, jass.ConvertUnitState(0), 100.0)
-        local back = japi.EXGetUnitState(unit, jass.ConvertUnitState(0))
+        jass.SetUnitState(unit, jass.ConvertUnitState(0), 100.0)
+        local back = jass.GetUnitState(unit, jass.ConvertUnitState(0))
         assert(math.abs(back - 100.0) < 0.5, "读回 " .. tostring(back))
     end)
     check("EXSetUnitFacing 往返", function()
@@ -639,9 +639,9 @@ else
     skip("setter 返回值", "夹具技能对象不存在")
 end
 if unit ~= nil then
-    check("EXSetUnitState 返回 true", function()
-        local r = japi.EXSetUnitState(unit, jass.ConvertUnitState(0), 100.0)
-        assert(r == true, "返回 " .. tostring(r))
+    check("SetUnitState 不再走 EX 别名", function()
+        -- 原生名字已被接管；EXSetUnitState 应该已经从 surface 里消失
+        assert(japi.info("EXSetUnitState") == nil, "EXSetUnitState 仍在 bridge 表里")
     end)
     check("EXPauseUnit 返回 true", function()
         local on = japi.EXPauseUnit(unit, true)
@@ -649,7 +649,7 @@ if unit ~= nil then
         assert(on == true and off == true, "on=" .. tostring(on) .. " off=" .. tostring(off))
     end)
 else
-    skip("EXSetUnitState 返回值", "夹具单位不存在")
+    skip("SetUnitState 别名清理", "夹具单位不存在")
 end
 
 -- 诊断（P1）：把能力 UI 的字符串字段全读一遍，判定「布局错位」还是「ABI 转换错」
