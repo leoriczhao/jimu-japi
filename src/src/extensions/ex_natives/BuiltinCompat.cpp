@@ -227,6 +227,19 @@ namespace warcraft3::japi {
 		}
 		uintptr_t target = site + 5 + rel;
 
+		// Somebody already disabled it (another JAPI, a previous run's leftover):
+		// leave their patch alone instead of backing it up as "the original".
+		uint8_t first = 0;
+		__try {
+			first = *(const uint8_t*)target;
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			first = 0;
+		}
+		if (first == 0xC3) {
+			japi_log::sync_write("SaveGame: inner routine is already disabled; kept as is");
+			return;
+		}
+
 		static const char kNoSave[4] = { (char)0xC3, (char)0xCC, (char)0xCC, (char)0xCC };
 		if (guard.apply(target, kNoSave, sizeof(kNoSave))) {
 			char buf[128];

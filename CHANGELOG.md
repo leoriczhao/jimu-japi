@@ -39,6 +39,13 @@
 - **验证（离线，未启动 War3/未打包/未部署）**：`src\build.bat` 通过；`tests\ydwe-compat\run.ps1` 4 步全过 —— Python 迁移 25 项、`jass.ydwe` 17 项、C++ 图像模块 47 项、图标 CLI 11 项；迁移输出 + wrapper 经 `tools\pjass.exe`（1.27.1 `common.j`/`blizzard.j`）编译通过；独立 Python 逐像素复算 disabled/blend raw BGRA 精确相等；`war3mapMap.blp` 首像素 CMYK 修正为 `(53,99,142,255)`。`tests/conformance/manifest.lua` 已重新生成（bridge 80→82），实机 199 项基线未复跑。
 - **未改载荷处理**：**没有修改** `pack.ps1` / `deploy.ps1`（包括其 DLL/callback/D3D 载荷段）；`jass.ydwe` 在仓库检出中由 `open_lua_engine.cpp` 自动发现，冻结的 `-SdkBundle` 静态清单未更新。PasButton/算法来自 YDWE（GPL），分发前需确认许可证义务。
 
+### 变更：与其它 JAPI 共存的四处保护（2026-11-20，工作区未提交）
+
+- **落盘名改为 `japi<pid>.dll`**：原来和内置 JAPI / YDWE 的加载器都叫 `<pid>.dll`，同一进程里只能存在一个。`tools/callback` 先写 `"japi"` 再拼 PID；`sweep_stale_pid_dlls` 两种名字都认（旧的裸 `<pid>.dll` 也会清）。实测：下一次启动把上一局的 `japi49916.dll` 清掉，只剩当前进程那份。
+- **`inline_hook_reassert_all` 遇到外来补丁就 stand down**：只有当前字节等于我们保存的原始字节（= 引擎把代码还原了）才重打；被别的插件改过就跳过并计数，日志变成 `inline hooks reasserted (N tracked, M re-patched, K left to another plugin)`，不再和别的 inline hook 互相覆盖。
+- **`SaveGame` 补丁前检查是否已禁用**：目标首字节已是 `C3` 就保留原样（别人的补丁不备份成"原始字节"）。
+- 说明：内置 `jass.dll` 对外部模块只认 `QB_inject.dll` / `dxrender.dll`（都服务于它自己的 D3D 块），没有"检测另一套 JAPI 并存"的机制——这三处是我们新增的，不是照抄。
+- 验证：`hook_rollback_test` 全过；回归 **126/126**；日志确认 `sweep: removed 1 stale pid dll(s)` 与新落盘名生效。
 ### 变更：对齐内置 JAPI 的 native 面（2026-11-20，工作区未提交）
 
 - **删掉自造的 EX 别名**：`EXGetUnitState` / `EXSetUnitState` 不再是 bridge 名（`EXGetUnitMaxLife` 本来就只是注释示例）。conformance manifest 与用例同步移除。

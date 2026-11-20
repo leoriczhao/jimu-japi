@@ -48,7 +48,9 @@ namespace warcraft3::jass {
 	// Map boot re-entry: the engine may have rewritten native code (it rebuilds
 	// its own tables every map), so every tracked hook is checked and re-patched
 	// from its saved record when the JMP is gone. Returns how many were restored.
-	size_t inline_hook_reassert_all();
+	// `skipped_foreign` (optional) reports how many hooks were left alone
+	// because the site holds somebody else's patch.
+	size_t inline_hook_reassert_all(size_t* skipped_foreign = nullptr);
 
 	// Restore every tracked hook and forget them (shutdown / test teardown).
 	size_t inline_hook_reset_all();

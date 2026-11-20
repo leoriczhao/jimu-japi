@@ -23,7 +23,7 @@ war3map.j（干净，只调标准 JASS native）
        │         └→ japi.tga (yd_japi.dll) 的 Initialize()
        │              ├→ inline hook UnitId → 哈希表 RPC 分发
        │              ├→ table_hook ExecuteFunc（惰性初始化钩子）
-       │              └→ 清扫残留 <pid>.dll（看门狗）
+       │              └→ 清扫残留 japi<pid>.dll（看门狗；旧版裸 <pid>.dll 也清）
        ├→ UnitId(I2S(GetHandleId(japi_ht)))   ← 桥接表句柄交给 DLL
        └→ ExecuteFunc("japiDoNothing")        ← 首次调用触发：
             创建 Lua VM + 加载 war3map.lua + 安装 message_dispatch 输入过滤

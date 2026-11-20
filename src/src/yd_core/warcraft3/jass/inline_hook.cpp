@@ -185,7 +185,7 @@ namespace warcraft3::jass {
 		return ok;
 	}
 
-	size_t inline_hook_reassert_all()
+	size_t inline_hook_reassert_all(size_t* skipped_foreign)
 	{
 		std::vector<inline_hook_info> snapshot;
 		{
@@ -194,13 +194,22 @@ namespace warcraft3::jass {
 		}
 
 		size_t repatched = 0;
+		size_t foreign = 0;
 		for (auto& h : snapshot) {
 			if (jump_intact(h)) continue;
-			// The engine rewrote this code (it rebuilds native tables per map).
-			// Re-apply from the saved record; the trampoline is still valid
-			// because the original bytes are unchanged.
+
+			// Only re-apply when the site holds exactly the bytes we saved: that
+			// means the engine rebuilt this code and our hook is gone. Anything
+			// else means another plugin patched the same address — stand down
+			// rather than overwrite a foreign hook (two JAPI loaders in one
+			// process would otherwise keep undoing each other).
+			if (memcmp((const void*)h.target, h.original, h.stolen) != 0) {
+				++foreign;
+				continue;
+			}
 			if (write_jump(h)) ++repatched;
 		}
+		if (skipped_foreign) *skipped_foreign = foreign;
 		return repatched;
 	}
 

@@ -451,10 +451,11 @@ static uintptr_t find_linked_list_func_addr(const char* name)
 static void reassert_inline_hooks(const char* tag)
 {
     size_t tracked = warcraft3::jass::inline_hook_count();
-    size_t repatched = warcraft3::jass::inline_hook_reassert_all();
-    char buf[160];
-    snprintf(buf, sizeof(buf), "%s: inline hooks reasserted (%u tracked, %u re-patched)",
-             tag, (unsigned)tracked, (unsigned)repatched);
+    size_t foreign = 0;
+    size_t repatched = warcraft3::jass::inline_hook_reassert_all(&foreign);
+    char buf[192];
+    snprintf(buf, sizeof(buf), "%s: inline hooks reasserted (%u tracked, %u re-patched, %u left to another plugin)",
+             tag, (unsigned)tracked, (unsigned)repatched, (unsigned)foreign);
     SYNC_LOG(buf);
 }
 
@@ -485,8 +486,11 @@ static void sweep_stale_pid_dlls()
     int removed = 0;
     do {
         const char* name = fd.cFileName;
+        // Our own drops are japi<pid>.dll (a bare <pid>.dll would collide with
+        // another JAPI's loader); older drops used the bare form, clean both.
+        const char* digits = (_strnicmp(name, "japi", 4) == 0) ? name + 4 : name;
         char* end = nullptr;
-        long pid = strtol(name, &end, 10);
+        long pid = strtol(digits, &end, 10);
         if (!end || _stricmp(end, ".dll") != 0 || pid <= 0) continue;
         if ((DWORD)pid == GetCurrentProcessId()) continue;  // ourselves (still loaded)
         HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
