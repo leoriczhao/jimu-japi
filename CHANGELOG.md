@@ -39,6 +39,12 @@
 - **验证（离线，未启动 War3/未打包/未部署）**：`src\build.bat` 通过；`tests\ydwe-compat\run.ps1` 4 步全过 —— Python 迁移 25 项、`jass.ydwe` 17 项、C++ 图像模块 47 项、图标 CLI 11 项；迁移输出 + wrapper 经 `tools\pjass.exe`（1.27.1 `common.j`/`blizzard.j`）编译通过；独立 Python 逐像素复算 disabled/blend raw BGRA 精确相等；`war3mapMap.blp` 首像素 CMYK 修正为 `(53,99,142,255)`。`tests/conformance/manifest.lua` 已重新生成（bridge 80→82），实机 199 项基线未复跑。
 - **未改载荷处理**：**没有修改** `pack.ps1` / `deploy.ps1`（包括其 DLL/callback/D3D 载荷段）；`jass.ydwe` 在仓库检出中由 `open_lua_engine.cpp` 自动发现，冻结的 `-SdkBundle` 静态清单未更新。PasButton/算法来自 YDWE（GPL），分发前需确认许可证义务。
 
+### 新增：与其它 JAPI 的共存闸门（2026-11-20，工作区未提交）
+
+- 照内置 `GetModuleHandleA("QB_inject.dll")` 的写法（jass.dll `0x1003F201`）扩成通用判断：`Initialize()` 里检测 `yd_jass_api.dll` / `yd_lua_engine.dll` / `jass.dll` / `lua_engine.dll`，命中就进共存模式；`JAPI_COEXIST=1|0` 可强制开关（测试用）。
+- 共存模式下站下的侵入式动作：`GetUnitState/SetUnitState` 原生名接管、`GetUnitGoldCost`/`TeleportCaptain` 别名、`SaveGame` 补丁、`Storm#279` 消费者、`EndGame` 派发。纯粹新增的 native（`timer_*`、`ReplacePath` 登记、`GetBigMap*`…）照常注册。
+- **UnitId 不做一刀切**：只有当它的代码入口已经是 `E9`/`EB`（被别人 detour 过）才让位；YDWE 的 `yd_jass_api` 从不动 UnitId，所以在 YDWE 环境下我们的 Lua 桥接照常工作。
+- 验证：正常模式日志 `Coexist: no foreign JAPI; full hook set`、回归 `127/127`；`JAPI_COEXIST=1` 强开时四个闸门全部按预期关闭（日志逐条可见），且因为 UnitId 仍是原码，回归同样 `127/127`。
 ### 新增：地图事件总线 `jass.map_event`（2026-11-20，工作区未提交）
 
 - 对标内置 `jass.dll` 的 `get_map_event()`（`map<string, vector<uint>>` 事件总线）：新增 Lua 模块 `jass.map_event`，`on(name, fn)` / `emit(name)` / `count(name)` / `clear(name)`；回调受保护，抛错只记日志、不影响后续订阅者。

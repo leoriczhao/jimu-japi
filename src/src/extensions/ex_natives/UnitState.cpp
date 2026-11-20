@@ -16,6 +16,7 @@
 #include <warcraft3/hashtable.h>
 #include "StringPool.h"
 #include "debug_log.h"
+#include "../compat_mode.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -903,6 +904,11 @@ namespace warcraft3::japi {
 	// it as "the real address" would make the fake call itself.
 	void InstallUnitStateHooks()
 	{
+		if (coexistence_mode()) {
+			japi_log::sync_write("UnitState: coexistence mode, native names left alone");
+			return;
+		}
+
 		struct target_t { const char* name; uintptr_t* real; uintptr_t fake; };
 		target_t targets[] = {
 			{ "GetUnitState", &RealGetUnitState, (uintptr_t)FakeGetUnitState },

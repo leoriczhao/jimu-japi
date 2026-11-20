@@ -27,6 +27,7 @@
 #include <warcraft3/war3_searcher.h>
 
 #include "debug_log.h"
+#include "../compat_mode.h"
 
 namespace warcraft3::japi {
 
@@ -309,6 +310,10 @@ namespace warcraft3::japi {
 
 	void InitializeBuiltinCompat()
 	{
+		// Additive natives are always safe; the takeovers (aliases, SaveGame,
+		// Storm#279) are not, so they follow the same gate as the inline hooks.
+		const bool coexist = coexistence_mode();
+
 		jass::japi_add((uintptr_t)timer_start,   "timer_start",   "()I");
 		jass::japi_add((uintptr_t)timer_end,     "timer_end",     "(I)R");
 		jass::japi_add((uintptr_t)timer_destroy, "timer_destroy", "(I)V");
@@ -317,6 +322,10 @@ namespace warcraft3::japi {
 		// The two aliases replace existing natives (table hook, same as
 		// jass.dll 0x100339B6 / 0x100339C9). Skipped when the native table does
 		// not have them yet; the next map boot retries.
+		if (coexist) {
+			japi_log::sync_write("Compat: coexistence mode, aliases/SaveGame/ReplacePath consumer skipped");
+			return;
+		}
 		if (!RealGetUnitGoldCost) {
 			if (jass::table_hook("GetUnitGoldCost", &RealGetUnitGoldCost, (uintptr_t)FakeGetUnitGoldCost)) {
 				japi_log::sync_write("Compat: GetUnitGoldCost -> EXGetEventDamageData (trigger only)");

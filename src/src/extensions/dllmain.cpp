@@ -23,6 +23,7 @@
 #include "../lua_engine/lua_engine/libs_map_event.h"
 #include <base/hook/fp_call.h>
 #include "debug_log.h"
+#include "compat_mode.h"
 #include "ex_natives/FuncBind.h"
 #include <warcraft3/jass/func_value.h>
 
@@ -476,6 +477,60 @@ static void install_map_event_hook()
     SYNC_LOG(buf);
 }
 
+// ── Coexistence with another JAPI ────────────────────────────────────────
+// builtin-japi guards its D3D block with GetModuleHandleA("QB_inject.dll")
+// (jass.dll 0x1003F201). We use the same shape for a broader question: is a
+// foreign JAPI already in this process? If so our invasive hooks stand down
+// instead of fighting over the same table entries / code bytes.
+namespace warcraft3 { namespace japi {
+
+	static bool g_coexist = false;
+
+	bool coexistence_mode() { return g_coexist; }
+	void set_coexistence_mode(bool on) { g_coexist = on; }
+
+}}  // namespace warcraft3::japi
+
+static const char* detect_foreign_japi()
+{
+	// Builtin-japi drops jass.dll + lua_engine.dll; YDWE ships
+	// yd_jass_api.dll + yd_lua_engine.dll. Both are japi_* free by design:
+	// our own drop is japi<pid>.dll.
+	static const char* candidates[] = {
+		"yd_jass_api.dll", "yd_lua_engine.dll", "jass.dll", "lua_engine.dll",
+	};
+	for (const char* name : candidates) {
+		if (GetModuleHandleA(name)) return name;
+	}
+	return nullptr;
+}
+
+static void decide_coexistence_mode()
+{
+	char flag[8] = {0};
+	bool forced_off = false, forced_on = false;
+	if (GetEnvironmentVariableA("JAPI_COEXIST", flag, sizeof(flag)) > 0) {
+		forced_on = (flag[0] == '1');
+		forced_off = (flag[0] == '0');
+	}
+
+	const char* foreign = detect_foreign_japi();
+	bool on = forced_on || (!forced_off && foreign != nullptr);
+	warcraft3::japi::set_coexistence_mode(on);
+
+	char buf[192];
+	if (on && foreign) {
+		snprintf(buf, sizeof(buf),
+		         "Coexist: %s is loaded; invasive hooks disabled (UnitId/UnitState/SaveGame/EndGame/Storm279)",
+		         foreign);
+	} else if (on) {
+		snprintf(buf, sizeof(buf), "Coexist: forced by JAPI_COEXIST=1; invasive hooks disabled");
+	} else {
+		snprintf(buf, sizeof(buf), "Coexist: no foreign JAPI; full hook set");
+	}
+	SYNC_LOG(buf);
+}
+
 // Map boot (real reload or the in-process SimulateMapBoot regression) rebuilds
 // the engine's native tables and may rewrite code we patched. Every tracked
 // inline hook re-checks its bytes: intact ones are left alone (never patched
@@ -549,6 +604,8 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
     const bool reboot = g_initialized;
     g_initialized = true;
 
+    if (!reboot) decide_coexistence_mode();
+
     if (!reboot) {
         // Debug logging is initialized here, NOT in DllMain — AllocConsole/CreateThread/
         // CreateFile under the loader lock risk deadlocking the game during LoadLibrary.
@@ -611,13 +668,29 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
 
     // Map event bus (builtin's "endGame"): the native table is ready here, and
     // it is rebuilt per map, so the hook goes in on every boot.
-    install_map_event_hook();
+    if (!warcraft3::japi::coexistence_mode()) install_map_event_hook();
 
     // Step 4: Hook UnitId with an inline hook (builtin-japi's jass.dll mechanism).
     // Fall back to linked-list editing (callback's CreateJassNativeHook) if the
     // inline install fails. The inline hook patches game code, which survives a
     // map boot: patching it twice would make the trampoline call itself.
-    {
+    // Coexistence is not "skip everything": a foreign JAPI only blocks this
+    // hook when it has actually patched UnitId's code. YDWE's yd_jass_api never
+    // touches UnitId, so the bridge keeps working there; builtin-japi's
+    // jass.dll does (inline JMP at the entry), and then we stand down.
+    bool unitid_foreign = false;
+    if (warcraft3::japi::coexistence_mode()) {
+        auto* probe = warcraft3::get_native_function_hashtable()->find("UnitId");
+        uintptr_t addr = probe ? (uintptr_t)probe->func_address_ : 0;
+        if (addr) {
+            const uint8_t op = *(const uint8_t*)addr;
+            unitid_foreign = (op == 0xE9 || op == 0xEB);
+        }
+    }
+    if (unitid_foreign) {
+        SYNC_LOG("Step 4: UnitId already detoured by another JAPI, standing down");
+    }
+    else {
         static uintptr_t unitid_inline_hooked = 0;  // original UnitId address
         uintptr_t fake = warcraft3::lua_engine::bridge::get_fake_unitid();
         uintptr_t unitid = 0;
