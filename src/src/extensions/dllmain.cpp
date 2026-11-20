@@ -20,6 +20,8 @@
 #include "../lua_engine/lua_engine/lua_loader.h"
 #include "../lua_engine/lua_engine/bridge_dispatch.h"
 #include "../lua_engine/lua_engine/storm.h"
+#include "../lua_engine/lua_engine/libs_map_event.h"
+#include <base/hook/fp_call.h>
 #include "debug_log.h"
 #include "ex_natives/FuncBind.h"
 #include <warcraft3/jass/func_value.h>
@@ -443,6 +445,37 @@ static uintptr_t find_linked_list_func_addr(const char* name)
     return 0;
 }
 
+// Map event bus: EndGame gets the same treatment builtin-japi gives it
+// (jass.dll 0x10036A74) — dispatch the "endGame" subscribers, then call the
+// original native. Subscribers are Lua functions registered through
+// jass.map_event.
+static uintptr_t g_real_endgame = 0;
+
+static void __cdecl fake_endgame(uint32_t flag)
+{
+    warcraft3::lua_engine::mapevent::emit("endGame");
+    if (g_real_endgame) {
+        base::c_call<void>(g_real_endgame, flag);
+    }
+}
+
+static void install_map_event_hook()
+{
+    auto* node = warcraft3::get_native_function_hashtable()->find("EndGame");
+    if (!node || !node->func_address_) {
+        SYNC_LOG("MapEvent: EndGame missing from the native table");
+        return;
+    }
+    if (node->func_address_ == (uint32_t)fake_endgame) return;
+
+    g_real_endgame = node->func_address_;
+    node->func_address_ = (uint32_t)fake_endgame;
+
+    char buf[128];
+    snprintf(buf, sizeof(buf), "MapEvent: EndGame hooked (real=0x%08X)", (uint32_t)g_real_endgame);
+    SYNC_LOG(buf);
+}
+
 // Map boot (real reload or the in-process SimulateMapBoot regression) rebuilds
 // the engine's native tables and may rewrite code we patched. Every tracked
 // inline hook re-checks its bytes: intact ones are left alone (never patched
@@ -575,6 +608,10 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
         warcraft3::japi::func_bind_trigger_name_handler);
     warcraft3::jass::nf_register::flush_add_only();
     SYNC_LOG("Step 3: flush_add_only DONE");
+
+    // Map event bus (builtin's "endGame"): the native table is ready here, and
+    // it is rebuilt per map, so the hook goes in on every boot.
+    install_map_event_hook();
 
     // Step 4: Hook UnitId with an inline hook (builtin-japi's jass.dll mechanism).
     // Fall back to linked-list editing (callback's CreateJassNativeHook) if the

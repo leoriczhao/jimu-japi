@@ -936,6 +936,17 @@ local function test_compat()
             "before=" .. tostring(before) .. " after=" .. tostring(after))
     end)
 
+    test("jass.map_event subscribe / emit / clear", function()
+        local ev = require "jass.map_event"
+        local hits = 0
+        ev.on("unit-test", function() hits = hits + 1 end)
+        assert(ev.count("unit-test") == 1, "count=" .. tostring(ev.count("unit-test")))
+        assert(ev.emit("unit-test") == 1, "emit did not call the subscriber")
+        assert(hits == 1, "hits=" .. tostring(hits))
+        assert(ev.clear("unit-test") == 1, "clear did not drop the subscriber")
+        assert(ev.count("unit-test") == 0)
+    end)
+
     test("ReplacePath remaps a resource loaded afterwards", function()
         -- Register the mapping, then force a first-time load of that exact path
         -- (creating a knight makes the game pull its model + skin). If the

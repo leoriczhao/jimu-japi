@@ -20,6 +20,7 @@
 #include "storm.h"
 #include "open_lua_engine.h"
 #include "libs_runtime.h"
+#include "libs_map_event.h"
 #include <lua.hpp>
 #include <warcraft3/jass.h>
 #include <warcraft3/jass/func_value.h>
@@ -275,6 +276,7 @@ namespace warcraft3::lua_engine::lua_loader {
 		// stop the JASS timer that would re-enter the dead VM, then close.
 		bridge::reset_lua_state(jass_engine_alive);
 		message::reset_vm_state(jass_engine_alive);
+		mapevent::reset();
 		d3d::prepare_vm_reset(jass_engine_alive);
 		close_vm(jass_engine_alive ? "simulated map boot" : "map boot");
 		d3d::reset_vm_state();

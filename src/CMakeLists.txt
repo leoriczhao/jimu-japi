@@ -98,6 +98,7 @@ set(LUA_ENGINE_SOURCES
     src/lua_engine/lua_engine/libs_console.cpp
     src/lua_engine/lua_engine/libs_log.cpp
     src/lua_engine/lua_engine/libs_bignum.cpp
+    src/lua_engine/lua_engine/libs_map_event.cpp
     src/lua_engine/lua_engine/libs_selector.cpp
     src/lua_engine/lua_engine/libs_ydwe.cpp
     src/lua_engine/lua_engine/fix_baselib.cpp

@@ -39,6 +39,13 @@
 - **验证（离线，未启动 War3/未打包/未部署）**：`src\build.bat` 通过；`tests\ydwe-compat\run.ps1` 4 步全过 —— Python 迁移 25 项、`jass.ydwe` 17 项、C++ 图像模块 47 项、图标 CLI 11 项；迁移输出 + wrapper 经 `tools\pjass.exe`（1.27.1 `common.j`/`blizzard.j`）编译通过；独立 Python 逐像素复算 disabled/blend raw BGRA 精确相等；`war3mapMap.blp` 首像素 CMYK 修正为 `(53,99,142,255)`。`tests/conformance/manifest.lua` 已重新生成（bridge 80→82），实机 199 项基线未复跑。
 - **未改载荷处理**：**没有修改** `pack.ps1` / `deploy.ps1`（包括其 DLL/callback/D3D 载荷段）；`jass.ydwe` 在仓库检出中由 `open_lua_engine.cpp` 自动发现，冻结的 `-SdkBundle` 静态清单未更新。PasButton/算法来自 YDWE（GPL），分发前需确认许可证义务。
 
+### 新增：地图事件总线 `jass.map_event`（2026-11-20，工作区未提交）
+
+- 对标内置 `jass.dll` 的 `get_map_event()`（`map<string, vector<uint>>` 事件总线）：新增 Lua 模块 `jass.map_event`，`on(name, fn)` / `emit(name)` / `count(name)` / `clear(name)`；回调受保护，抛错只记日志、不影响后续订阅者。
+- `EndGame` 原生名每局接管（表 hook）：先派发 `"endGame"` 订阅者，再调用原实现，日志 `MapEvent: EndGame hooked (real=0x…)`。
+- 地图重开时 `on_map_boot` 调 `mapevent::reset()` 释放 registry 引用，避免悬空。
+- 更正上一轮的判断：延迟 hook 队列**不是死代码**——`nf_register::initialize()`（由 `detail::async_initialize()` 触发）里已经执行 `nfunction_add()` + `nfunction_hook()`，`japi_hook`/`async_hook` 调用后会 flush；我们只是没人用。保留不动。
+- 验证：新增用例 `jass.map_event subscribe / emit / clear`，回归 126 → **127/127**；日志确认 `EndGame` 被接管。
 ### 变更：与其它 JAPI 共存的四处保护（2026-11-20，工作区未提交）
 
 - **落盘名改为 `japi<pid>.dll`**：原来和内置 JAPI / YDWE 的加载器都叫 `<pid>.dll`，同一进程里只能存在一个。`tools/callback` 先写 `"japi"` 再拼 PID；`sweep_stale_pid_dlls` 两种名字都认（旧的裸 `<pid>.dll` 也会清）。实测：下一次启动把上一局的 `japi49916.dll` 清掉，只剩当前进程那份。
