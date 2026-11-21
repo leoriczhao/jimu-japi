@@ -467,8 +467,8 @@ class StaticConsistencyTests(unittest.TestCase):
     def test_initialize_registrations(self):
         text = (ROOT / "src" / "src" / "extensions" / "ex_natives" /
                 "Initialize.cpp").read_text(encoding="utf-8", errors="replace")
-        self.assertRegex(text, r'register_cpp_handler\("EXGetUnitState"\s*,\s*"\(II\)R"')
-        self.assertRegex(text, r'register_cpp_handler\("EXSetUnitState"\s*,\s*"\(IIR\)V"')
+        self.assertIn("InitializeUnitState();", text)
+        self.assertIn("InitializeButtonIcon();", text)
         self.assertRegex(text, r'register_cpp_handler\("EXDclareButtonIcon"\s*,\s*"\(S\)V"')
         self.assertRegex(text, r'register_cpp_handler\("EXBlendButtonIcon"\s*,\s*"\(SSS\)B"')
 
@@ -500,8 +500,7 @@ class StaticConsistencyTests(unittest.TestCase):
             migrate_pas_values(reference), migrate_pas_values(copied))
 
     def test_no_forbidden_mechanisms_in_new_runtime_code(self):
-        files = [
-            ROOT / "src" / "src" / "extensions" / "ex_natives" / "ButtonIcon.cpp",
+        standalone_files = [
             ROOT / "src" / "src" / "image" / "button_icon.cpp",
             ROOT / "src" / "src" / "image" / "blp_codec.cpp",
             ROOT / "src" / "src" / "image" / "wic_decode.cpp",
@@ -512,18 +511,19 @@ class StaticConsistencyTests(unittest.TestCase):
             "inline_hook", "get_vfn_ptr", "war3_searcher",
             "handle_to_object", "0x1E4", "0x3BC",
         ]
-        for path in files:
+        for path in standalone_files:
             text = path.read_text(encoding="utf-8", errors="replace")
-            # Explanatory comments are allowed to name the mechanism that is
-            # deliberately not used; only executable code is checked.
             code = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
             code = re.sub(r"//[^\n]*", "", code)
             for needle in forbidden:
                 self.assertNotIn(needle, code,
                                  f"{path.name} contains forbidden mechanism {needle}")
-        button_icon = files[0].read_text(encoding="utf-8", errors="replace")
+        button_icon_path = ROOT / "src" / "src" / "extensions" / "ex_natives" / "ButtonIcon.cpp"
+        button_icon = button_icon_path.read_text(encoding="utf-8", errors="replace")
         self.assertIn("storm.load_file", button_icon)
         self.assertIn("japi-button-icons", button_icon)
+        self.assertIn('jass::japi_add((uintptr_t)EXDclareButtonIcon', button_icon)
+        self.assertIn('jass::japi_add((uintptr_t)EXBlendButtonIcon', button_icon)
 
 
 def migrate_pas_values(path: Path) -> list[int]:

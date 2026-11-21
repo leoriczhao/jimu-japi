@@ -36,6 +36,17 @@ namespace warcraft3::japi {
 	uint32_t __cdecl EXGetEventDamageData(uint32_t type);
 	bool     __cdecl EXSetEventDamage(uint32_t value_bits_ptr);
 
+	// Implemented in ButtonIcon.cpp; share the Storm.dll#279 (SFileLoadFile)
+	// IAT detour cleanly with ReplacePath.
+	void set_button_icon_storm_hook_active(bool active);
+	bool button_icon_try_load_virtual(const char* filepath,
+	                                  const void** buffer_ptr, uint32_t* size_ptr,
+	                                  uint32_t reserve_size, OVERLAPPED* overlapped_ptr);
+	bool button_icon_try_generate_disabled(const char* filepath,
+	                                       const void** buffer_ptr, uint32_t* size_ptr,
+	                                       uint32_t reserve_size, OVERLAPPED* overlapped_ptr);
+	void button_icon_note_loaded_path(const char* filepath);
+
 	// ── GetTriggeringTrigger gate ───────────────────────────────────────────
 	// builtin-japi only hijacks GetUnitGoldCost / TeleportCaptain inside a
 	// trigger (its own war3map.j uses them as damage accessors there). Outside a
@@ -117,17 +128,34 @@ namespace warcraft3::japi {
 
 	static const char* resolve_replace_path(const char* requested);
 
-	typedef int(__stdcall* storm_open_fn)(const char* name, void* out1, void* out2,
-	                                      uint32_t flags, void* out3);
+	typedef int(__stdcall* storm_open_fn)(const char* name, const void** buffer_ptr,
+	                                      uint32_t* size_ptr, uint32_t reserve_size,
+	                                      OVERLAPPED* overlapped_ptr);
 	static storm_open_fn g_real_storm_open = nullptr;
 	static uint32_t g_storm_hits = 0;
 	static uint32_t g_remap_logs = 0;
 
-	static int __stdcall storm_open_detour(const char* name, void* out1, void* out2,
-	                                       uint32_t flags, void* out3)
+	void clear_builtin_compat_map_state()
+	{
+		g_replace_path.clear();
+		g_remap_logs = 0;
+	}
+
+	static int __stdcall storm_open_detour(const char* name, const void** buffer_ptr,
+	                                       uint32_t* size_ptr, uint32_t reserve_size,
+	                                       OVERLAPPED* overlapped_ptr)
 	{
 		if (!g_real_storm_open) return 0;
-		const char* mapped = (name && !g_replace_path.empty())
+		static thread_local bool in_detour = false;
+		if (in_detour || !name) {
+			return g_real_storm_open(name, buffer_ptr, size_ptr, reserve_size, overlapped_ptr);
+		}
+		in_detour = true;
+		struct DetourGuard {
+			~DetourGuard() { in_detour = false; }
+		} guard;
+
+		const char* mapped = (!g_replace_path.empty())
 		                         ? resolve_replace_path(name)
 		                         : name;
 		if (mapped != name && g_remap_logs < 20) {
@@ -137,20 +165,44 @@ namespace warcraft3::japi {
 			japi_log::sync_write(buf);
 		}
 		++g_storm_hits;
-		return g_real_storm_open(mapped, out1, out2, flags, out3);
+
+		if (buffer_ptr && button_icon_try_load_virtual(
+				mapped, buffer_ptr, size_ptr, reserve_size, overlapped_ptr)) {
+			button_icon_note_loaded_path(mapped);
+			return 1;
+		}
+
+		int suc = g_real_storm_open(mapped, buffer_ptr, size_ptr, reserve_size, overlapped_ptr);
+		if (suc) {
+			button_icon_note_loaded_path(mapped);
+			return suc;
+		}
+
+		if (buffer_ptr && button_icon_try_generate_disabled(
+				mapped, buffer_ptr, size_ptr, reserve_size, overlapped_ptr)) {
+			button_icon_note_loaded_path(mapped);
+			return 1;
+		}
+
+		button_icon_note_loaded_path(mapped);
+		return suc;
 	}
 
 	// Same install as builtin-japi: base::hook::iat(Game.dll, "Storm.dll",
-	// ordinal 279, wrapper). The earlier attempts to reproduce this crashed
-	// because our pe_reader stub returned an RVA where the real one returns an
-	// absolute address, so base::hook::iat walked a bogus pointer; the stub is
-	// fixed and the detour now runs (verified under cdb at Storm!Ordinal279 and
-	// by a full regression pass).
+	// ordinal 279, wrapper). Idempotent across map reboots so a second boot
+	// never overwrites g_real_storm_open with &storm_open_detour.
 	static void install_storm_detour()
 	{
+		if (g_real_storm_open) {
+			set_button_icon_storm_hook_active(true);
+			return;
+		}
 		uintptr_t real = base::hook::iat(::GetModuleHandleA("game.dll"), "Storm.dll",
 		                                 (const char*)279, (uintptr_t)&storm_open_detour);
-		g_real_storm_open = (storm_open_fn)real;
+		if (real && real != (uintptr_t)&storm_open_detour) {
+			g_real_storm_open = (storm_open_fn)real;
+			set_button_icon_storm_hook_active(true);
+		}
 
 		char buf[160];
 		snprintf(buf, sizeof(buf), "storm279: installed, real=0x%08X", (uint32_t)real);

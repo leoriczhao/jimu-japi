@@ -968,6 +968,47 @@ local function test_compat()
         assert(type(elapsed) == "number" and elapsed >= 0 and elapsed < 60,
             "elapsed=" .. tostring(elapsed))
     end)
+
+    test("EXDclareButtonIcon / EXBlendButtonIcon registered as real natives", function()
+        local japi = require "jass.japi"
+        local dec = japi.info("EXDclareButtonIcon")
+        local bld = japi.info("EXBlendButtonIcon")
+        assert(dec and dec.japi_native and dec.japi_native.spec == "(S)V",
+            "EXDclareButtonIcon native missing")
+        assert(dec.bridge and dec.bridge.spec == "(S)V",
+            "EXDclareButtonIcon bridge missing")
+        assert(bld and bld.japi_native and bld.japi_native.spec == "(SSS)B",
+            "EXBlendButtonIcon native missing")
+        assert(bld.bridge and bld.bridge.spec == "(SSS)B",
+            "EXBlendButtonIcon bridge missing")
+    end)
+
+    test("EXBlendButtonIcon serves virtual BLP via Storm#279", function()
+        local btn_a = [[ReplaceableTextures\CommandButtons\BTNBlizzard.blp]]
+        local btn_b = [[ReplaceableTextures\CommandButtons\BTNRifleman.blp]]
+        local out_path = [[ReplaceableTextures\CommandButtons\BTNJapiVirtualBlend.blp]]
+        -- Call via jass.call to verify the real japi_add native path as well.
+        local ok = jass.call("EXBlendButtonIcon", btn_a, btn_b, out_path)
+        assert(ok == true, "EXBlendButtonIcon returned " .. tostring(ok))
+        local img = jass.CreateImage(out_path, 64, 64, 0, fx.x, fx.y, 0, 0, 0, 0, 2)
+        assert(img ~= nil, "CreateImage on virtual blended BLP returned nil")
+        jass.DestroyImage(img)
+    end)
+
+    test("EXDclareButtonIcon lazy on-demand DIS generation via Storm#279", function()
+        local japi = require "jass.japi"
+        local btn_a = [[ReplaceableTextures\CommandButtons\BTNBlizzard.blp]]
+        local btn_b = [[ReplaceableTextures\CommandButtons\BTNRifleman.blp]]
+        local lazy_src = [[ReplaceableTextures\CommandButtons\BTNJapiLazySource.blp]]
+        local lazy_dis = [[ReplaceableTextures\CommandButtonsDisabled\DISBTNJapiLazySource.blp]]
+        -- Declare before the source exists so Storm#279 must generate DIS on demand.
+        jass.call("EXDclareButtonIcon", lazy_src)
+        local ok = japi.EXBlendButtonIcon(btn_a, btn_b, lazy_src)
+        assert(ok == true, "EXBlendButtonIcon(lazy_src) returned " .. tostring(ok))
+        local img = jass.CreateImage(lazy_dis, 64, 64, 0, fx.x + 64, fx.y, 0, 0, 0, 0, 2)
+        assert(img ~= nil, "CreateImage on lazy DIS BLP returned nil")
+        jass.DestroyImage(img)
+    end)
 end
 
 local function run(done)

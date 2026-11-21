@@ -43,6 +43,8 @@ namespace warcraft3::japi {
     uint32_t SaveFunc_handler(const uint32_t* args, size_t nargs);
     uint32_t func_bind_trigger_name_handler(const uint32_t* args, size_t nargs);
     void clear_func_bind();
+    void clear_button_icons();
+    void clear_builtin_compat_map_state();
 }
 namespace warcraft3::lua_engine::bridge {
     typedef uint32_t (*cpp_handler_fn)(const uint32_t* args, size_t nargs);
@@ -625,6 +627,8 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
         warcraft3::lua_engine::lua_loader::on_map_boot(false);
         // Code addresses belong to the script that produced them.
         warcraft3::japi::clear_func_bind();
+        warcraft3::japi::clear_button_icons();
+        warcraft3::japi::clear_builtin_compat_map_state();
 
         reassert_inline_hooks("Step 0");
     }
@@ -747,6 +751,8 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
             SYNC_LOG("SimulateMapBoot: resetting the Lua VM");
             warcraft3::lua_engine::lua_loader::on_map_boot(true);
             warcraft3::japi::clear_func_bind();
+            warcraft3::japi::clear_button_icons();
+            warcraft3::japi::clear_builtin_compat_map_state();
             reassert_inline_hooks("SimulateMapBoot");
             warcraft3::lua_engine::lua_loader::load_script_file("script\\reboot_child.lua");
             SYNC_LOG("SimulateMapBoot: done");

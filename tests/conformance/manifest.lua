@@ -88,6 +88,8 @@ M.bridge = {
 }
 
 M.declared = {
+    { name = 'EXBlendButtonIcon', spec = '(SSS)B' },
+    { name = 'EXDclareButtonIcon', spec = '(S)V' },
     { name = 'EXDisplayChat', spec = '(Hplayer;IS)V' },
     { name = 'EXEffectMatReset', spec = '(Heffect;)V' },
     { name = 'EXEffectMatRotateX', spec = '(Heffect;R)V' },
@@ -122,11 +124,23 @@ M.declared = {
     { name = 'EXSetEffectZ', spec = '(Heffect;R)V' },
     { name = 'EXSetEventDamage', spec = '(R)B' },
     { name = 'EXSetItemDataString', spec = '(IIS)B' },
+    { name = 'GetBigMapX', spec = '()R' },
+    { name = 'GetBigMapY', spec = '()R' },
+    { name = 'GetConsoleUIX', spec = '()R' },
+    { name = 'GetConsoleUIY', spec = '()R' },
     { name = 'GetGameVersion', spec = '()I' },
     { name = 'GetMapName', spec = '()S' },
     { name = 'GetPluginVersion', spec = '()S' },
     { name = 'Hex', spec = '(I)S' },
+    { name = 'ReplacePath', spec = '(SS)V' },
+    { name = 'SetBigMapX', spec = '(R)V' },
+    { name = 'SetBigMapY', spec = '(R)V' },
+    { name = 'SetConsoleUIX', spec = '(R)V' },
+    { name = 'SetConsoleUIY', spec = '(R)V' },
     { name = 'SetHeroLevels', spec = '(C)V' },
+    { name = 'timer_destroy', spec = '(I)V' },
+    { name = 'timer_end', spec = '(I)R' },
+    { name = 'timer_start', spec = '()I' },
 }
 
 return M
