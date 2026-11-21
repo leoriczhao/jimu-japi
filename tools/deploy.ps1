@@ -226,6 +226,22 @@ $stalePrimary = Test-Path $LogFile
 if ($stalePrimary) {
     Write-Host "  NOTE: $LogFile is locked by a stale instance; per-pid log will be used by the DLL."
 }
+# The demo uses the engine's own overhead health bars - the client preference
+# players call "always show health bars" - and draws no bars of its own. War3
+# reads it once at startup, so set it for this launch and put the player's value
+# back when the session ends.
+$healthBarKey = "HKCU:\Software\Blizzard Entertainment\Warcraft III\Gameplay"
+$healthBarPrevious = $null
+$healthBarTouched = $false
+if ($Demo) {
+    if (Test-Path $healthBarKey) {
+        $healthBarPrevious = (Get-ItemProperty -Path $healthBarKey -Name healthbars -ErrorAction SilentlyContinue).healthbars
+    }
+    New-Item -Path $healthBarKey -Force | Out-Null
+    Set-ItemProperty -Path $healthBarKey -Name healthbars -Value 1 -Type DWord
+    $healthBarTouched = $true
+    Write-Host "  Native health bars: on for this session (healthbars=1)"
+}
 $war3 = Start-Process -FilePath $War3Exe -WorkingDirectory $War3Dir -ArgumentList "-window", "-loadfile", "$TestMap" -PassThru
 $jobObject = $null
 if ($Job -and $NoKill) {
@@ -360,6 +376,16 @@ if (-not $NoKill) {
     }
 } else {
     Write-Host "  War3 left running (-NoKill); touch $killFile to close it"
+}
+
+if ($healthBarTouched) {
+    # Restore the player's own setting; the running game already read it.
+    if ($null -ne $healthBarPrevious) {
+        Set-ItemProperty -Path $healthBarKey -Name healthbars -Value ([int]$healthBarPrevious) -Type DWord
+    } else {
+        Remove-ItemProperty -Path $healthBarKey -Name healthbars -ErrorAction SilentlyContinue
+    }
+    Write-Host "  Native health bars: player setting restored"
 }
 
 # Read final log

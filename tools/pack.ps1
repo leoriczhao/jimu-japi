@@ -1153,12 +1153,6 @@ if ($InteractiveD3D) {
     New-Blp2Fixture -Path "$WorkDir\d3d-sdk-blp2-bad.blp" -Kind bad -Width 16 -Height 16
 }
 
-# One flat white sheet for the demo's D3D overlays: every bar is this texture
-# tinted through set_color(), so no extra art is needed per bar colour.
-if ($Demo -or $InteractiveD3D) {
-    New-Blp2Fixture -Path "$WorkDir\japi-bar-white.blp" -Kind solid -Width 8 -Height 8
-}
-
 # Update MPQ listfile so w3x2lni includes the new files
 $listfile = "$WorkDir\(listfile)"
 $needed = @("callback", "japi.tga")
@@ -1167,9 +1161,6 @@ if ($InteractiveD3D) {
     $needed += @("d3d-sdk-probe.png", "d3d-sdk-corrupt.png")
     $needed += @("d3d-sdk-blp2-raw.blp", "d3d-sdk-blp2-palette.blp",
         "d3d-sdk-blp2-dxt1.blp", "d3d-sdk-blp2-bad.blp")
-}
-if ($Demo -or $InteractiveD3D) {
-    $needed += @("japi-bar-white.blp")
 }
 $existing = if (Test-Path $listfile) { Get-Content $listfile -Raw } else { "" }
 foreach ($f in $needed) {

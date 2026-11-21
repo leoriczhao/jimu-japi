@@ -31,6 +31,35 @@
 
 ## [Unreleased]
 
+### 新增：命令卡按钮图标本局即时生效（2026-11-22，离线）
+
+- `EXDclareButtonIcon (S)V` / `EXBlendButtonIcon (SSS)B` 除 bridge handler 外注册为真实 JASS native
+  （`Initialize()` 追加 `InitializeButtonIcon()`）。生成物不再只落盘：禁用态与合成 BLP1 存进内存表，
+  `BuiltinCompat.cpp` 的 Storm#279（`SFileLoadFile`）IAT detour 命中即由内存供图（缓冲经 Storm#401
+  `SMemAlloc` 分配，引擎可用 `SFileUnloadFile` 释放），下方 2026-11-20 条目里「运行中的命令卡不会
+  在本局看到生成物」的限制就此解除。磁盘 staging（`<地图目录>\japi-button-icons\`）保留为共存模式
+  （detour 不活跃）或 `JAPI_BUTTON_ICON_STAGE=1` 显式要求的回退。
+- 地图 boot / `SimulateMapBoot` 重启时 `dllmain.cpp` 追加 `clear_button_icons()` 与
+  `clear_builtin_compat_map_state()`，虚拟图标与兼容层状态不跨局残留。
+- 验证（离线，2026-11-22）：`yd_japi.dll` Release 构建通过；`tests/conformance/manifest.lua` 重新
+  生成；`tests/ydwe-compat/test_unit_state_migrate.py` 改查 `InitializeUnitState()` / `InitializeButtonIcon()`
+  与 `japi_add` 登记；`map/tests/test_ex.lua` 新增 2 条断言（native/bridge 登记规格 + 虚拟 BLP 经
+  `CreateImage` 可用）。**实机命令卡换图与 199 项基线未复跑**，实机口径仍以 [docs/STATUS.md](docs/STATUS.md) 为准。
+
+### 变更：demo 头顶血条改用引擎原生条，相机不再锁定（2026-11-22，实机）
+
+- `map/game/wave.lua` 删除整套 D3D 自绘血条（`BAR_*` 常量、三张 quad/槽位、投影跟随、hover 高亮、
+  `bars()/hovered()/camera_state()` 等对外面）；`tools/pack.ps1` 不再给 demo 打 `japi-bar-white.blp`。
+  头顶条改由客户端自身绘制：`deploy.ps1 -Demo` 启动前把
+  `HKCU\Software\Blizzard Entertainment\Warcraft III\Gameplay\healthbars` 置 1，会话收尾还原玩家原值。
+- 去掉 `SetCameraTargetController`：建世界（含 restart）只 `SetCameraPosition` 对准英雄一次，之后视角归玩家。
+  新增 `wave.camera_locked()` 供自检钉住该约定。
+- 自检从 33 条缩到 **27** 条：删除血条投影/锚点/悬停/hover 8 条，新增「血条归引擎、相机可自由移动」与
+  「伤害确实落到单位生命」2 条；`HUD texts/textures` 断言改为只允许 1 张底板贴图。
+- 验证（2026-11-22 实机）：`deploy.ps1 -Demo` → `Results: 27 passed, 0 failed, 27 total (0 skipped)`，
+  截图确认所有单位与基地都显示引擎原生条（敌方红、己方绿），会话结束 `healthbars` 回到 0。
+  `docs/guide/MINIMAL-GAME-LOOP.md` §4/§5/§6/§7/§10 与 `docs/STATUS.md`、两份血条规划文档同步改口径。
+
 ### 新增：YDWE 地图接口兼容（2026-11-20，工作区未提交，离线）
 
 - **单位状态**：新增 `tools/ydwe-compat/migrate_unit_state.py`（字节级 JASS 源码迁移）与 `jass.ydwe` Lua 兼容层。复用现有 `EXGetUnitState (II)R` / `EXSetUnitState (IIR)V` bridge handler，覆盖 47 个 YDWE 扩展状态；vanilla `0..3`、UjAPI-only `4..7`、未知值、Set no-op `0x14/0x15/0x42/0x43` 不改；注释/字符串/rawcode/BOM/CRLF/GBK 字节保持原样。未 hook `GetUnitState`/`SetUnitState`，二进制地图与动态状态表达式不覆盖。

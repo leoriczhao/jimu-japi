@@ -10,10 +10,6 @@
 
 local M = {}
 
-local function approx(a, b)
-    return type(a) == "number" and type(b) == "number" and math.abs(a - b) < 0.001
-end
-
 function M.run(ui, fake_mod, label)
     local pass, fail = 0, 0
 

@@ -1,7 +1,7 @@
 # 头顶血条：社区路线调研与选型（War3 1.27a）
 
-> 状态：**方案评估，未开工**。日期 2026-11-16。
-> 相关：`map/game/wave.lua`（现行 D3D 条实现）、`docs/STATUS.md`。
+> 状态：**已选型并落地（2026-11-22）**：demo 改为引擎原生条（客户端 `healthbars`，会话内开启、结束还原），自绘 D3D overlay 已移除。日期 2026-11-16，结论更新于 2026-11-22。
+> 相关：`map/game/wave.lua`（已改为引擎原生条，无自绘 overlay）、`tools/deploy.ps1`（会话内开 `healthbars`）、`docs/STATUS.md`。
 
 ## 0. 问题边界
 

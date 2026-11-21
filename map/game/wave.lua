@@ -15,7 +15,6 @@ local jass = require "jass.common"
 local message = require "jass.message"
 local d3d = require "jass.d3d"
 local scene = require "lib.scene"
-local camera = require "lib.camera"
 
 local M = {}
 
@@ -148,42 +147,11 @@ end
 
 local hud = S.hud
 
--- Overhead bars are flat white quads tinted through the D3D vertex colour; the
--- map carries that sheet as asset://japi-bar-white.blp (pack.ps1 -Demo).
-local BAR_SOURCE = "asset://japi-bar-white.blp"
-local BAR_SLOTS = 8
--- Anchor height above the unit origin and bar size in client pixels. War3's own
--- bars are the reference: thin over a unit's head, wider over a building.
--- The heights are measured, not guessed: with the engine's own overhead bars
--- switched on, a ladder of coloured quads at known world heights is projected
--- into the same frame, and the projective fit is inverted at the pixel row of
--- the native bar. That lands our bar on top of War3's to within a pixel.
-local BAR_HEAD = { creep = 88.0, hero = 93.0, base = 409.0 }
-local BAR_SIZE = { creep = { 48, 6 }, hero = { 60, 7 }, base = { 150, 10 } }
--- War3's own top bar and unit panel own the first ~112 client pixels.
-local BAR_TOP_MARGIN = 112.0
--- The console (portrait, minimap, command card) starts at roughly 73% of the
--- client height and the centre panel a little lower, so a bar below that line is
--- dropped rather than painted onto the interface.
-local BAR_BOTTOM_FRAC = 0.755
--- 1.27a exposes no model bounds, so the anchor is a measured head height per
--- unit type, with the per-kind default as the fallback.
-local BAR_HEAD_BY_TYPE = {
-    [fourcc("hfoo")] = 88.0,  -- footman
-    [fourcc("hrif")] = 93.0,  -- rifleman (also the demo hero)
-    [fourcc("hkni")] = 161.0, -- knight, model carries a mounted rider
-}
-
--- Unit ids are case-insensitive: the engine reports "Hrif" for the demo hero
--- while the table is keyed by the lower-case fourcc, so fold the case both ways
--- before falling back to the per-kind default.
-local function head_for(type_id)
-    if type(type_id) ~= "number" then return nil end
-    local id = type_id & 0xFFFFFFFF
-    return BAR_HEAD_BY_TYPE[id]
-        or BAR_HEAD_BY_TYPE[id | 0x20202020]
-        or BAR_HEAD_BY_TYPE[id & 0xDFDFDFDF]
-end
+-- Overhead health bars belong to the engine: the client's own "always show
+-- health bars" preference draws a native bar over every unit, anchored on the
+-- model's overhead attachment and updated in the render frame. That is the
+-- community-standard look (and what players get with Alt held down); the demo
+-- does not paint its own bars on top. The D3D layer is only the text HUD.
 
 local function hud_create()
     if not d3d.is_available() then
@@ -229,26 +197,6 @@ local function hud_create()
         x = 26, y = top + 104, color = d3d.rgba(255, 255, 255, 190), z = 100,
     })
 
-    -- Overhead bars: three flat white quads per slot - outline, track, fill -
-    -- tinted through the vertex colour and moved onto the projected head point.
-    hud.bars = {}
-    for i = 1, BAR_SLOTS do
-        hud.bars[i] = {
-            back = assert(d3d.Texture.new {
-                source = BAR_SOURCE, x = -4, y = -4, width = 1, height = 1,
-                color = d3d.rgba(0, 0, 0, 205), z = 70, visible = false, hit_test = false,
-            }),
-            track = assert(d3d.Texture.new {
-                source = BAR_SOURCE, x = -4, y = -4, width = 1, height = 1,
-                color = d3d.rgba(44, 46, 52, 230), z = 71, visible = false, hit_test = false,
-            }),
-            fill = assert(d3d.Texture.new {
-                source = BAR_SOURCE, x = -4, y = -4, width = 1, height = 1,
-                color = d3d.rgba(88, 214, 96, 245), z = 72, visible = false, hit_test = false,
-            }),
-        }
-    end
-
     hud.banner = assert(d3d.Text.new {
         font = hud.big_font, text = "",
         x = 190, y = 300, color = d3d.rgba(255, 240, 150, 255), z = 110,
@@ -256,17 +204,10 @@ local function hud_create()
     hud.banner:set_visible(false)
 
     hud.layout = { top = top }
-    print(string.format("[game] client %dx%d, hud %d..%d, %d overhead bar slots",
-        width, height, top - 12, top + 128, BAR_SLOTS))
+    print(string.format("[game] client %dx%d, text hud %d..%d, engine-drawn health bars",
+        width, height, top - 12, top + 128))
     hud.ready = true
     return true
-end
-
--- War3's read: green while healthy, amber when worn down, red when nearly dead.
-local function bar_color(frac)
-    if frac >= 0.60 then return d3d.rgba(92, 216, 100, 245) end
-    if frac >= 0.30 then return d3d.rgba(238, 180, 56, 245) end
-    return d3d.rgba(228, 66, 54, 245)
 end
 
 local function hud_refresh()
@@ -508,195 +449,23 @@ function cursor_point()
     return jass.GetUnitX(S.hero), jass.GetUnitY(S.hero)
 end
 
--- ── Overhead health bars ─────────────────────────────────────────
+-- ── Cursor and HUD tick ──────────────────────────────────────────
 --
--- War3 only draws a bar for the unit the player has selected, so this overlay
--- gives every unit in play one. Each bar is three flat white quads - outline,
--- track, fill - moved onto the unit's projected head position every overlay
--- tick, which is also why nothing here draws a range indicator: the AoE circle
--- a player sees comes from the game's own targeting UI.
-
-local HOVER_RADIUS = 110.0
-
-local function unit_pos(unit)
-    local okx, x = pcall(jass.GetUnitX, unit)
-    if not okx or type(x) ~= "number" then return nil end
-    local oky, y = pcall(jass.GetUnitY, unit)
-    if not oky or type(y) ~= "number" then return nil end
-    return x, y
-end
-
-local function hide_slot(slot)
-    slot.back:set_visible(false)
-    slot.track:set_visible(false)
-    slot.fill:set_visible(false)
-end
-
-local function destroy_bars()
-    S.bars = {}
-    S.hover = nil
-    S.cursor_world = nil
-    if not hud.bars then return end
-    for i = 1, #hud.bars do hide_slot(hud.bars[i]) end
-end
-
-local function bar_place(slot, sx, sy, kind, frac, hover)
-    local size = BAR_SIZE[kind]
-    local w, h = size[1], size[2]
-    local x = math.floor(sx - w * 0.5 + 0.5)
-    local y = math.floor(sy - h * 0.5 + 0.5)
-    local filled = math.max(0, math.floor(w * frac + 0.5))
-    -- One pixel of outline keeps the bar readable over grass, snow and water,
-    -- and doubles as the hover highlight when the cursor is on the unit.
-    slot.back:set_rect(x - 1, y - 1, w + 2, h + 2)
-    slot.back:set_color(hover and d3d.rgba(255, 236, 168, 240) or d3d.rgba(0, 0, 0, 205))
-    slot.back:set_visible(true)
-    slot.track:set_rect(x, y, w, h)
-    slot.track:set_visible(true)
-    slot.fill:set_color(bar_color(frac))
-    if filled > 0 then
-        slot.fill:set_rect(x, y, filled, h)
-        slot.fill:set_visible(true)
-    else
-        slot.fill:set_visible(false)
-    end
-    return x, y, w, h, filled
-end
-
--- Rebuild the bar assignment from scratch every tick: the set of live units
--- changes with each wave, and a stale slot would otherwise float on screen.
-local function bars_update()
-    if not hud.ready or not hud.bars then return end
-    local drawn, skips = {}, {}
-    S.bars = drawn
-    S.bar_skips = skips
-    if not camera.sync() then
-        for i = 1, #hud.bars do hide_slot(hud.bars[i]) end
-        return
-    end
-    local height = camera.state_table.height
-    local used = 0
-    local function emit(unit, kind, frac, hover)
-        if used >= #hud.bars then return end
-        local ux, uy = unit_pos(unit)
-        if not ux then return end
-        local ok_type, type_id = pcall(jass.GetUnitTypeId, unit)
-        local head = head_for(ok_type and type_id or nil) or BAR_HEAD[kind]
-        local z = camera.ground_z(ux, uy) + head
-        local sx, sy, on_screen = camera.project(ux, uy, z)
-        -- Bars that would land on War3's own top bar or on the console are
-        -- dropped rather than painted over the interface. The reason is recorded
-        -- so self-checks can tell "dropped on purpose" from "never generated".
-        if not on_screen or sy < BAR_TOP_MARGIN or sy > height * BAR_BOTTOM_FRAC then
-            local reason = "offscreen"
-            if on_screen then
-                reason = sy < BAR_TOP_MARGIN and "top" or "console"
-            end
-            skips[kind] = { reason = reason, sy = sy }
-            return
-        end
-        used = used + 1
-        local slot = hud.bars[used]
-        local x, y, w, h, filled = bar_place(slot, sx, sy, kind, frac, hover)
-        drawn[#drawn + 1] = {
-            unit = unit, kind = kind, frac = frac, hover = hover,
-            x = x, y = y, w = w, h = h, filled = filled,
-            color = slot.fill:get_color(),
-            world_x = ux, world_y = uy, screen_x = sx, screen_y = sy,
-        }
-    end
-    if S.base and unit_alive(S.base) then
-        emit(S.base, "base", pct(state_value(S.base, LIFE), state_value(S.base, MAX_LIFE)), false)
-    end
-    if S.hero and unit_alive(S.hero) then
-        emit(S.hero, "hero", pct(state_value(S.hero, LIFE), state_value(S.hero, MAX_LIFE)), false)
-    end
-    for _, entry in ipairs(S.creeps) do
-        if not entry.dead and unit_alive(entry.unit) then
-            emit(entry.unit, "creep",
-                pct(state_value(entry.unit, LIFE),
-                    entry.max_life or state_value(entry.unit, MAX_LIFE)),
-                S.hover == entry)
-        end
-    end
-    for i = used + 1, #hud.bars do hide_slot(hud.bars[i]) end
-end
-
-local function hover_update()
-    local hero = S.hero
-    if not hero or not unit_alive(hero) then
-        S.hover = nil
-        S.cursor_world = nil
-        return
-    end
-    local x, y = cursor_point()
-    S.cursor_world = { x, y }
-    local best, found = HOVER_RADIUS * HOVER_RADIUS, nil
-    for _, entry in ipairs(S.creeps) do
-        if not entry.dead and unit_alive(entry.unit) then
-            local cx, cy = unit_pos(entry.unit)
-            if cx then
-                local dist = (cx - x) * (cx - x) + (cy - y) * (cy - y)
-                if dist <= best then best, found = dist, entry end
-            end
-        end
-    end
-    S.hover = found
-end
+-- The demo draws no overhead bar of its own: the client's "always show health
+-- bars" preference paints the engine's native bars over every unit, anchored on
+-- the model's overhead point. The D3D layer only owns the text plate, so this
+-- tick just refreshes it and keeps the cursor for the aim readout.
 
 function M.hud_tick()
-    hover_update()
-    bars_update()
+    local x, y = cursor_point()
+    S.cursor_world = { x, y }
     hud_refresh()
-    return S.cursor_world and S.cursor_world[1] or nil, S.cursor_world and S.cursor_world[2] or nil
+    return x, y
 end
 
 function M.aim_point()
     if not S.cursor_world then return nil end
     return S.cursor_world[1], S.cursor_world[2]
-end
-
-function M.hovered()
-    return S.hover
-end
-
--- Snapshot of the bars currently on screen. The demo asserts on this instead of
--- reading D3D nodes, so the checks cover exactly the list players see.
-function M.bars()
-    return S.bars or {}
-end
-
-function M.bar_source()
-    return BAR_SOURCE
-end
-
-function M.bar_head(kind)
-    return BAR_HEAD[kind or "creep"]
-end
-
--- Why a bar was left off the frame: nil when it was drawn, else
--- { reason = "offscreen" | "top" | "console", sy = <projected pixel> }.
-function M.bar_skip(kind)
-    local skips = S.bar_skips
-    if not skips then return nil end
-    return skips[kind or "creep"]
-end
-
--- 1.27a exposes no model bounds, so head heights come from a measured table.
--- Map authors can override them per unit type or per bar kind.
-function M.set_bar_head(key, value)
-    assert(type(value) == "number", "bar head needs a number")
-    if type(key) == "string" and (key == "creep" or key == "hero" or key == "base") then
-        BAR_HEAD[key] = value
-    else
-        local id = type(key) == "string" and fourcc(key) or key
-        BAR_HEAD_BY_TYPE[id] = value
-    end
-    return value
-end
-
-function M.camera_state()
-    return camera.snapshot()
 end
 
 function M.float_count()
@@ -705,6 +474,12 @@ end
 
 function M.base_hits()
     return S.base_hits or 0
+end
+
+-- The run never takes the camera away from the player; the self-check pins that
+-- contract so a future edit cannot quietly reintroduce SetCameraTargetController.
+function M.camera_locked()
+    return S.camera_locked == true
 end
 
 -- Movement goes through jass.common's point order on the hero itself.
@@ -815,9 +590,7 @@ local function reset_counters()
     S.cast_count = 0
     S.float_count = 0
     S.base_hits = 0
-    S.hover = nil
     S.cursor_world = nil
-    destroy_bars()
 end
 
 local function build_world(verbose)
@@ -859,10 +632,10 @@ local function build_world(verbose)
     S.base_hp = state_value(base, LIFE)
 
     pcall(jass.SelectUnit, hero, true)
-    pcall(jass.SetCameraPosition, bx, by)
-    -- Keep the camera locked on the hero: a wave runs far from the base, and an
-    -- unlocked camera loses the player as soon as the hero leaves the screen.
-    pcall(jass.SetCameraTargetController, hero, 0.0, 0.0, false)
+    -- Centre the camera on the hero once, then leave it alone: the player keeps
+    -- full control of the view (edge scroll, drag, minimap) for the whole run.
+    pcall(jass.SetCameraPosition, hx, hy)
+    S.camera_locked = false
     if verbose then
         print(string.format("[game] hero at %.0f,%.0f  base %s at %.0f,%.0f (%.0f/%.0f hp)",
             hx, hy, base_id, bx, by, S.base_hp, S.base_max))
@@ -947,8 +720,6 @@ function M.tick(dt)
         end
     end
 
-    hover_update()
-    bars_update()
     hud_refresh()
 end
 
@@ -969,32 +740,14 @@ end
 
 function M.start_clock()
     if S.clock then return S.clock end
+    -- One 0.25s clock drives the whole run; the engine draws its own health
+    -- bars, so there is no separate overlay pass to keep in step.
     local clock = game_loop()
-    -- Overhead bars have to track the camera at 10 Hz; the game tick only runs
-    -- at 4 Hz, which reads as bars that lag behind their units.
-    local overlay = jass.CreateTimer()
-    jass.TimerStart(overlay, 0.10, true, function()
-        local ok, err = pcall(hover_update)
-        if ok then
-            ok, err = pcall(bars_update)
-        end
-        if ok then
-            ok, err = pcall(hud_refresh)
-        end
-        if not ok then print("[game] overlay tick failed: " .. tostring(err)) end
-    end)
-    S.overlay_clock = overlay
-    hover_update()
-    bars_update()
+    hud_refresh()
     return clock
 end
 
 function M.stop_clock()
-    if S.overlay_clock then
-        pcall(jass.DestroyTimer, S.overlay_clock)
-        S.overlay_clock = nil
-    end
-    destroy_bars()
     if not S.clock then return end
     pcall(jass.DestroyTimer, S.clock)
     S.clock = nil
