@@ -13,8 +13,12 @@
 #include <base/hook/replace_pointer.h>
 #include <base/hook/fp_call.h>
 #include <deque>
+#include "debug_log.h"
 
 namespace warcraft3::japi {
+
+static uintptr_t g_external_get_event_damage_data = 0;
+static uintptr_t g_external_set_event_damage = 0;
 
 uintptr_t searchUnitDamageFunc()
 {
@@ -161,6 +165,10 @@ enum EVENT_DAMAGE_DATA_TYPE
 
 uint32_t __cdecl EXGetEventDamageData(uint32_t type)
 {
+	if (g_external_get_event_damage_data)
+	{
+		return base::c_call<uint32_t>(g_external_get_event_damage_data, type);
+	}
 	if (g_edd.empty())
 	{
 		return 0;
@@ -193,6 +201,10 @@ uint32_t __cdecl EXGetEventDamageData(uint32_t type)
 
 bool __cdecl EXSetEventDamage(uint32_t value)
 {
+	if (g_external_set_event_damage)
+	{
+		return base::c_call<bool>(g_external_set_event_damage, value);
+	}
 	if (g_edd.empty())
 	{
 		return false;
@@ -208,25 +220,71 @@ bool __cdecl EXSetEventDamage(uint32_t value)
 
 void InitializeEventDamageData()
 {
-	jass::japi_add((uintptr_t)EXGetEventDamageData, "EXGetEventDamageData", "(I)I");
-	jass::japi_add((uintptr_t)EXSetEventDamage,     "EXSetEventDamage",     "(R)B");
+	uintptr_t get_fn = g_external_get_event_damage_data
+		? g_external_get_event_damage_data
+		: (uintptr_t)EXGetEventDamageData;
+	uintptr_t set_fn = g_external_set_event_damage
+		? g_external_set_event_damage
+		: (uintptr_t)EXSetEventDamage;
+	jass::japi_add(get_fn, "EXGetEventDamageData", "(I)I");
+	jass::japi_add(set_fn, "EXSetEventDamage",     "(R)B");
 }
 
 // Callback mode loads after the JASS VM has already been created, so the
-// original YDWE event_add/japi_hook registration path never runs. Install the
-// two runtime hooks directly:
+// original YDWE event_add/japi_hook registration path never runs.
+//
+// Builtin-japi coexistence rule (jass.dll 0x10033617..0x10033761):
+//   If a host plugin (KKWE / YDWE / platform) has ALREADY registered
+//   EXGetEventDamageData and EXSetEventDamage in the game's native table,
+//   it already owns the UnitDamageFunc vtable hook and damage stack. Reuse
+//   its function pointers instead of searching .rdata (which now holds the
+//   host detour) or double-hooking GetEventDamage.
+//   Only on a vanilla 1.27a process do we install our own hooks:
 //   1. replace the unit-damage vtable slot discovered by searchUnitDamageFunc;
 //   2. inline-hook GetEventDamage so a value changed by EXSetEventDamage is
 //      visible immediately inside EVENT_UNIT_DAMAGED.
-// If the native prologue cannot be relocated, fall back to replacing its
-// already-built native-table entry (the same late-load technique used by the
-// ExecuteFunc lazy hook).
 bool install_event_damage_hooks()
 {
 	static bool attempted = false;
 	static bool installed = false;
 	if (attempted) return installed;
 	attempted = true;
+
+	// Coexistence check: reuse host plugin's damage natives when present.
+	if (auto* ht = get_native_function_hashtable()) {
+		auto* ext_get = ht->find("EXGetEventDamageData");
+		auto* ext_set = ht->find("EXSetEventDamage");
+		if (ext_get && ext_get->func_address_ && ext_set && ext_set->func_address_ &&
+			ext_get->func_address_ != (uint32_t)(uintptr_t)EXGetEventDamageData &&
+			ext_set->func_address_ != (uint32_t)(uintptr_t)EXSetEventDamage)
+		{
+			g_external_get_event_damage_data = (uintptr_t)ext_get->func_address_;
+			g_external_set_event_damage = (uintptr_t)ext_set->func_address_;
+			DBG_LOG("[EventDamageData] reusing host EXGetEventDamageData=0x%08X EXSetEventDamage=0x%08X",
+				(uint32_t)g_external_get_event_damage_data,
+				(uint32_t)g_external_set_event_damage);
+			// Mirror builtin-japi (0x10033682): sync jass.common's cached
+			// GetEventDamage address to the live native table entry so Lua sees
+			// the host plugin's hooked GetEventDamage after EXSetEventDamage.
+			if (auto* ext_dmg = ht->find("GetEventDamage")) {
+				if (ext_dmg->func_address_) {
+					const jass::func_value* mapped = jass::jass_func("GetEventDamage");
+					if (mapped && mapped->is_valid() &&
+						mapped->get_address() != (uintptr_t)ext_dmg->func_address_)
+					{
+						auto it = jass::jass_function.find("GetEventDamage");
+						if (it != jass::jass_function.end()) {
+							it->second = jass::func_value(it->second, (uintptr_t)ext_dmg->func_address_);
+							DBG_LOG("[EventDamageData] synced GetEventDamage -> host 0x%08X",
+								(uint32_t)ext_dmg->func_address_);
+						}
+					}
+				}
+			}
+			installed = true;
+			return true;
+		}
+	}
 
 	uintptr_t damage_slot = getUnitDamageFunc();
 	if (!damage_slot || IsBadReadPtr((void*)damage_slot, sizeof(uintptr_t))) {
