@@ -6,6 +6,7 @@ mod lua_bundler;
 mod pack;
 mod scaffold;
 mod war3;
+mod we_compat;
 mod wrappers;
 
 use anyhow::Result;

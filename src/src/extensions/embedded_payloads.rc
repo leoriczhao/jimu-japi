@@ -1,0 +1,12 @@
+// Embedded D3D9 proxy + D3DX9_42 redistributable payloads inside yd_japi.dll
+// Mirrors builtin-japi (wenhao_plugin.tga) single-TGA PE .rsrc architecture so
+// maps only carry callback + japi.tga (+ script\war3map.lua).
+
+#include "embedded_paths.h"
+
+JAPI_D3D9_DLL    RCDATA JAPI_EMBED_D3D9_DLL_PATH
+JAPI_D3D9_SHA256 RCDATA JAPI_EMBED_D3D9_SHA256_PATH
+
+#ifdef JAPI_EMBED_D3DX_DLL_PATH
+JAPI_D3DX9_42_DLL RCDATA JAPI_EMBED_D3DX_DLL_PATH
+#endif

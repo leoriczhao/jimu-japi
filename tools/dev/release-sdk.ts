@@ -126,9 +126,16 @@ export function runReleaseSdk(opts: ReleaseOptions = {}): void {
       console.log('\n== 3. Build C++ DLLs (Win32 Release) + Rust japi.exe (Release)');
       const vcvars = findVcvars32();
       const cmakeBuildDir = path.join(buildRoot, `cmake-${sha7}`);
+      const d3dxCandidates = [
+        path.join(ROOT, 'reference', 'builtin-japi', 'extracted', 'D3DX9_42.dll'),
+        path.join(process.env.WINDIR ?? String.raw`C:\Windows`, 'SysWOW64', 'D3DX9_42.dll'),
+        path.join(process.env.WINDIR ?? String.raw`C:\Windows`, 'System32', 'D3DX9_42.dll'),
+      ];
+      const d3dxPath = d3dxCandidates.find((p) => fs.existsSync(p));
+      const d3dxArg = d3dxPath ? ` -DJAPI_D3DX9_42_DLL="${d3dxPath}"` : '';
       runChecked('cmd.exe', [
         '/c',
-        `"${vcvars}" >nul && cmake -S "${path.join(workPath, 'src')}" -B "${cmakeBuildDir}" -G "Visual Studio 17 2022" -A Win32 && cmake --build "${cmakeBuildDir}" --config Release`,
+        `"${vcvars}" >nul && cmake -S "${path.join(workPath, 'src')}" -B "${cmakeBuildDir}" -G "Visual Studio 17 2022" -A Win32${d3dxArg} && cmake --build "${cmakeBuildDir}" --config Release`,
       ]);
       binSourceDir = path.join(cmakeBuildDir, 'bin', 'Release');
 

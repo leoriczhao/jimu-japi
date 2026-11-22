@@ -53,6 +53,7 @@ namespace warcraft3::lua_engine::bridge {
 }
 
 static bool g_initialized = false;
+static HMODULE g_self_module = nullptr;
 
 // ── Crash diagnostics ────────────────────────────────────────────────────
 // DBG_LOG goes through an async ring buffer that dies with the process, so a
@@ -268,8 +269,31 @@ static std::string game_directory()
     return std::string(path);
 }
 
-// Read one map-embedded file out of the MPQ (search_scope 1 covers the map,
-// which is where pack.ps1 -WithD3dProxy puts d3d9.tga / d3dx9_42.tga).
+// Read an RCDATA payload embedded inside yd_japi.dll's PE .rsrc section
+// (exact same FindResourceA/LoadResource/LockResource pattern as wenhao_plugin.tga).
+static bool read_embedded_resource(const char* name, std::string& out)
+{
+    HMODULE mod = g_self_module;
+    if (!mod) {
+        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCSTR>(&read_embedded_resource), &mod);
+    }
+    if (!mod) return false;
+    HRSRC hrsrc = FindResourceA(mod, name, RT_RCDATA);
+    if (!hrsrc) return false;
+    DWORD size = SizeofResource(mod, hrsrc);
+    if (size == 0) return false;
+    HGLOBAL hglob = LoadResource(mod, hrsrc);
+    if (!hglob) return false;
+    const void* ptr = LockResource(hglob);
+    if (!ptr) return false;
+    out.assign(static_cast<const char*>(ptr), size);
+    return true;
+}
+
+// Read one map-embedded file out of the MPQ (legacy fallback when a map carries
+// separate d3d9.tga / d3dx9_42.tga entries instead of single-TGA .rsrc).
 static bool read_map_file(const char* name, std::string& out)
 {
     auto& storm = warcraft3::storm_s::instance();
@@ -284,26 +308,30 @@ static bool read_map_file(const char* name, std::string& out)
 }
 
 enum stage_result {
-    STAGE_ABSENT,   // this map does not carry the file
+    STAGE_ABSENT,   // neither .rsrc nor MPQ carries the file
     STAGE_WRITTEN,  // copied out just now
-    STAGE_OURS,     // already there, byte-identical to the map copy
+    STAGE_OURS,     // already there, byte-identical to our payload
     STAGE_FOREIGN,  // already there but someone else's; left alone
     STAGE_FAILED    // wanted to write, could not
 };
 
-// Copy one bundled binary from the map MPQ to <war3 dir>\<target_name>.
-// An existing file is never replaced: an unknown d3d9.dll belongs to someone
-// else (dgVoodoo, another proxy, a vendor wrapper) and clobbering it would
-// break their setup.
-static stage_result stage_from_map(const std::string& dir, const char* mpq_name,
-                                   const char* target_name)
+// Copy one bundled binary (preferring yd_japi.dll's PE .rsrc, falling back to
+// the map MPQ) to <war3 dir>\<target_name>. An existing file is never replaced:
+// an unknown d3d9.dll belongs to someone else (dgVoodoo, another proxy, a
+// vendor wrapper) and clobbering it would break their setup.
+static stage_result stage_payload(const std::string& dir, const char* res_name,
+                                  const char* mpq_name, const char* target_name)
 {
     std::string blob;
-    if (!read_map_file(mpq_name, blob)) return STAGE_ABSENT;
+    const char* origin = "japi.tga .rsrc";
+    if (!read_embedded_resource(res_name, blob)) {
+        origin = "map MPQ";
+        if (!read_map_file(mpq_name, blob)) return STAGE_ABSENT;
+    }
 
     std::string target = dir + "\\" + target_name;
     std::string existing;
-    char buf[MAX_PATH + 160];
+    char buf[MAX_PATH + 180];
 
     if (read_whole_file(target.c_str(), existing)) {
         if (existing == blob) {
@@ -312,8 +340,8 @@ static stage_result stage_from_map(const std::string& dir, const char* mpq_name,
             return STAGE_OURS;
         }
         snprintf(buf, sizeof(buf),
-                 "D3D: %s exists but differs from the map copy; left untouched (%s)",
-                 target_name, target.c_str());
+                 "D3D: %s exists but differs from %s payload; left untouched (%s)",
+                 target_name, origin, target.c_str());
         japi_log::sync_write(buf);
         return STAGE_FOREIGN;
     }
@@ -321,22 +349,22 @@ static stage_result stage_from_map(const std::string& dir, const char* mpq_name,
     if (!write_whole_file(target.c_str(), blob.data(), blob.size())) {
         snprintf(buf, sizeof(buf),
                  "D3D: cannot write %s (error %lu); install the proxy manually "
-                 "(tools\\d3d-proxy.ps1 -Install)", target.c_str(),
+                 "(japi.exe proxy --install)", target.c_str(),
                  (unsigned long)GetLastError());
         japi_log::sync_write(buf);
         return STAGE_FAILED;
     }
 
-    snprintf(buf, sizeof(buf), "D3D: staged %s from the map (%s)", target_name, target.c_str());
+    snprintf(buf, sizeof(buf), "D3D: staged %s from %s (%s)", target_name, origin, target.c_str());
     japi_log::sync_write(buf);
     return STAGE_WRITTEN;
 }
 
-// tools\d3d-proxy.ps1 identifies its own files through .japi_d3d_proxy.sha256 and
+// `japi proxy` identifies its own files through .japi_d3d_proxy.sha256 and
 // refuses to touch a d3d9.dll it cannot prove it owns. A staged copy therefore
-// has to bring the sidecar along, or a later -Install/-Uninstall would classify
-// our own proxy as a stranger. The hash ships with the map (d3d9.tga.sha256),
-// written at pack time, so nothing has to be hashed here.
+// has to bring the sidecar along, or a later --install/--uninstall would
+// classify our own proxy as a stranger. The hash is embedded in .rsrc
+// (JAPI_D3D9_SHA256) at build time, with MPQ d3d9.tga.sha256 fallback.
 static void ensure_proxy_sidecar(const std::string& dir, std::string expected)
 {
     while (!expected.empty() &&
@@ -361,14 +389,17 @@ static void stage_d3d_proxy_from_map()
 
     bool fresh = false;
 
-    stage_result proxy = stage_from_map(dir, "d3d9.tga", "d3d9.dll");
+    stage_result proxy = stage_payload(dir, "JAPI_D3D9_DLL", "d3d9.tga", "d3d9.dll");
     if (proxy == STAGE_WRITTEN) fresh = true;
     if (proxy == STAGE_WRITTEN || proxy == STAGE_OURS) {
         std::string sha;
-        if (read_map_file("d3d9.tga.sha256", sha)) ensure_proxy_sidecar(dir, sha);
+        if (read_embedded_resource("JAPI_D3D9_SHA256", sha) ||
+            read_map_file("d3d9.tga.sha256", sha)) {
+            ensure_proxy_sidecar(dir, sha);
+        }
     }
 
-    if (stage_from_map(dir, "d3dx9_42.tga", "D3DX9_42.dll") == STAGE_WRITTEN) {
+    if (stage_payload(dir, "JAPI_D3DX9_42_DLL", "d3dx9_42.tga", "D3DX9_42.dll") == STAGE_WRITTEN) {
         fresh = true;
     }
 
@@ -770,6 +801,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
     case DLL_PROCESS_ATTACH:
         // Keep DllMain minimal: wenhao_plugin does nothing here either.
         // Heavy work (console, threads, files) belongs in Initialize().
+        g_self_module = hModule;
         DisableThreadLibraryCalls(hModule);
         break;
     case DLL_PROCESS_DETACH:

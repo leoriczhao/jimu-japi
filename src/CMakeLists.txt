@@ -124,6 +124,7 @@ set(SLK_SOURCES
 
 set(EXT_SOURCES
     src/extensions/dllmain.cpp
+    src/extensions/embedded_payloads.rc
     src/extensions/custom_natives.cpp
     src/extensions/ex_natives/Initialize.cpp
     src/extensions/ex_natives/UnitState.cpp
@@ -143,6 +144,28 @@ set(EXT_SOURCES
     src/stubs.cpp
 )
 
+# Locate D3DX9_42.dll for embedding into yd_japi.dll (.rsrc), matching
+# builtin-japi's single-TGA architecture.
+set(JAPI_D3DX9_42_DLL "" CACHE FILEPATH "Path to 32-bit D3DX9_42.dll to embed in yd_japi.dll")
+if(NOT JAPI_D3DX9_42_DLL OR NOT EXISTS "${JAPI_D3DX9_42_DLL}")
+    set(_d3dx_candidates
+        "${CMAKE_SOURCE_DIR}/../reference/builtin-japi/extracted/D3DX9_42.dll"
+        "$ENV{WINDIR}/SysWOW64/D3DX9_42.dll"
+        "$ENV{WINDIR}/System32/D3DX9_42.dll"
+    )
+    foreach(_cand ${_d3dx_candidates})
+        if(EXISTS "${_cand}")
+            set(JAPI_D3DX9_42_DLL "${_cand}")
+            break()
+        endif()
+    endforeach()
+endif()
+if(JAPI_D3DX9_42_DLL AND EXISTS "${JAPI_D3DX9_42_DLL}")
+    message(STATUS "yd_japi embedded D3DX9_42.dll: ${JAPI_D3DX9_42_DLL}")
+else()
+    message(WARNING "D3DX9_42.dll not found; yd_japi.dll will embed newD3d9.dll only (pass -DJAPI_D3DX9_42_DLL=...)")
+endif()
+
 add_library(yd_japi SHARED
     ${YD_CORE_SOURCES}
     ${LUA_ENGINE_SOURCES}
@@ -155,6 +178,7 @@ target_include_directories(yd_japi PRIVATE
     "${CMAKE_SOURCE_DIR}/src/yd_core"
     "${CMAKE_SOURCE_DIR}/vendor/lua-5.4/src"
     "${CMAKE_SOURCE_DIR}/vendor/bee-lua"
+    "${CMAKE_CURRENT_BINARY_DIR}/embedded/$<CONFIG>"
 )
 
 target_link_libraries(yd_japi PRIVATE lua54 japi_image)
@@ -238,6 +262,18 @@ set_target_properties(newD3d9 PROPERTIES
     PREFIX ""
     SUFFIX ".dll"
 )
+
+# Stage embedded_paths.h + d3d9.sha256 right after newD3d9.dll builds, then
+# compile them into yd_japi.dll's PE .rsrc section (single-TGA payload).
+add_custom_command(TARGET newD3d9 POST_BUILD
+    COMMAND "${CMAKE_COMMAND}"
+        "-DD3D9_DLL=$<TARGET_FILE:newD3d9>"
+        "-DD3DX_DLL=${JAPI_D3DX9_42_DLL}"
+        "-DOUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/embedded/$<CONFIG>"
+        -P "${CMAKE_SOURCE_DIR}/cmake/stage_embedded_payloads.cmake"
+    COMMENT "Staging embedded D3D payloads for yd_japi.dll .rsrc"
+)
+add_dependencies(yd_japi newD3d9)
 
 # Hook rollback contract: inline_hook_install/uninstall and patch_guard must be
 # reversible, because a map-level hook lifetime (hook on entry, unhook on exit,

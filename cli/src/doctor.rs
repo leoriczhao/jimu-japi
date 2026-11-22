@@ -50,8 +50,17 @@ pub fn run_doctor(env: &JapiEnv, explicit_war3: Option<&Path>) -> Result<()> {
 
     check("War3 1.27a", war3_exe.is_file(), war3_dir.display().to_string(), false);
     check("yd_japi.dll", dll.is_file(), dll.display().to_string(), true);
-    check("newD3d9.dll", proxy.is_file(), proxy.display().to_string(), true);
-    check("D3DX9_42.dll", d3dx.is_file(), d3dx.display().to_string(), true);
+    check("newD3d9.dll", proxy.is_file(), proxy.display().to_string(), false);
+    check(
+        "D3DX9_42.dll",
+        d3dx.is_file(),
+        if d3dx.is_file() {
+            d3dx.display().to_string()
+        } else {
+            "embedded in yd_japi.dll (.rsrc)".to_string()
+        },
+        false,
+    );
     check("callback", cb.is_file(), cb.display().to_string(), true);
     check("pjass.exe", pjass.is_file(), pjass.display().to_string(), true);
     check("w3x2lni", w2l_lua.is_file(), w2l.display().to_string(), true);

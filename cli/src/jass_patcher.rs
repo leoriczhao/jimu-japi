@@ -199,6 +199,19 @@ pub fn patch_war3map_j(jfile: &Path, opts: &JassPatchOptions<'_>) -> Result<()> 
     println!("  JASS encoding: {}", script.encoding.label());
     println!("  JASS anchors: {}", anchor_summary(&jcontent));
 
+    if Regex::new(r"(?m)^[ \t]*#(?:include|define|ifdef)\b")
+        .unwrap()
+        .is_match(&jcontent)
+    {
+        bail!(
+            "war3map.j contains unexpanded YDWE/KKWE preprocessor directives (#include/#define/#ifdef).\n\
+             \x20 This usually happens when a map was saved via KKWE MCP save_map (which bypasses Wave/JassHelper).\n\
+             \x20 Fix: either save the map once from KKWE UI (Ctrl+S), or disable the YDTrigger plugin in KKWE Config -> Editor Plugins.\n\
+             \x20 Base map: {}",
+            opts.base_map_display
+        );
+    }
+
     // 1. Collect declared array globals for JapiForceAllocArrays
     let mut array_globals: Vec<String> = Vec::new();
     if !opts.no_array_prealloc {
@@ -538,6 +551,42 @@ pub fn patch_war3map_j(jfile: &Path, opts: &JassPatchOptions<'_>) -> Result<()> 
             let end_g = find_endglobals(&jcontent, opts.base_map_display, "JapiForceAllocArrays")?;
             jcontent.insert_str(end_g, &format!("{nl}{nl}{alloc_func}"));
             println!("  Array prealloc: JapiForceAllocArrays injected");
+        }
+    }
+
+    // 7b. Ensure japi_ht / japi__key globals exist when wrappers or GetFuncAddr
+    // are requested on a map whose JapiBootstrap came from a WE/KKWE trigger
+    // (which uses `local hashtable ht = InitHashtable()` to stay vanilla-WE clean).
+    if opts.with_jass_wrappers || opts.with_get_func_addr {
+        let mut missing_globals = String::new();
+        if !Regex::new(r"(?m)^[ \t]*hashtable[ \t]+japi_ht\b")
+            .unwrap()
+            .is_match(&jcontent)
+        {
+            missing_globals.push_str(&format!("    hashtable japi_ht = null{}", nl));
+        }
+        if !Regex::new(r"(?m)^[ \t]*integer[ \t]+japi__key\b")
+            .unwrap()
+            .is_match(&jcontent)
+        {
+            missing_globals.push_str(&format!("    integer japi__key = 0{}", nl));
+        }
+        if !missing_globals.is_empty() {
+            let re_eg = Regex::new(r"(?m)^[ \t]*endglobals\b").unwrap();
+            if let Some(egm) = re_eg.find(&jcontent) {
+                let at = egm.start();
+                jcontent.insert_str(at, &missing_globals);
+            }
+            let re_local_ht =
+                Regex::new(r"(?m)^([ \t]*local[ \t]+hashtable[ \t]+ht[ \t]*=[ \t]*InitHashtable[ \t]*\(\))")
+                    .unwrap();
+            if let Some(m) = re_local_ht.find(&jcontent) {
+                let end = m.end();
+                jcontent.insert_str(
+                    end,
+                    &format!("{nl}    set japi_ht = ht{nl}    set japi__key = StringHash(\"jass\")"),
+                );
+            }
         }
     }
 

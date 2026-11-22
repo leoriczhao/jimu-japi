@@ -17,12 +17,12 @@ cd src; .\build.bat                      # 编译 yd_japi.dll + newD3d9.dll
 ### 让地图自带代理
 
 ```powershell
-.\tools\pack.ps1        # 代理每次都会打进去，没有开关
+.\japi.exe build          # 代理与 D3DX 已直接嵌在单文件 japi.tga (.rsrc) 里，无需额外开关
 ```
 
-代理和 D3DX 会一起进地图（`d3d9.tga` / `d3dx9_42.tga` / `d3d9.tga.sha256`），别人拿到 `.w3x`
+代理和 D3DX 已嵌入单个 `japi.tga`（Win32 PE `.rsrc` 资源节，与内置 JAPI 同款结构），别人拿到 `.w3x`
 不用再单独装一遍。代理是 `d3d9.dll` 的替身，只能随进程启动加载，所以**第一次**运行地图时
-它只是被写到 `war3.exe` 旁边（日志 `D3D: staged d3d9.dll from the map`），**重开一次游戏**
+它只是被写到 `war3.exe` 旁边（日志 `D3D: staged d3d9.dll from japi.tga .rsrc`），**重开一次游戏**
 才生效。机器上已经有同版本代理时直接跳过；已有别人的 `d3d9.dll` 时不覆盖，只记日志。
 
 ## 1. 最小 HUD（可直接粘进 war3map.lua 的函数）

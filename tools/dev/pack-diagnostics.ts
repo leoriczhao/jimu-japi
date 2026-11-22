@@ -345,6 +345,50 @@ end
       assert.equal(rBld.status, 0, rBld.combined);
       assert.ok(fs.existsSync(path.join(sdk, 'maps', 'SdkMap', 'dist', 'SdkMap.w3x')));
     });
+
+    testCase('single-TGA layout + war3map.imp (0x0D) + war3map.wtg/wct JapiBootstrap are emitted and idempotent', () => {
+      const base = path.join(ROOT, 'reference', 'empty-map');
+      const r1 = packCase('we-compat-1', { 'war3map.lua': 'return {}\n' }, { base });
+      assert.equal(r1.status, 0, r1.combined);
+      // Single-TGA: japi.tga + callback present, legacy split TGA files absent
+      assert.ok(fs.existsSync(path.join(r1.workDir, 'japi.tga')));
+      assert.ok(fs.existsSync(path.join(r1.workDir, 'callback')));
+      assert.equal(fs.existsSync(path.join(r1.workDir, 'd3d9.tga')), false);
+      assert.equal(fs.existsSync(path.join(r1.workDir, 'd3d9.tga.sha256')), false);
+      assert.equal(fs.existsSync(path.join(r1.workDir, 'd3dx9_42.tga')), false);
+      // war3map.imp registers callback, japi.tga, script\war3map.lua with 0x0D custom path
+      const imp = fs.readFileSync(path.join(r1.workDir, 'war3map.imp'));
+      assert.equal(imp.readUInt32LE(0), 1);
+      assert.equal(imp.readUInt32LE(4), 3);
+      const impAscii = imp.toString('latin1');
+      assert.ok(impAscii.includes('\x0dcallback\0'));
+      assert.ok(impAscii.includes('\x0djapi.tga\0'));
+      assert.ok(impAscii.includes('\x0dscript\\war3map.lua\0'));
+      // war3map.wtg + war3map.wct contain JapiBootstrap custom-script trigger
+      const wtg1 = fs.readFileSync(path.join(r1.workDir, 'war3map.wtg'));
+      const wct1 = fs.readFileSync(path.join(r1.workDir, 'war3map.wct'));
+      assert.ok(wtg1.includes(Buffer.from('JapiBootstrap\0')));
+      assert.ok(wct1.includes(Buffer.from('InitTrig_JapiBootstrap')));
+
+      // Repacking an already-injected map must be idempotent (no duplicate imp/wtg/wct entries)
+      const r2 = packCase('we-compat-2', { 'war3map.lua': 'return {}\n' }, { base: r1.workDir });
+      assert.equal(r2.status, 0, r2.combined);
+      const imp2 = fs.readFileSync(path.join(r2.workDir, 'war3map.imp'));
+      assert.equal(imp2.readUInt32LE(4), 3);
+      const wtg2 = fs.readFileSync(path.join(r2.workDir, 'war3map.wtg'));
+      const wct2 = fs.readFileSync(path.join(r2.workDir, 'war3map.wct'));
+      assert.equal(wtg2.length, wtg1.length, 'wtg grew on repack');
+      assert.equal(wct2.length, wct1.length, 'wct grew on repack');
+    });
+
+    testCase('unexpanded YDTrigger #include directives produce actionable diagnostic', () => {
+      const ydJass = `#define USE_BJ_ANTI_LEAK
+#include <YDTrigger/Import.h>
+${DEFAULT_JASS}`;
+      const r = packCase('ydtrigger-raw', { 'war3map.lua': 'return {}\n' }, { jass: ydJass });
+      assert.notEqual(r.status, 0, r.combined);
+      assert.match(r.combined, /unexpanded YDWE\/KKWE preprocessor directives/);
+    });
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }

@@ -1,6 +1,7 @@
-use crate::config::{load_project_config, resolve_abs, sha256_file_upper, JapiEnv};
+use crate::config::{load_project_config, resolve_abs, JapiEnv};
 use crate::jass_patcher::{patch_war3map_j, run_pjass_check, JassPatchOptions};
 use crate::lua_bundler::{bundle_lua_dir, load_engine_modules, BundleFlags};
+use crate::we_compat;
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,7 +14,9 @@ pub struct PackArgs {
     pub out_file: Option<PathBuf>,
     pub work_dir: Option<PathBuf>,
     pub dll_path: Option<PathBuf>,
+    #[allow(dead_code)]
     pub proxy_path: Option<PathBuf>,
+    #[allow(dead_code)]
     pub d3dx_path: Option<PathBuf>,
     pub w3x2lni: Option<PathBuf>,
     pub manifest: Option<PathBuf>,
@@ -100,8 +103,6 @@ pub fn run_pack(env: &JapiEnv, args: &PackArgs) -> Result<PackOutcome> {
         .unwrap_or(false);
 
     let dll_path = env.resolve_dll(args.dll_path.as_deref());
-    let proxy_path = env.resolve_proxy(args.proxy_path.as_deref());
-    let d3dx_path = env.resolve_d3dx(args.d3dx_path.as_deref());
     let w3x2lni = env.resolve_w3x2lni(args.w3x2lni.as_deref());
     let lua_exe = w3x2lni.join("bin").join("w3x2lni-lua.exe");
     let cb_src = env.resolve_callback();
@@ -113,14 +114,8 @@ pub fn run_pack(env: &JapiEnv, args: &PackArgs) -> Result<PackOutcome> {
     if !dll_path.is_file() {
         bail!("DLL not found: {}\n  Build the engine DLLs first or pass --dll-path.", dll_path.display());
     }
-    if !proxy_path.is_file() {
-        bail!("D3D proxy not found: {}\n  Build the engine DLLs first or pass --proxy-path.", proxy_path.display());
-    }
-    if !d3dx_path.is_file() {
-        bail!("D3DX9_42.dll not found: {}\n  Pass --d3dx-path.", d3dx_path.display());
-    }
     if !lua_exe.is_file() {
-        bail!("w3x2lni not found: {}\n  Pass --w3x2lni or run tools/fetch-w3x2lni.ps1.", lua_exe.display());
+        bail!("w3x2lni not found: {}\n  Pass --w3x2lni or run `mise run setup`.", lua_exe.display());
     }
     if !cb_src.is_file() {
         bail!("callback not found: {}", cb_src.display());
@@ -131,8 +126,7 @@ pub fn run_pack(env: &JapiEnv, args: &PackArgs) -> Result<PackOutcome> {
     }
     println!("  Base map: {}", base_map.display());
     println!("  Map dir:  {}", map_dir.display());
-    println!("  DLL:      {}", dll_path.display());
-    println!("  Proxy:    {} (+ {})", proxy_path.display(), d3dx_path.display());
+    println!("  DLL:      {} (single-TGA payload: embedded D3D proxy + D3DX)", dll_path.display());
     println!("  Output:   {}", out_file.display());
 
     // 1. Clean and import base map
@@ -254,22 +248,24 @@ pub fn run_pack(env: &JapiEnv, args: &PackArgs) -> Result<PackOutcome> {
         run_pjass_check(&pjass_exe, &w3x2lni, &jfile)?;
     }
 
-    // 4. Inject DLL, callback, D3D proxy + sha256, optional fixtures & debugger
-    println!("  [4/5] Inject DLL + callback");
+    // 4. Inject single-TGA japi.tga + callback + WE trigger/import metadata
+    // Mirrors builtin-japi: newD3d9.dll + D3DX9_42.dll are embedded in japi.tga's
+    // PE .rsrc section, and all injected files are registered in war3map.imp (0x0D)
+    // so World Editor / YDWE / KKWE preserves them when re-saving the map.
+    println!("  [4/5] Inject single-TGA japi.tga + callback + war3map.imp");
     fs::copy(&dll_path, work_dir.join("japi.tga"))?;
     fs::copy(&cb_src, work_dir.join("callback"))?;
-    fs::copy(&proxy_path, work_dir.join("d3d9.tga"))?;
-    fs::copy(&d3dx_path, work_dir.join("d3dx9_42.tga"))?;
-    let proxy_sha = sha256_file_upper(&proxy_path)?;
-    fs::write(work_dir.join("d3d9.tga.sha256"), proxy_sha.as_bytes())?;
-    println!("  D3D proxy: bundled as d3d9.tga + d3dx9_42.tga ({})", proxy_sha);
+    // Remove legacy split-TGA files if repacking an older map
+    for legacy in ["d3d9.tga", "d3d9.tga.sha256", "d3dx9_42.tga"] {
+        let p = work_dir.join(legacy);
+        if p.is_file() {
+            let _ = fs::remove_file(p);
+        }
+    }
 
     let mut needed: Vec<String> = vec![
         "callback".into(),
         "japi.tga".into(),
-        "d3d9.tga".into(),
-        "d3d9.tga.sha256".into(),
-        "d3dx9_42.tga".into(),
         r"script\war3map.lua".into(),
     ];
     if args.test_reboot {
@@ -300,7 +296,19 @@ pub fn run_pack(env: &JapiEnv, args: &PackArgs) -> Result<PackOutcome> {
         }
     }
 
-    update_listfile(&work_dir.join("(listfile)"), &needed)?;
+    let imp_added = we_compat::update_war3map_imp(&work_dir.join("war3map.imp"), &needed)?;
+    println!("  war3map.imp: registered {} new custom-path import(s)", imp_added);
+
+    if we_compat::inject_wtg_wct_bootstrap(&work_dir)? {
+        println!("  war3map.wtg/wct: injected JapiBootstrap trigger (survives WE/YDWE/KKWE save)");
+    }
+
+    let mut listfile_needed = needed.clone();
+    listfile_needed.push("war3map.imp".into());
+    if work_dir.join("war3map.wct").is_file() {
+        listfile_needed.push("war3map.wct".into());
+    }
+    update_listfile(&work_dir.join("(listfile)"), &listfile_needed)?;
 
     // 5. Repack
     if args.skip_repack {
