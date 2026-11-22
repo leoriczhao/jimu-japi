@@ -81,6 +81,85 @@ export function runUiOfflineSuite(): void {
   runChecked(W2L_LUA, ['-E', path.join(ROOT, 'tests', 'ui', 'run_suite.lua'), ROOT]);
 }
 
+export function runSelectorOfflineSuite(): void {
+  runChecked(W2L_LUA, ['-E', path.join(ROOT, 'tests', 'selector', 'run.lua')], { cwd: ROOT });
+  console.log('SELECTOR OFFLINE: passed; no War3 process, map loader or pack step was started.');
+}
+
+export function runD3dContractSuite(): void {
+  const d3dDir = path.join(ROOT, 'src', 'src', 'd3d9');
+  const manifestPath = path.join(d3dDir, 'handler_manifest.json');
+  const apiPath = path.join(d3dDir, 'api.cpp');
+  const messagePath = path.join(ROOT, 'src', 'src', 'lua_engine', 'lua_engine', 'libs_message.cpp');
+  const exPath = path.join(ROOT, 'src', 'src', 'extensions', 'ex_natives', 'Initialize.cpp');
+  const testPath = path.join(ROOT, 'map', 'tests', 'test_d3d.lua');
+
+  interface HandlerEntry {
+    name: string;
+    spec: string;
+    owner: 'd3d_proxy' | 'message' | 'ex_game_ui';
+    test_id?: string | null;
+  }
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+    handler_count: number;
+    legacy_handler_count: number;
+    handlers: HandlerEntry[];
+  };
+  const handlers = manifest.handlers;
+  if (handlers.length !== manifest.handler_count) {
+    throw new Error(`manifest handler_count=${manifest.handler_count}, actual=${handlers.length}`);
+  }
+  if (manifest.legacy_handler_count !== handlers.length - 1) {
+    throw new Error('legacy_handler_count must be the surface count before GetTextureSrcRect was restored');
+  }
+  const seenNames = new Set<string>();
+  for (const h of handlers) {
+    if (seenNames.has(h.name)) throw new Error(`duplicate manifest name: ${h.name}`);
+    seenNames.add(h.name);
+  }
+
+  const readRegs = (filePath: string, re: RegExp): Array<{ name: string; spec: string }> => {
+    const text = fs.readFileSync(filePath, 'utf8');
+    return [...text.matchAll(re)].map((m) => ({ name: m[1], spec: m[2] }));
+  };
+  const apiRegs = readRegs(apiPath, /reg\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)"/g);
+  const messageRegs = readRegs(messagePath, /reg\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)"/g);
+  const exRegs = readRegs(exPath, /register_cpp_handler\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)"/g);
+
+  for (const entry of handlers) {
+    const src = entry.owner === 'd3d_proxy' ? apiRegs : entry.owner === 'message' ? messageRegs : exRegs;
+    const matches = src.filter((r) => r.name === entry.name);
+    if (matches.length !== 1) {
+      throw new Error(`${entry.name}: expected one ${entry.owner} registration, found ${matches.length}`);
+    }
+    if (matches[0].spec !== entry.spec) {
+      throw new Error(`${entry.name}: manifest spec ${entry.spec}, source spec ${matches[0].spec}`);
+    }
+  }
+
+  const canonical = ['GetMouseVectorX', 'GetMouseVectorY', 'ShowConsole', 'ShowFpsText', 'SetKeyboard'];
+  for (const name of canonical) {
+    if (apiRegs.some((r) => r.name === name)) {
+      throw new Error(`D3D proxy must not register canonical handler ${name}`);
+    }
+  }
+
+  const testText = fs.readFileSync(testPath, 'utf8');
+  const fixtureNames = new Set<string>([
+    ...[...testText.matchAll(/call\s*\(\s*"([^"]+)"/g)].map((m) => m[1]),
+    ...[...testText.matchAll(/jass\.UnitId\s*\(\s*"([^"]+)"/g)].map((m) => m[1]),
+  ]);
+  const covered = handlers.filter((h) => fixtureNames.has(h.name)).map((h) => h.name).sort();
+  const declared = handlers.filter((h) => h.test_id != null).map((h) => h.name).sort();
+  if (JSON.stringify(covered) !== JSON.stringify(declared)) {
+    throw new Error(`manifest fixture coverage differs from test_d3d.lua:\n  covered=${covered.join(',')}\n  declared=${declared.join(',')}`);
+  }
+
+  console.log(
+    `D3D contract PASS: surface=${handlers.length}, proxy=${apiRegs.length}, canonical=${canonical.length}, fixture=${covered.length}/${handlers.length}, untested=${handlers.length - covered.length}`,
+  );
+}
+
 export function runYdweCompatSuite(): void {
   const iconTest = path.join(ROOT, 'src', 'build', 'bin', 'Release', 'button_icon_test.exe');
   const iconTool = path.join(ROOT, 'src', 'build', 'bin', 'Release', 'ydwe_button_icon.exe');

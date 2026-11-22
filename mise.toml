@@ -1,5 +1,42 @@
-# Toolchain versions for engine maintainers & CLI contributors.
-# Map authors using the standalone SDK bundle only need bin/japi.exe (zero deps).
+# Unified toolchain & task runner for engine maintainers & CLI contributors.
+# Map authors using the standalone SDK bundle only need japi.exe (zero deps).
+#
+# Quick commands:
+#   mise install      # install pinned Node 24 + Rust stable
+#   mise run setup    # fetch pinned w3x2lni scripts/data + check dependencies
+#   mise run build    # build C++ single-TGA yd_japi.dll + newD3d9.dll + Rust japi.exe
+#   mise run test     # run all offline engine & CLI test suites
+#   mise run release  # build reproducible standalone SDK bundle
+#   mise run clean    # prune worktrees & clear build/
+
 [tools]
 node = "24"
 rust = "stable"
+
+[tasks.setup]
+description = "Bootstrap pinned external dependencies (w3x2lni scripts/data + checks)"
+run = "node tools/dev/cli.ts setup"
+
+[tasks.build]
+description = "Compile C++ DLLs (single-TGA yd_japi.dll + newD3d9.dll) and Rust japi.exe"
+run = "node tools/dev/cli.ts build all"
+
+[tasks."build:dll"]
+description = "Compile C++ DLLs only (src/build.bat)"
+run = "node tools/dev/cli.ts build dll"
+
+[tasks."build:cli"]
+description = "Compile Rust japi.exe only (Release)"
+run = "node tools/dev/cli.ts build cli"
+
+[tasks.test]
+description = "Run all offline engine, CLI, object-data, UI, selector, D3D contract & example suites"
+run = "node tools/dev/cli.ts test all"
+
+[tasks.release]
+description = "Build clean reproducible map-author SDK bundle"
+run = "node tools/dev/cli.ts release --sdk-bundle"
+
+[tasks.clean]
+description = "Prune build worktrees and clear build/"
+run = "node tools/dev/cli.ts clean"

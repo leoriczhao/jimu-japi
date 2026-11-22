@@ -2,11 +2,14 @@ import path from 'node:path';
 import { ensureJapiExe, findCargoCmd, ROOT, runChecked } from './common.ts';
 import { runPackDiagnostics } from './pack-diagnostics.ts';
 import { runReleaseSdk } from './release-sdk.ts';
+import { runSetup } from './setup.ts';
 import {
   cleanBuildDir,
   makeForeignMap,
   runConformanceLive,
+  runD3dContractSuite,
   runObjectDataSuite,
+  runSelectorOfflineSuite,
   runUiOfflineSuite,
   runYdweCompatSuite,
 } from './suites.ts';
@@ -14,17 +17,20 @@ import { runVerifyExamples } from './verify-examples.ts';
 
 function showUsage(): void {
   console.log(`
-WAR3 map-inject Engine Maintainer CLI (Node 24 native TS: node tools/dev/cli.ts)
+WAR3 map-inject Engine Maintainer CLI (Node 24 native TS: node tools/dev/cli.ts / mise run <task>)
 
 Commands:
+  setup [--force] [--ref <sha>]             Bootstrap pinned dependencies (w3x2lni scripts/data + checks)
   build [all | dll | cli]                   Compile C++ DLLs (src/build.bat) and/or Rust japi.exe
   test  [suite]                             Run engine & toolchain test suites:
-          all          (default) cli + pack + object-data + ui + ydwe-compat + examples
+          all          (default) cli + pack + object-data + selector + ui + ydwe-compat + d3d-contract + examples
           cli          cargo test (Rust unit tests)
-          pack         pack-diagnostics (16 cases, incl. japi.json, manifest, clean SDK layout)
+          pack         pack-diagnostics (single-TGA, war3map.imp, wtg/wct, japi.json, manifest, SDK layout)
           object-data  objects.lua compiler + w3x2lni roundtrip + pack integration
+          selector     offline jass.selector Lua tests
           ui           offline UI library & example contract tests
           ydwe-compat  Python + Lua + C++ + CLI YDWE compat offline suite
+          d3d-contract D3D handler manifest vs C++ registrations & test_d3d.lua coverage
           examples     verify all 12 examples (--filter, --skip-pack, --live, --war3-dir)
           live         main engine regression in War3 (japi test)
           demo         wave-defense demo regression in War3 (japi test --demo)
@@ -78,6 +84,15 @@ switch (cmd.toLowerCase()) {
     showUsage();
     break;
 
+  case 'setup':
+    await runSetup({
+      ref: parseFlagVal(rest, '--ref'),
+      url: parseFlagVal(rest, '--url'),
+      dest: parseFlagVal(rest, '--dest'),
+      force: rest.includes('--force'),
+    });
+    break;
+
   case 'build': {
     const target = (rest[0] ?? 'all').toLowerCase();
     if (target === 'dll') buildDll();
@@ -105,11 +120,17 @@ switch (cmd.toLowerCase()) {
       case 'object-data':
         runObjectDataSuite();
         break;
+      case 'selector':
+        runSelectorOfflineSuite();
+        break;
       case 'ui':
         runUiOfflineSuite();
         break;
       case 'ydwe-compat':
         runYdweCompatSuite();
+        break;
+      case 'd3d-contract':
+        runD3dContractSuite();
         break;
       case 'examples':
         runVerifyExamples({
@@ -140,10 +161,14 @@ switch (cmd.toLowerCase()) {
         runPackDiagnostics();
         console.log('\n== [test] object-data');
         runObjectDataSuite();
+        console.log('\n== [test] selector-offline');
+        runSelectorOfflineSuite();
         console.log('\n== [test] ui-offline');
         runUiOfflineSuite();
         console.log('\n== [test] ydwe-compat');
         runYdweCompatSuite();
+        console.log('\n== [test] d3d-contract');
+        runD3dContractSuite();
         console.log('\n== [test] examples (static + pack)');
         runVerifyExamples();
         console.log('\nAll offline engine & CLI suites passed.');

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ensureJapiExe, ROOT, runCapture } from './common.ts';
+import { ensureJapiExe, ROOT, runCapture, W2L_LUA } from './common.ts';
 
 interface ExampleEntry {
   id: string;
@@ -61,6 +61,12 @@ export function runVerifyExamples(opts: VerifyExamplesOptions = {}): void {
 
     if (!fs.existsSync(luaPath)) errors.push('missing war3map.lua');
     if (!fs.existsSync(readmePath)) errors.push('missing README.md');
+    if (fs.existsSync(luaPath) && fs.existsSync(W2L_LUA)) {
+      const syn = runCapture(W2L_LUA, ['-E', '-e', 'assert(loadfile(arg[0])); os.exit(0)', luaPath]);
+      if (syn.status !== 0) {
+        errors.push(`lua syntax error:\n${syn.combined.trim()}`);
+      }
+    }
 
     const extraFlags: string[] = [];
     for (const sw of ex.pack ?? []) {

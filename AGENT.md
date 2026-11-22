@@ -83,35 +83,43 @@ japi kill
 
 ---
 
-## 工作流 1：引擎维护与发版（Node 24 `tools/dev/cli.ts`）
+## 工作流 1：引擎维护与发版（统一入口：`mise.toml` + `tools/dev/cli.ts`）
+
+所有依赖拉取、编译、测试、发版统一通过根目录 [mise.toml](mise.toml) 任务入口执行（底层为零依赖 Node 24 原生 TS）：
 
 ```powershell
-# 编译 C++ DLL（src/build.bat）和/或 Rust japi.exe
-node tools/dev/cli.ts build              # all (dll + cli)
-node tools/dev/cli.ts build dll          # 仅编 C++ DLL
-node tools/dev/cli.ts build cli          # 仅编 Rust japi.exe
+# 0. 首次/换机器：装工具链（Node 24 + Rust）并拉取锁定版本的 w3x2lni 脚本与数据
+mise install
+mise run setup                           # 等价：node tools/dev/cli.ts setup（支持 --force）
 
-# 跑离线回归（默认全套：cli + pack + object-data + ui + ydwe-compat + examples）
-node tools/dev/cli.ts test
+# 1. 编译 C++ 单 TGA DLL（内嵌 newD3d9.dll + D3DX9_42.dll）与 Rust japi.exe
+mise run build                           # 等价：node tools/dev/cli.ts build all
+mise run build:dll                       # 仅编 C++ DLL
+mise run build:cli                       # 仅编 Rust japi.exe
+
+# 2. 跑全量离线回归（8 套：cli + pack + object-data + selector + ui + ydwe-compat + d3d-contract + examples）
+mise run test
 node tools/dev/cli.ts test cli           # cargo test
-node tools/dev/cli.ts test pack          # 16 项打包诊断 + SDK 布局冒烟
+node tools/dev/cli.ts test pack          # 18 项打包诊断（单 TGA / war3map.imp / wtg+wct / SDK 布局）
 node tools/dev/cli.ts test object-data   # 物编编译器 + w3x2lni 往返 + 打包集成
+node tools/dev/cli.ts test selector      # 离线 jass.selector 套件
 node tools/dev/cli.ts test ui            # 离线 UI 库与示例契约
 node tools/dev/cli.ts test ydwe-compat   # Python + Lua + C++ + CLI 离线套件
-node tools/dev/cli.ts test examples      # 12 个示例静态+打包（支持 --filter / --live）
+node tools/dev/cli.ts test d3d-contract  # D3D handler 清单与 C++ 注册/覆盖率核对
+node tools/dev/cli.ts test examples      # 12 个示例语法+打包（支持 --filter / --live）
 
-# 跑 War3 实机回归
+# 3. 跑 War3 实机回归
 node tools/dev/cli.ts test live          # 主回归（map/）
 node tools/dev/cli.ts test demo          # 波次防守 Demo
 node tools/dev/cli.ts test conformance   # 原生接口一致性测试台
 
-# 出可复现的作者 SDK 发布包（clean worktree 编译 C++ DLL + Rust japi.exe）
-node tools/dev/cli.ts release --sdk-bundle
+# 4. 出可复现的作者 SDK 发布包（clean worktree 编译 C++ DLL + Rust japi.exe）
+mise run release                         # 等价：node tools/dev/cli.ts release --sdk-bundle
 node tools/dev/cli.ts release --sdk-bundle --no-build   # 复用本地产物做草稿验证
 
-# 辅助维护
+# 5. 辅助维护
 node tools/dev/cli.ts foreign-map        # 生成 build/foreign-map 外来地图夹具
-node tools/dev/cli.ts clean              # 安全移除 build/ 下 worktree 并清空 build/
+mise run clean                           # 安全移除 build/ 下 worktree 并清空 build/
 ```
 
 ---
