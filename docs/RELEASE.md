@@ -31,7 +31,7 @@ SDK 版本号只有一个来源：**`jass.d3d` 的 `kVersion` 常量**。
 
 | 项 | 要求 | 检查命令 | 说明 |
 |---|---|---|---|
-| WAR3 1.27a | 游戏目录存在且含 `war3.exe` | `Test-Path "D:\Warcraft III Frozen Throne 1.27a publish\war3.exe"` | `tools/deploy.ps1:39` 硬编码该路径；`tools/deploy.ps1` **不读** `tools/config.local.ps1`（只有 `tools/d3d-proxy.ps1:23-31` 读） |
+| WAR3 1.27a | 游戏目录存在且含 `war3.exe` | `.\japi.ps1 doctor` | 通过 `tools/_config.ps1` 统一解析：`-War3Dir` > `$env:WAR3_DIR` > `tools/config.local.ps1` > 默认路径 |
 | VS 2019/2022 + C++ 工具链 | `vcvars32.bat` 可调用 | `Test-Path "D:\vs2022\BuildTools\VC\Auxiliary\Build\vcvars32.bat"` | 必须 32 位（`-A Win32`），WAR3 1.27a 是 32 位进程 |
 | CMake | ≥ 3.15（`src/CMakeLists.txt` 要求） | `cmake --version` | 本机实测 `cmake version 4.0.0` |
 | git | 支持 `worktree add --detach` | `git --version` | 本机实测 `git version 2.49.0.windows.1` |
@@ -72,17 +72,9 @@ git show <commit>:src/src/lua_engine/lua_engine/libs_d3d.cpp | Select-String 'kV
 
 > **脚本化**：`tools/release-sdk.ps1`（不加 `-NoBuild` 时）内部执行第 2、3 步；手工复现按本节命令。
 
-### 3.1 为什么 `src\build.bat` 不能当发行构建命令
+### 3.1 为什么发行构建仍建议由 `release-sdk.ps1` 驱动独立的 `cmake -B build\cmake-<sha7>`
 
-`src/build.bat` 第 3 行是：
-
-```bat
-cd /d "C:\Users\leoric\Desktop\code\map-inject\src"
-```
-
-它 **写死了主工作区的绝对路径**。在 `build\clean-<sha7>` 这种 detached worktree 里调用它，实际编译的是**主工作区**的源码和主工作区的 `build/` 目录 —— 产物与「干净提交」没有对应关系，溯源就断了。同一原因记录在 `docs/STATUS.md` §4 与 `docs/planning/D3D-LUA-SDK-DESIGN.md` §14.4。
-
-所以发行构建必须用「等价但路径无关」的命令：`vcvars32 + cmake -S <clean>\src -B <clean>\src\build-clean`。
+虽然 `src/build.bat` 已改为基于 `%~dp0` 定位当前源码目录，但直接在其内部生成 `src/build/` 会把编译中间产物留在 clean worktree 里，破坏 `git status --porcelain` 为空的溯源检查。因此 `tools/release-sdk.ps1` 统一把构建目录放到 worktree 之外的 `build\cmake-<sha7>`。
 
 ### 3.2 手工命令（已验证的口径，与 §14.4 一致）
 

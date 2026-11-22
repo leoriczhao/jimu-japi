@@ -2,6 +2,7 @@
 build/
 src/build/
 src/build10/
+cli/target/
 # tools\release-sdk.ps1 used to build inside its clean worktree (src\build-clean)
 # and left hundreds of untracked CMake files there, which made the next release
 # run on the same commit fail its "clean worktree" assertion.
@@ -9,6 +10,7 @@ src/build-clean/
 
 # Local config (user-specific paths)
 tools/config.local.ps1
+japi.local.json
 
 # Logs
 *.log
@@ -31,6 +33,7 @@ tools/w3x2lni/log/
 # OS
 Thumbs.db
 Desktop.ini
+__pycache__/
 
 # Binary map files (use LNI text format instead)
 *.w3x

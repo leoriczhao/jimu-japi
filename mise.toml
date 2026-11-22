@@ -1,0 +1,5 @@
+# Toolchain versions for engine maintainers & CLI contributors.
+# Map authors using the standalone SDK bundle only need bin/japi.exe (zero deps).
+[tools]
+node = "24"
+rust = "stable"
