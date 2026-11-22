@@ -210,6 +210,28 @@ namespace warcraft3::jass {
 			return &(it->second);
 		}
 
+		// Discover host-registered extension natives (e.g. KKWE/KKAPI DzFrame*,
+		// Dz*, KK*, YDWE EX*) directly from War3's live native hashtable.
+		// Never expose vanilla Game.dll natives here (they belong to jass.common).
+		if (!jass_func(proc_name))
+		{
+			auto* ht = warcraft3::get_native_function_hashtable();
+			if (ht)
+			{
+				auto* node = ht->find(proc_name);
+				if (node && node->func_address_ && node->param_list_ && node->param_list_[0] == '(')
+				{
+					auto res = japi_function.insert(std::make_pair(
+						std::string(proc_name),
+						func_value(node->param_list_, static_cast<uintptr_t>(node->func_address_))));
+					if (res.first->second.is_valid())
+					{
+						return &(res.first->second);
+					}
+				}
+			}
+		}
+
 		return nullptr;
 	}
 	
