@@ -943,6 +943,27 @@ namespace warcraft3::japi {
 		resolve_real_unit_state();
 	}
 
+	void InitializeUnitStateNatives()
+	{
+		jass::japi_add((uintptr_t)EXGetUnitString,        "EXGetUnitString",        "(II)S");
+		jass::japi_add((uintptr_t)EXSetUnitString,        "EXSetUnitString",        "(IIS)B");
+		jass::japi_add((uintptr_t)EXGetUnitReal,          "EXGetUnitReal",          "(II)R");
+		jass::japi_add((uintptr_t)EXSetUnitReal,          "EXSetUnitReal",          "(IIR)B");
+		jass::japi_add((uintptr_t)EXGetUnitInteger,       "EXGetUnitInteger",       "(II)I");
+		jass::japi_add((uintptr_t)EXSetUnitInteger,       "EXSetUnitInteger",       "(III)B");
+		jass::japi_add((uintptr_t)EXGetUnitArrayString,   "EXGetUnitArrayString",   "(III)S");
+		jass::japi_add((uintptr_t)EXSetUnitArrayString,   "EXSetUnitArrayString",   "(IIIS)B");
+		jass::japi_add((uintptr_t)EXPauseUnit,            "EXPauseUnit",            "(Hunit;B)V");
+		jass::japi_add((uintptr_t)EXSetUnitCollisionType, "EXSetUnitCollisionType", "(BHunit;I)V");
+		jass::japi_add((uintptr_t)EXSetUnitMoveType,      "EXSetUnitMoveType",      "(Hunit;I)V");
+		jass::japi_add((uintptr_t)EXSetUnitFacing,        "EXSetUnitFacing",        "(Hunit;R)V");
+		jass::japi_add((uintptr_t)EXGetObject,            "EXGetObject",            "(Hhandle;)I");
+	}
+
+	uint32_t EXGetObject_handler(const uint32_t* a, size_t) {
+		return EXGetObject(a[0]);
+	}
+
 	// Bridge dispatch handlers
 
 	uint32_t EXGetUnitString_handler(const uint32_t* a, size_t) {

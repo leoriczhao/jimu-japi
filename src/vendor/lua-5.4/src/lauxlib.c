@@ -1115,6 +1115,16 @@ LUALIB_API lua_State *luaL_newstate (void) {
 }
 
 
+LUALIB_API lua_State *luaL_newstate2 (unsigned int seed) {
+  lua_State *L = lua_newstate2(l_alloc, NULL, seed);
+  if (l_likely(L)) {
+    lua_atpanic(L, &panic);
+    lua_setwarnf(L, warnfoff, L);  /* default is warnings off */
+  }
+  return L;
+}
+
+
 LUALIB_API void luaL_checkversion_ (lua_State *L, lua_Number ver, size_t sz) {
   lua_Number v = lua_version(L);
   if (sz != LUAL_NUMSIZES)  /* check numeric types */

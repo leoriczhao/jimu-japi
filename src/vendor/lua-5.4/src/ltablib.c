@@ -244,15 +244,10 @@ typedef unsigned int IdxT;
 ** is to copy them to an array of a known type and use the array values.
 */
 static unsigned int l_randomizePivot (void) {
-  clock_t c = clock();
-  time_t t = time(NULL);
-  unsigned int buff[sof(c) + sof(t)];
-  unsigned int i, rnd = 0;
-  memcpy(buff, &c, sof(c) * sizeof(unsigned int));
-  memcpy(buff + sof(c), &t, sof(t) * sizeof(unsigned int));
-  for (i = 0; i < sof(buff); i++)
-    rnd += buff[i];
-  return rnd;
+  /* Deterministic PRNG step for War3 multiplayer lockstep sync (never clock/time). */
+  static unsigned int s_pivot_state = 0x9E3779B9u;
+  s_pivot_state = s_pivot_state * 1664525u + 1013904223u;
+  return s_pivot_state ? s_pivot_state : 1u;
 }
 
 #endif					/* } */

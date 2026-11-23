@@ -96,6 +96,7 @@ D3DSdkApiV1 g_api{};
 bool g_api_checked = false;
 bool g_api_ready = false;
 bool g_shutdown = false;
+HMODULE g_runtime_d3d_module = nullptr;
 uint32_t g_session = 0;
 std::string g_init_error;
 char g_context_registry_key = 0;
@@ -139,14 +140,19 @@ bool initialize_api()
     if (g_api_checked) return g_api_ready && !g_shutdown;
     g_api_checked = true;
 
+    using get_api_fn = bool (D3D_SDK_CALL *)(uint32_t, D3DSdkApiV1*);
     HMODULE proxy = GetModuleHandleA("d3d9.dll");
+    get_api_fn get_api = proxy
+        ? reinterpret_cast<get_api_fn>(GetProcAddress(proxy, "GetD3DSdkApi"))
+        : nullptr;
+    if (!get_api && g_runtime_d3d_module) {
+        proxy = g_runtime_d3d_module;
+        get_api = reinterpret_cast<get_api_fn>(GetProcAddress(proxy, "GetD3DSdkApi"));
+    }
     if (!proxy) {
         g_init_error = "d3d9.dll is not loaded";
         return false;
     }
-
-    using get_api_fn = bool (D3D_SDK_CALL *)(uint32_t, D3DSdkApiV1*);
-    auto get_api = reinterpret_cast<get_api_fn>(GetProcAddress(proxy, "GetD3DSdkApi"));
     if (!get_api) {
         g_init_error = "the loaded d3d9.dll is not the map-inject D3D proxy";
         return false;
@@ -2332,6 +2338,14 @@ int open(lua_State* L)
 #undef SET_KEYBOARD
     lua_setfield(L, -2, "key");
     return 1;
+}
+
+void set_runtime_d3d_module(void* hmod)
+{
+    g_runtime_d3d_module = static_cast<HMODULE>(hmod);
+    if (g_api_checked && !g_api_ready) {
+        g_api_checked = false;
+    }
 }
 
 #undef LUA_INT_METHODS

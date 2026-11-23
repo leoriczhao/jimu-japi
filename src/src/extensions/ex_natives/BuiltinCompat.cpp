@@ -209,18 +209,27 @@ namespace warcraft3::japi {
 		japi_log::sync_write(buf);
 	}
 
+	void set_replace_path_cstr(const char* from, const char* to)
+	{
+		if (!from || !*from) return;
+		if (!to || !*to) {
+			g_replace_path.erase(from);
+			return;
+		}
+		g_replace_path[from] = to;
+
+		char buf[320];
+		snprintf(buf, sizeof(buf), "ReplacePath: \"%s\" -> \"%s\" (%u entries)", from, to,
+		         (unsigned)g_replace_path.size());
+		japi_log::sync_write(buf);
+	}
+
 	void __cdecl ReplacePath(uint32_t from, uint32_t to)
 	{
 		const char* k = jass::from_string((jass::jstring_t)from);
 		const char* v = jass::from_string((jass::jstring_t)to);
 		if (!k || !v) return;
-
-		g_replace_path[k] = v;
-
-		char buf[320];
-		snprintf(buf, sizeof(buf), "ReplacePath: \"%s\" -> \"%s\" (%u entries)", k, v,
-		         (unsigned)g_replace_path.size());
-		japi_log::sync_write(buf);
+		set_replace_path_cstr(k, v);
 	}
 
 	const char* resolve_replace_path(const char* requested)

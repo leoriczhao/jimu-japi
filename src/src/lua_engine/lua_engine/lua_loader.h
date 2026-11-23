@@ -9,6 +9,9 @@ namespace warcraft3::lua_engine::lua_loader {
 	void initialize();
 	lua_State* getMainL();
 	void load_script();
+	void install_lazy_hook();
+	void install_cheat_hook();
+	void install_abilityid_hook();
 	uint32_t LoadScript_bridge(const uint32_t* args, size_t nargs);
 
 	// VM / map lifecycle (builtin-japi's register_game_reset_event).

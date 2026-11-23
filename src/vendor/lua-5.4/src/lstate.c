@@ -357,7 +357,7 @@ LUA_API int lua_resetthread (lua_State *L) {
 }
 
 
-LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
+static lua_State *newstate_impl (lua_Alloc f, void *ud, int has_seed, unsigned int seed) {
   int i;
   lua_State *L;
   global_State *g;
@@ -377,7 +377,7 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
   g->warnf = NULL;
   g->ud_warn = NULL;
   g->mainthread = L;
-  g->seed = luai_makeseed(L);
+  g->seed = has_seed ? seed : luai_makeseed(L);
   g->gcstp = GCSTPGC;  /* no GC while building state */
   g->strt.size = g->strt.nuse = 0;
   g->strt.hash = NULL;
@@ -410,6 +410,16 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
     L = NULL;
   }
   return L;
+}
+
+
+LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
+  return newstate_impl(f, ud, 0, 0);
+}
+
+
+LUA_API lua_State *lua_newstate2 (lua_Alloc f, void *ud, unsigned int seed) {
+  return newstate_impl(f, ud, 1, seed);
 }
 
 

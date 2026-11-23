@@ -72,29 +72,25 @@ namespace warcraft3::lua_engine::lua_loader {
 	{
 		const char* cheat = jass::from_string(cheat_str);
 
-		if (!cheat)
+		if (cheat)
+		{
+			std::string_view mod = parse_exec_lua_cheat(cheat);
+			if (!mod.empty())
+			{
+				lua_State* L = getMainL();
+				if (L)
+				{
+					lua_getglobal(L, "require");
+					lua_pushlstring(L, mod.data(), mod.size());
+					safe_call(L, 1, 0, true);
+				}
+			}
+		}
+
+		if (RealCheat)
 		{
 			base::c_call<uint32_t>(RealCheat, cheat_str);
-			return;
 		}
-
-		std::string_view cheat_s = cheat;
-
-		if (cheat_s.substr(0, 9) == "exec-lua:")
-		{
-			cheat_s = cheat_s.substr(9);
-			base::algorithm::trim(cheat_s);
-			if (cheat_s.size() >= 2 && cheat_s[0] == '"' && cheat_s[cheat_s.size() - 1] == '"')
-			{
-				cheat_s = cheat_s.substr(1, cheat_s.size() - 2);
-			}
-			lua_State* L = getMainL();
-			lua_getglobal(L, "require");
-			lua_pushlstring(L, cheat_s.data(), cheat_s.size());
-			safe_call(L, 1, 1, true);
-		}
-
-		base::c_call<uint32_t>(RealCheat, cheat_str);
 	}
 
 	jass::jstring_t __cdecl EXExecuteScript(jass::jstring_t script)
@@ -231,6 +227,66 @@ namespace warcraft3::lua_engine::lua_loader {
 		}
 		else {
 			DBG_LOG("install_lazy_hook: ExecuteFunc already hooked");
+		}
+	}
+
+	uintptr_t RealAbilityId = 0;
+	uint32_t __cdecl FakeAbilityId(jass::jstring_t name_str)
+	{
+		const char* name = jass::from_string(name_str);
+		if (name)
+		{
+			std::string_view mod = parse_exec_lua_cheat(name);
+			if (!mod.empty())
+			{
+				lua_State* L = getMainL();
+				if (L)
+				{
+					lua_getglobal(L, "require");
+					lua_pushlstring(L, mod.data(), mod.size());
+					safe_call(L, 1, 0, true);
+				}
+			}
+		}
+
+		if (RealAbilityId)
+		{
+			return base::c_call<uint32_t>(RealAbilityId, name_str);
+		}
+		return 0;
+	}
+
+	void install_cheat_hook()
+	{
+		auto* node = warcraft3::get_native_function_hashtable()->find("Cheat");
+		if (!node || !node->func_address_) {
+			DBG_LOG("install_cheat_hook: Cheat not found");
+			return;
+		}
+		if (node->func_address_ != (uint32_t)FakeCheat) {
+			RealCheat = node->func_address_;
+			node->func_address_ = (uint32_t)FakeCheat;
+			DBG_LOG("install_cheat_hook: Cheat hooked");
+		}
+		else {
+			DBG_LOG("install_cheat_hook: Cheat already hooked");
+		}
+	}
+
+	void install_abilityid_hook()
+	{
+		auto* node = warcraft3::get_native_function_hashtable()->find("AbilityId");
+		if (!node || !node->func_address_) {
+			DBG_LOG("install_abilityid_hook: AbilityId not found");
+			return;
+		}
+		if (node->func_address_ != (uint32_t)FakeAbilityId) {
+			RealAbilityId = node->func_address_;
+			node->func_address_ = (uint32_t)FakeAbilityId;
+			DBG_LOG("install_abilityid_hook: AbilityId hooked");
+		}
+		else {
+			DBG_LOG("install_abilityid_hook: AbilityId already hooked");
 		}
 	}
 

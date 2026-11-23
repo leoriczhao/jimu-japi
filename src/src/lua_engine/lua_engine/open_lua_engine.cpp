@@ -27,6 +27,7 @@ namespace warcraft3::lua_engine {
 	namespace mapevent { int open(lua_State* L); }
 	namespace selector { int open(lua_State* L); }
 	namespace ydwe { int open(lua_State* L); }
+	namespace ai { int open(lua_State* L); }
 
 	void register_preload_lib(lua_State* L, const char *name, lua_CFunction f)
 	{
@@ -57,6 +58,7 @@ namespace warcraft3::lua_engine {
 		register_preload_lib(L, "jass.map_event",   mapevent::open);
 		register_preload_lib(L, "jass.selector", selector::open);
 		register_preload_lib(L, "jass.ydwe",    ydwe::open);
+		register_preload_lib(L, "jass.ai",      ai::open);
 
 		// Initialize type metatables
 		jreal::init(L);

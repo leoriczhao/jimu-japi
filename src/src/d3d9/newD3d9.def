@@ -3,3 +3,4 @@ EXPORTS
     Direct3DCreate9
     InitializeD3DAPI
     GetD3DSdkApi
+    AttachInProcessD3D9

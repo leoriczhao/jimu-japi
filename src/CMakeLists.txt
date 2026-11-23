@@ -101,6 +101,7 @@ set(LUA_ENGINE_SOURCES
     src/lua_engine/lua_engine/libs_map_event.cpp
     src/lua_engine/lua_engine/libs_selector.cpp
     src/lua_engine/lua_engine/libs_ydwe.cpp
+    src/lua_engine/lua_engine/libs_ai.cpp
     src/lua_engine/lua_engine/fix_baselib.cpp
     src/lua_engine/lua_engine/bridge_dispatch.cpp
 )
@@ -141,6 +142,7 @@ set(EXT_SOURCES
     src/extensions/ex_natives/DisplayChat.cpp
     src/extensions/ex_natives/GameUI.cpp
     src/extensions/ex_natives/ButtonIcon.cpp
+    src/extensions/ex_natives/StatBar.cpp
     src/stubs.cpp
 )
 
@@ -339,5 +341,28 @@ target_include_directories(d3d_sdk_contract_test PRIVATE
 )
 add_dependencies(d3d_sdk_contract_test newD3d9)
 set_target_properties(d3d_sdk_contract_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+# Offline MPQ require() searcher & exec-lua cheat parser unit test.
+add_executable(mpq_searcher_test
+    tests/mpq_searcher_test.cpp
+    src/lua_engine/lua_engine/fix_baselib.cpp
+)
+target_link_libraries(mpq_searcher_test PRIVATE lua54)
+target_include_directories(mpq_searcher_test PRIVATE
+    "${CMAKE_SOURCE_DIR}/src"
+    "${CMAKE_SOURCE_DIR}/vendor/lua-5.4/src"
+)
+target_compile_definitions(mpq_searcher_test PRIVATE
+    JAPI_MPQ_SEARCHER_STANDALONE
+    WIN32
+    _WINDOWS
+    _CRT_SECURE_NO_WARNINGS
+)
+if(MSVC)
+    target_compile_options(mpq_searcher_test PRIVATE /W3 /EHsc)
+endif()
+set_target_properties(mpq_searcher_test PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )

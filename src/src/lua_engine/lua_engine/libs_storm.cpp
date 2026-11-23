@@ -21,6 +21,11 @@
 #include "storm.h"
 #include "debug_log.h"
 
+namespace warcraft3::japi {
+	void set_replace_path_cstr(const char* from, const char* to);
+	void clear_builtin_compat_map_state();
+}
+
 namespace warcraft3::lua_engine::storm {
 
 	namespace {
@@ -181,6 +186,23 @@ namespace warcraft3::lua_engine::storm {
 		return 1;
 	}
 
+	// storm.replace_path(from, to) -> boolean (routes through Storm#279 virtual MPQ detour)
+	static int storm_replace_path(lua_State* L)
+	{
+		const char* from = luaL_checkstring(L, 1);
+		const char* to   = luaL_checkstring(L, 2);
+		warcraft3::japi::set_replace_path_cstr(from, to);
+		lua_pushboolean(L, 1);
+		return 1;
+	}
+
+	// storm.clear_replace_paths()
+	static int storm_clear_replace_paths(lua_State* /*L*/)
+	{
+		warcraft3::japi::clear_builtin_compat_map_state();
+		return 0;
+	}
+
 	int open(lua_State* L)
 	{
 		lua_newtable(L);
@@ -195,6 +217,14 @@ namespace warcraft3::lua_engine::storm {
 
 		lua_pushstring(L, "save");
 		lua_pushcfunction(L, storm_save);
+		lua_rawset(L, -3);
+
+		lua_pushstring(L, "replace_path");
+		lua_pushcfunction(L, storm_replace_path);
+		lua_rawset(L, -3);
+
+		lua_pushstring(L, "clear_replace_paths");
+		lua_pushcfunction(L, storm_clear_replace_paths);
 		lua_rawset(L, -3);
 
 		return 1;

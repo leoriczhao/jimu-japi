@@ -21,6 +21,7 @@
 #include "../lua_engine/lua_engine/bridge_dispatch.h"
 #include "../lua_engine/lua_engine/storm.h"
 #include "../lua_engine/lua_engine/libs_map_event.h"
+#include "../lua_engine/lua_engine/libs_d3d.h"
 #include <base/hook/fp_call.h>
 #include "debug_log.h"
 #include "compat_mode.h"
@@ -32,6 +33,8 @@ namespace warcraft3::lua_engine::lua_loader {
     void initialize();
     void load_script();
     void install_lazy_hook();
+    void install_cheat_hook();
+    void install_abilityid_hook();
 }
 namespace warcraft3::lua_engine::message {
     void register_bridge_natives();
@@ -45,6 +48,7 @@ namespace warcraft3::japi {
     void clear_func_bind();
     void clear_button_icons();
     void clear_builtin_compat_map_state();
+    void clear_stat_bar_map_state();
 }
 namespace warcraft3::lua_engine::bridge {
     typedef uint32_t (*cpp_handler_fn)(const uint32_t* args, size_t nargs);
@@ -214,6 +218,14 @@ typedef void (__cdecl *initialize_d3d_fn)(
     uint32_t (*)(const char*),
     bool (*)(uint32_t, float*, float*, float*, float*),
     uint32_t (*)(float, float, float, float));
+
+typedef uintptr_t (__cdecl *d3d_inline_hook_fn)(uintptr_t target, uintptr_t detour);
+typedef bool (__cdecl *attach_inproc_d3d_fn)(d3d_inline_hook_fn install_hook);
+
+static uintptr_t __cdecl d3d_inline_hook_bridge(uintptr_t target, uintptr_t detour)
+{
+    return warcraft3::jass::inline_hook_install(target, detour);
+}
 
 // ── D3D proxy staging ────────────────────────────────────────────────────
 // The renderer is a d3d9.dll replacement, so it only binds when the game loads
@@ -409,20 +421,90 @@ static void stage_d3d_proxy_from_map()
     }
 }
 
+static HMODULE try_attach_inprocess_d3d9()
+{
+    std::string blob;
+    if (!read_embedded_resource("JAPI_D3D9_DLL", blob) &&
+        !read_map_file("d3d9.tga", blob)) {
+        return nullptr;
+    }
+
+    char fname[64];
+    snprintf(fname, sizeof(fname), "japi_d3d9_%lu.dll", (unsigned long)GetCurrentProcessId());
+
+    std::string path;
+    std::string dir = game_directory();
+    if (!dir.empty()) {
+        std::string candidate = dir + "\\" + fname;
+        if (write_whole_file(candidate.c_str(), blob.data(), blob.size())) {
+            path = candidate;
+        }
+    }
+    if (path.empty()) {
+        char tmp[MAX_PATH] = {0};
+        if (GetTempPathA(MAX_PATH, tmp) > 0) {
+            std::string candidate = std::string(tmp) + fname;
+            if (write_whole_file(candidate.c_str(), blob.data(), blob.size())) {
+                path = candidate;
+            }
+        }
+    }
+    if (path.empty()) {
+        japi_log::sync_write("D3D: in-process attach failed to write runtime module");
+        return nullptr;
+    }
+
+    HMODULE mod = LoadLibraryA(path.c_str());
+    if (!mod) {
+        char buf[MAX_PATH + 96];
+        snprintf(buf, sizeof(buf), "D3D: LoadLibraryA(%s) failed (err=%lu)",
+                 path.c_str(), (unsigned long)GetLastError());
+        japi_log::sync_write(buf);
+        return nullptr;
+    }
+
+    auto attach = reinterpret_cast<attach_inproc_d3d_fn>(
+        GetProcAddress(mod, "AttachInProcessD3D9"));
+    if (!attach || !attach(&d3d_inline_hook_bridge)) {
+        japi_log::sync_write("D3D: AttachInProcessD3D9 returned false; unloading runtime module");
+        FreeLibrary(mod);
+        return nullptr;
+    }
+
+    warcraft3::lua_engine::d3d::set_runtime_d3d_module(mod);
+    char buf[MAX_PATH + 96];
+    snprintf(buf, sizeof(buf), "D3D: zero-restart in-process D3D9 attach DONE (%s)", path.c_str());
+    japi_log::sync_write(buf);
+    return mod;
+}
+
 static bool initialize_d3d_api()
 {
     HMODULE d3d = GetModuleHandleA("d3d9.dll");
     auto init = d3d ? reinterpret_cast<initialize_d3d_fn>(
                           GetProcAddress(d3d, "InitializeD3DAPI"))
                     : nullptr;
+    HMODULE api_mod = d3d;
+
     if (!init) {
-        // This session runs without the project proxy. If the map carries one,
-        // put it in place for the next launch before reporting the limitation.
+        // Stage d3d9.dll + D3DX9_42.dll next to war3.exe (never clobbers a foreign d3d9.dll).
         stage_d3d_proxy_from_map();
-        japi_log::sync_write(d3d
-            ? "D3D: loaded d3d9.dll is not the project proxy; D3D handlers unavailable"
-            : "D3D: d3d9.dll is not loaded; D3D handlers unavailable");
-        return false;
+
+        // Zero-restart activation: if War3 is running in D3D9 mode (d3d9.dll loaded),
+        // extract our embedded newD3d9.dll as japi_d3d9_<pid>.dll and inline-hook the
+        // live IDirect3DDevice9 Reset/EndScene so D3D works immediately on first launch.
+        if (d3d) {
+            api_mod = try_attach_inprocess_d3d9();
+            init = api_mod ? reinterpret_cast<initialize_d3d_fn>(
+                                 GetProcAddress(api_mod, "InitializeD3DAPI"))
+                           : nullptr;
+        }
+        if (!init) {
+            japi_log::sync_write(d3d
+                ? "D3D: loaded d3d9.dll is not the project proxy and in-process attach failed; D3D handlers unavailable"
+                : "D3D: d3d9.dll is not loaded (-opengl?); D3D handlers unavailable");
+            return false;
+        }
     }
 
     init(
@@ -433,7 +515,7 @@ static bool initialize_d3d_api()
         &create_rect_handle);
 
     char module_path[MAX_PATH] = {0};
-    GetModuleFileNameA(d3d, module_path, MAX_PATH);
+    GetModuleFileNameA(api_mod, module_path, MAX_PATH);
     char buf[MAX_PATH + 64];
     snprintf(buf, sizeof(buf), "D3D: InitializeD3DAPI DONE (%s)", module_path);
     japi_log::sync_write(buf);
@@ -507,6 +589,87 @@ static void install_map_event_hook()
 
     char buf[128];
     snprintf(buf, sizeof(buf), "MapEvent: EndGame hooked (real=0x%08X)", (uint32_t)g_real_endgame);
+    SYNC_LOG(buf);
+}
+
+// Map event bus: "brokenNetwork" (builtin-japi jass.dll 0x10036F40..0x10036F6B).
+// In Game.dll 1.27a, CNetEventConnect's dispatcher switches via
+//   FF 24 8D <jt>   (jmp dword ptr [ecx*4 + jt])
+// located 0x2D bytes before the "CNetEventConnect" string push operand.
+// Switch entry jt + 0x88 (case 34) handles network disconnect; we replace that
+// jump-table slot with a naked stub that preserves all registers/flags, emits
+// "brokenNetwork" to jass.map_event, and jumps to the original case label.
+static uintptr_t g_real_broken_network = 0;
+
+static void __cdecl emit_broken_network_event()
+{
+    warcraft3::lua_engine::mapevent::emit("brokenNetwork");
+}
+
+static __declspec(naked) void broken_network_stub()
+{
+    __asm {
+        pushad
+        pushfd
+        call emit_broken_network_event
+        popfd
+        popad
+        jmp dword ptr [g_real_broken_network]
+    }
+}
+
+static void install_broken_network_hook()
+{
+    if (g_real_broken_network) return;
+
+    auto& searcher = warcraft3::get_war3_searcher();
+    uintptr_t ref = searcher.search_string("CNetEventConnect");
+    if (!ref) {
+        SYNC_LOG("MapEvent: CNetEventConnect string ref not found");
+        return;
+    }
+
+    uintptr_t base = searcher.base();
+    size_t size = searcher.size();
+    uintptr_t jt = 0;
+    uintptr_t target = 0;
+    bool sig_ok = false;
+
+    __try {
+        const uint8_t* jmp_op = reinterpret_cast<const uint8_t*>(ref - 0x30);
+        if (jmp_op[0] == 0xFF && jmp_op[1] == 0x24 && jmp_op[2] == 0x8D) {
+            jt = *reinterpret_cast<const uintptr_t*>(ref - 0x2D);
+            if (jt >= base && jt + 0x8C <= base + size) {
+                target = *reinterpret_cast<const uintptr_t*>(jt + 0x88);
+                if (target >= base && target < base + size) {
+                    sig_ok = true;
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        sig_ok = false;
+    }
+
+    if (!sig_ok) {
+        SYNC_LOG("MapEvent: CNetEventConnect jump-table signature mismatch");
+        return;
+    }
+
+    uintptr_t* slot = reinterpret_cast<uintptr_t*>(jt + 0x88);
+    DWORD old_prot = 0;
+    if (!VirtualProtect(slot, sizeof(uintptr_t), PAGE_READWRITE, &old_prot)) {
+        SYNC_LOG("MapEvent: VirtualProtect failed on brokenNetwork slot");
+        return;
+    }
+    g_real_broken_network = target;
+    *slot = reinterpret_cast<uintptr_t>(&broken_network_stub);
+    FlushInstructionCache(GetCurrentProcess(), slot, sizeof(uintptr_t));
+    VirtualProtect(slot, sizeof(uintptr_t), old_prot, &old_prot);
+
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+             "MapEvent: brokenNetwork hooked (jt=0x%08X slot=0x%08X real=0x%08X)",
+             (uint32_t)jt, (uint32_t)(jt + 0x88), (uint32_t)g_real_broken_network);
     SYNC_LOG(buf);
 }
 
@@ -607,9 +770,15 @@ static void sweep_stale_pid_dlls()
     int removed = 0;
     do {
         const char* name = fd.cFileName;
-        // Our own drops are japi<pid>.dll (a bare <pid>.dll would collide with
-        // another JAPI's loader); older drops used the bare form, clean both.
-        const char* digits = (_strnicmp(name, "japi", 4) == 0) ? name + 4 : name;
+        // Our own drops are japi<pid>.dll and japi_d3d9_<pid>.dll (a bare
+        // <pid>.dll would collide with another JAPI's loader); older drops used
+        // the bare form, clean all three patterns.
+        const char* digits = name;
+        if (_strnicmp(name, "japi_d3d9_", 10) == 0) {
+            digits = name + 10;
+        } else if (_strnicmp(name, "japi", 4) == 0) {
+            digits = name + 4;
+        }
         char* end = nullptr;
         long pid = strtol(digits, &end, 10);
         if (!end || _stricmp(end, ".dll") != 0 || pid <= 0) continue;
@@ -660,6 +829,7 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
         warcraft3::japi::clear_func_bind();
         warcraft3::japi::clear_button_icons();
         warcraft3::japi::clear_builtin_compat_map_state();
+        warcraft3::japi::clear_stat_bar_map_state();
 
         reassert_inline_hooks("Step 0");
     }
@@ -669,6 +839,21 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
     // The native table is rebuilt by the game on every map, so this runs again.
     warcraft3::lua_engine::lua_loader::install_lazy_hook();
     SYNC_LOG("Step 1: lazy ExecuteFunc hook DONE");
+
+    // Step 1b: Hook Cheat("exec-lua:<module>") and AbilityId("exec-lua:<module>")
+    // for YDWE / Solar / builtin-japi entry points. Only stand down when a
+    // foreign Lua engine (yd_lua_engine.dll / lua_engine.dll) is loaded so it
+    // doesn't double-execute; yd_jass_api.dll alone does not handle exec-lua:.
+    const bool foreign_lua_engine =
+        GetModuleHandleA("yd_lua_engine.dll") != nullptr ||
+        GetModuleHandleA("lua_engine.dll") != nullptr;
+    if (!foreign_lua_engine) {
+        warcraft3::lua_engine::lua_loader::install_cheat_hook();
+        warcraft3::lua_engine::lua_loader::install_abilityid_hook();
+        SYNC_LOG("Step 1b: Cheat + AbilityId exec-lua hooks DONE");
+    } else {
+        SYNC_LOG("Step 1b: foreign Lua engine loaded; Cheat/AbilityId exec-lua hooks skipped");
+    }
 
     // Step 2: Register EX* natives. jass::japi_add only appends to the add list,
     // so re-running is idempotent; the damage hook inside targets game code and
@@ -701,9 +886,17 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
     warcraft3::jass::nf_register::flush_add_only();
     SYNC_LOG("Step 3: flush_add_only DONE");
 
-    // Map event bus (builtin's "endGame"): the native table is ready here, and
-    // it is rebuilt per map, so the hook goes in on every boot.
-    if (!warcraft3::japi::coexistence_mode()) install_map_event_hook();
+    // Map event bus (builtin's "endGame" + "brokenNetwork"): EndGame lives in
+    // the per-map native table (re-hooked on every boot when not in coexistence);
+    // brokenNetwork patches Game.dll's CNetEventConnect jump table once per
+    // process (only skipped if builtin-japi's jass.dll is present, and always
+    // verifies the slot still points inside Game.dll before patching).
+    if (!warcraft3::japi::coexistence_mode()) {
+        install_map_event_hook();
+    }
+    if (!GetModuleHandleA("jass.dll")) {
+        install_broken_network_hook();
+    }
 
     // Step 4: Hook UnitId with an inline hook (builtin-japi's jass.dll mechanism).
     // Fall back to linked-list editing (callback's CreateJassNativeHook) if the
@@ -784,6 +977,7 @@ extern "C" __declspec(dllexport) void __cdecl Initialize()
             warcraft3::japi::clear_func_bind();
             warcraft3::japi::clear_button_icons();
             warcraft3::japi::clear_builtin_compat_map_state();
+            warcraft3::japi::clear_stat_bar_map_state();
             reassert_inline_hooks("SimulateMapBoot");
             warcraft3::lua_engine::lua_loader::load_script_file("script\\reboot_child.lua");
             SYNC_LOG("SimulateMapBoot: done");

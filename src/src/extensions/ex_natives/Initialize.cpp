@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <cstdint>
 #include <warcraft3/jass.h>
+#include "StatBar.h"
 
 // Forward declaration for bridge dispatch registration
 namespace warcraft3::lua_engine::bridge {
@@ -32,6 +33,7 @@ namespace warcraft3::japi {
 	uint32_t EXSetUnitCollisionType_handler(const uint32_t* args, size_t nargs);
 	uint32_t EXSetUnitMoveType_handler(const uint32_t* args, size_t nargs);
 	uint32_t EXSetUnitFacing_handler(const uint32_t* args, size_t nargs);
+	uint32_t EXGetObject_handler(const uint32_t* args, size_t nargs);
 	uint32_t EXDclareButtonIcon_handler(const uint32_t* args, size_t nargs);
 	uint32_t EXBlendButtonIcon_handler(const uint32_t* args, size_t nargs);
 
@@ -108,8 +110,9 @@ uint32_t EXSetAbilityString_handler(const uint32_t* args, size_t nargs);
 	//
 	// jass.japi prefers the bridge handler (libs_japi.cpp japi_index), so adding
 	// the native cannot change what Lua sees.
-	void InitializeUnitState();   // hooks the GetUnitState/SetUnitState native names
-	void InitializeGameUiExtra(); // GetBigMapX/Y, SetBigMapX/Y, GetConsoleUIX/Y, SetConsoleUIX/Y
+	void InitializeUnitState();        // hooks the GetUnitState/SetUnitState native names
+	void InitializeUnitStateNatives(); // registers 13 EX*Unit* + EXGetObject real JASS natives
+	void InitializeGameUiExtra();      // GetBigMapX/Y, SetBigMapX/Y, GetConsoleUIX/Y, SetConsoleUIX/Y
 	void InitializeBuiltinCompat(); // timer_start/end/destroy, ReplacePath, gold/teleport aliases, save disable
 	void InitializeButtonIcon();  // EXDclareButtonIcon, EXBlendButtonIcon
 	void InitializeAbilityState();
@@ -121,6 +124,7 @@ uint32_t EXSetAbilityString_handler(const uint32_t* args, size_t nargs);
 
 	static void register_real_ex_natives()
 	{
+		InitializeUnitStateNatives(); // 13 unit state natives (EXGetUnitString … EXGetObject)
 		InitializeButtonIcon();       //  2 button icon natives (EXDclareButtonIcon, EXBlendButtonIcon)
 		InitializeAbilityState();     // 16 ability natives (EXGetUnitAbility …)
 		InitializeEffect();           // 13 effect natives (EXSetEffectXY …)
@@ -128,6 +132,7 @@ uint32_t EXSetAbilityString_handler(const uint32_t* args, size_t nargs);
 		InitializeEventDamageData();  //  2 damage natives (EXGetEventDamageData, EXSetEventDamage)
 		InitializeGameInfo();         //  4 game info natives (GetMapName/GetGameVersion/GetPluginVersion/Hex)
 		InitializeDisplayChat();      //  1 display native (EXDisplayChat)
+		InitializeStatBar();          // 16 native overhead HP/MP bar natives
 		// InitializeCodeRunLogs() stays empty: open_code_run_logs is a plugin
 		// lifecycle entry point reached through the bridge, never a map-facing native.
 	}
@@ -152,6 +157,7 @@ uint32_t EXSetAbilityString_handler(const uint32_t* args, size_t nargs);
 		register_cpp_handler("EXSetUnitCollisionType", "(BII)V", EXSetUnitCollisionType_handler);
 		register_cpp_handler("EXSetUnitMoveType",      "(II)V",  EXSetUnitMoveType_handler);
 		register_cpp_handler("EXSetUnitFacing",        "(IR)V",  EXSetUnitFacing_handler);
+		register_cpp_handler("EXGetObject",            "(Hhandle;)I", EXGetObject_handler);
 
 		// Historical YDWE command-button icon API. The names (including the
 		// "Dclare" typo) are part of the map contract. They perform real BLP
@@ -221,6 +227,24 @@ uint32_t EXSetAbilityString_handler(const uint32_t* args, size_t nargs);
 		register_cpp_handler("SetLittleMapX",          "(R)V",   SetLittleMapX_handler);
 		register_cpp_handler("GetLittleMapY",          "()R",    GetLittleMapY_handler);
 		register_cpp_handler("SetLittleMapY",          "(R)V",   SetLittleMapY_handler);
+
+		// Native overhead HP/MP bar customization (1.27a CStatBar vtable hooks)
+		register_cpp_handler("EXSetManaBarEnabled",     "(B)V",       EXSetManaBarEnabled_handler);
+		register_cpp_handler("EXGetManaBarEnabled",     "()B",        EXGetManaBarEnabled_handler);
+		register_cpp_handler("EXSetManaBarColor",       "(I)V",       EXSetManaBarColor_handler);
+		register_cpp_handler("EXSetManaBarHeight",      "(R)V",       EXSetManaBarHeight_handler);
+		register_cpp_handler("EXSetManaBarOffsetY",     "(R)V",       EXSetManaBarOffsetY_handler);
+		register_cpp_handler("EXSetUnitManaBarColor",   "(Hunit;I)V", EXSetUnitManaBarColor_handler);
+		register_cpp_handler("EXSetUnitManaBarVisible", "(Hunit;B)V", EXSetUnitManaBarVisible_handler);
+		register_cpp_handler("EXSetUnitHPBarColor",     "(Hunit;I)V", EXSetUnitHPBarColor_handler);
+		register_cpp_handler("EXSetUnitHPBarScale",     "(Hunit;RR)V",EXSetUnitHPBarScale_handler);
+		register_cpp_handler("EXSetUnitHPBarVisible",   "(Hunit;B)V", EXSetUnitHPBarVisible_handler);
+		register_cpp_handler("EXSetUnitTypeHPBarStyle", "(IIRR)V",    EXSetUnitTypeHPBarStyle_handler);
+		register_cpp_handler("EXSetPlayerHPBarColor",   "(II)V",      EXSetPlayerHPBarColor_handler);
+		register_cpp_handler("EXResetUnitHPBar",        "(Hunit;)V",  EXResetUnitHPBar_handler);
+		register_cpp_handler("EXResetAllStatBars",      "()V",        EXResetAllStatBars_handler);
+		register_cpp_handler("EXSetOffscreenBarCull",   "(B)V",       EXSetOffscreenBarCull_handler);
+		register_cpp_handler("EXGetOffscreenBarCull",   "()B",        EXGetOffscreenBarCull_handler);
 
 		// P3-E1: publish the same surface as real JASS natives. japi_add only
 		// queues the entry; dllmain Step 3 flushes the queue into the current
