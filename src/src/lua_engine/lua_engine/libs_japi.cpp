@@ -55,12 +55,19 @@ namespace warcraft3::lua_engine::japi {
 		// Lua on it. Maps written for YDWE call these as
 		// `jass.japi.EXSetAbilityDataReal(...)`.
 		if (bridge::push_cpp_handler(L, name)) {
+			// Cache directly on jass.japi so hot calls avoid __index & CClosure allocs.
+			lua_pushvalue(L, 2);
+			lua_pushvalue(L, -2);
+			lua_rawset(L, 1);
 			return 1;
 		}
 		jass::func_value const* nf = jass::japi_func(name);
 		if (nf) {
 			lua_pushinteger(L, (uint32_t)(uintptr_t)nf);
 			lua_pushcclosure(L, jass_call_closure, 1);
+			lua_pushvalue(L, 2);
+			lua_pushvalue(L, -2);
+			lua_rawset(L, 1);
 			return 1;
 		}
 		lua_pushnil(L);
@@ -110,6 +117,10 @@ namespace warcraft3::lua_engine::japi {
 		// The native table entry above serves Lua-side japi.Name() calls; this
 		// one serves precompiled JASS wrappers that call UnitId("Name").
 		bridge::register_handler(L, name, def, 4);
+		// Invalidate any cached entry on the jass.japi module table (arg 1).
+		lua_pushvalue(L, 2);
+		lua_pushnil(L);
+		lua_rawset(L, 1);
 		return 0;
 	}
 

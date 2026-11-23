@@ -8,7 +8,7 @@
 | 项目 | 值 |
 |---|---|
 | 适用游戏版本 | Warcraft III 1.27a（Windows） |
-| SDK 版本 | 0.5.0（jass.d3d.version()；钉在 src/src/lua_engine/lua_engine/libs_d3d.cpp:35） |
+| SDK 版本 | 0.6.0（jass.d3d.version()；钉在 src/src/lua_engine/lua_engine/libs_d3d.cpp:35） |
 | 本文档日期 | 2026-11-16 |
 | 验证状态 | 配方 1-12 的 API 全部来自已发布的模块源码；配方 1 与 3/4/5/7 的调用形态在实机回归中覆盖（默认套件 Results: 122 passed, 0 failed, 122 total） |
 | 参考的实机证据 | docs/STATUS.md（2026-11-16）、map/game/demo.lua（垂直切片 11/11）、map/tests/test_suite.lua |
@@ -661,17 +661,17 @@ globals.udg_lua_japi_alive = 1; print(string.format('[gate] japi alive flag = %s
 local d3d = require "jass.d3d"
 local sdk = d3d.version()
 print(string.format('[gate] SDK %s, d3d available = %s', sdk, tostring(d3d.is_available())))
-if sdk ~= '0.5.0' then
-    print('[gate] SDK version mismatch: expected 0.5.0')
+if sdk ~= '0.6.0' then
+    print('[gate] SDK version mismatch: expected 0.6.0')
 end
 ```
 
-**验证方式**：日志里出现 `[gate] war3map.w3i = <N> bytes`、`[gate] SDK 0.5.0, d3d available = true/false`；版本不符时出现 `SDK version mismatch` 行。
+**验证方式**：日志里出现 `[gate] war3map.w3i = <N> bytes`、`[gate] SDK 0.6.0, d3d available = true/false`；版本不符时出现 `SDK version mismatch` 行。
 
 | 坑 | 说明 |
 |---|---|
 | 以为 storm 能写文件 | `storm.load()` 读 MPQ、`storm.replace_path()` 做运行时路径重定向；不能修改只读 `.w3x`。 |
-| 拿 d3d 版本来判断可用性 | `d3d.version()` 是常量，没有 D3D9 也返回 0.5.0；可用性看 `d3d.is_available()`。 |
+| 拿 d3d 版本来判断可用性 | `d3d.version()` 是常量，没有 D3D9 也返回 0.6.0；可用性看 `d3d.is_available()`。 |
 | 用 globals 存大数组 | 数组全局必须在 JASS 里声明且被预分配（`tools/pack.ps1` 的 `JapiForceAllocArrays`，每数组 32KB）；整数组赋值会被忽略并写日志，只能逐元素写。 |
 | **在脚本加载期读写数组** | 加载期 `#arr == 0`、元素读 `nil`、写被静默丢弃（同一时刻标量正常），1.0 秒后才恢复；数组 I/O 要放进一次性 `TimerStart(timer, 1.0, false, ...)`，时序表见 [SDK-GUIDE.md](SDK-GUIDE.md) 第 2 节的「时序」小节 |
 | 字符串数组槽没写过就读 | 开局后也返回 `nil`（JASS 空字符串，不是 `""`），所以要先写后读 |

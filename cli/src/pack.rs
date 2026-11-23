@@ -1,6 +1,6 @@
 use crate::config::{load_project_config, resolve_abs, JapiEnv};
 use crate::jass_patcher::{patch_war3map_j, run_pjass_check, JassPatchOptions};
-use crate::lua_bundler::{bundle_lua_dir, load_engine_modules, BundleFlags};
+use crate::lua_bundler::{bundle_lua_dir_with_std, load_engine_modules, BundleFlags};
 use crate::we_compat;
 use anyhow::{bail, Context, Result};
 use std::fs;
@@ -204,8 +204,15 @@ pub fn run_pack(env: &JapiEnv, args: &PackArgs) -> Result<PackOutcome> {
         demo: args.demo,
         test_reboot: args.test_reboot,
     };
-    let report = bundle_lua_dir(
+    let std_dir = env.root.join("std");
+    let std_opt = if std_dir.is_dir() {
+        Some(std_dir.as_path())
+    } else {
+        None
+    };
+    let report = bundle_lua_dir_with_std(
         &map_dir,
+        std_opt,
         "war3map",
         &engine_modules,
         &flags,
@@ -220,8 +227,9 @@ pub fn run_pack(env: &JapiEnv, args: &PackArgs) -> Result<PackOutcome> {
 
     if args.test_reboot {
         println!("  [2b] Bundle reboot child script");
-        let child = bundle_lua_dir(
+        let child = bundle_lua_dir_with_std(
             &map_dir,
+            std_opt,
             "tests.reboot_child",
             &engine_modules,
             &BundleFlags::default(),

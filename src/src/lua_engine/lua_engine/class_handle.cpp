@@ -36,6 +36,7 @@ namespace warcraft3::lua_engine {
 	}
 
 #define LUA_JASS_HANDLE "jhandle_t"
+static char kHandleUdMtKey = 0;
 
 	void jhandle_ud_push(lua_State* L, jass::jhandle_t value)
 	{
@@ -45,19 +46,17 @@ namespace warcraft3::lua_engine {
 		}
 
 		runtime::handle_ud_get_table(L);
-		lua_pushinteger(L, value);
-		lua_rawget(L, -2);
-		if (lua_isnil(L, -1))
+		if (lua_rawgeti(L, -1, (lua_Integer)value) == LUA_TNIL)
 		{
 			lua_pop(L, 1);
 			jass::jhandle_t* hptr = (jass::jhandle_t*)lua_newuserdata(L, sizeof(jass::jhandle_t));
 			*hptr = value;
 			jass::handle_ref(value);
-			luaL_setmetatable(L, LUA_JASS_HANDLE);
+			lua_rawgetp(L, LUA_REGISTRYINDEX, &kHandleUdMtKey);
+			lua_setmetatable(L, -2);
 
-			lua_pushinteger(L, value);
-			lua_pushvalue(L, -2);
-			lua_rawset(L, -4);
+			lua_pushvalue(L, -1);
+			lua_rawseti(L, -3, (lua_Integer)value);
 		}
 
 		lua_remove(L, -2);
@@ -68,9 +67,21 @@ namespace warcraft3::lua_engine {
 	{
 		if (lua_isnil(L, index))
 		{
-			return 0; 
+			return 0;
 		}
-		
+
+		void* p = lua_touserdata(L, index);
+		if (p && lua_getmetatable(L, index))
+		{
+			lua_rawgetp(L, LUA_REGISTRYINDEX, &kHandleUdMtKey);
+			const bool ok = lua_rawequal(L, -1, -2) != 0;
+			lua_pop(L, 2);
+			if (ok)
+			{
+				return *static_cast<jass::jhandle_t*>(p);
+			}
+		}
+
 		jass::jhandle_t* hptr = (jass::jhandle_t*)luaL_checkudata(L, index, LUA_JASS_HANDLE);
 		return *hptr;
 	}
@@ -92,9 +103,9 @@ namespace warcraft3::lua_engine {
 	{
 		jass::jhandle_t h = jhandle_ud_read(L, 1);
 		runtime::handle_ud_get_table(L);
-		lua_pushinteger(L, h);
 		lua_pushnil(L);
-		lua_rawset(L, -3);
+		lua_rawseti(L, -2, (lua_Integer)h);
+		lua_pop(L, 1);
 
 		jass::handle_unref(h);
 		return 0;
@@ -111,6 +122,8 @@ namespace warcraft3::lua_engine {
 
 		luaL_newmetatable(L, LUA_JASS_HANDLE);
 		luaL_setfuncs(L, lib, 0);
+		lua_pushvalue(L, -1);
+		lua_rawsetp(L, LUA_REGISTRYINDEX, &kHandleUdMtKey);
 		lua_pop(L, 1);
 	}
 

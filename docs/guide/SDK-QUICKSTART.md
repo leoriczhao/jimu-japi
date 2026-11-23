@@ -8,7 +8,7 @@
 | 项目 | 值 |
 |---|---|
 | 适用游戏版本 | Warcraft III 1.27a（Windows，单实例） |
-| SDK 版本 | 0.5.0（`jass.d3d.version()`） |
+| SDK 版本 | 0.6.0（`jass.d3d.version()`） |
 | 本文档日期 | 2026-11-16 |
 | 验证状态 | 本文 §1-§5 的命令链 2026-11-16 在本机实机跑通：打包 exit 0，游戏内日志 `Results: 3 passed, 0 failed, 3 total`；DLL SHA-256 `87C83BA1CE0E6E413CEA7B9D6018E9A289259EC9C2F01EE02E7827DAF6661908`（547328 字节，HEAD 498a308） |
 | 更深的内容 | 模块语义看 [SDK-GUIDE.md](SDK-GUIDE.md)，常见任务看 [SDK-COOKBOOK.md](SDK-COOKBOOK.md) |
@@ -142,9 +142,9 @@ after(1.0, function()
     print(" hello-sdk / japi SDK")
     print("========================================")
 
-    check("SDK 版本是 0.5.0", function()
+    check("SDK 版本是 0.6.0", function()
         local v = d3d.version()
-        assert(v == "0.5.0", "got " .. tostring(v))
+        assert(v == "0.6.0", "got " .. tostring(v))
     end)
 
     check("jass.common 能调到 JASS native", function()
@@ -251,7 +251,7 @@ Get-Process war3 -ErrorAction SilentlyContinue   # 再确认一次：必须为�
 ========================================
  hello-sdk / japi SDK
 ========================================
-  [PASS] SDK 版本是 0.5.0
+  [PASS] SDK 版本是 0.6.0
   [PASS] jass.common 能调到 JASS native
   [PASS] jass.call 与 jass.X 等价
  Results: 3 passed, 0 failed, 3 total
@@ -287,7 +287,7 @@ Get-Content C:\ProgramData\japi_debug.txt -Encoding UTF8
 把 `war3map.lua` 里第一条断言故意改坏：
 
 ```lua
-    check("SDK 版本是 0.5.0", function()
+    check("SDK 版本是 0.6.0", function()
         local v = d3d.version()
         assert(v == "9.9.9", "got " .. tostring(v))   -- 故意写错的版本
     end)
@@ -296,7 +296,7 @@ Get-Content C:\ProgramData\japi_debug.txt -Encoding UTF8
 重新跑一遍 §4，日志应该变成：
 
 ```text
-  [FAIL] SDK 版本是 0.5.0 : ...: got 0.5.0
+  [FAIL] SDK 版本是 0.6.0 : ...: got 0.6.0
  Results: 2 passed, 1 failed, 3 total
 ```
 

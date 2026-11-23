@@ -81,6 +81,10 @@ export function runUiOfflineSuite(): void {
   runChecked(W2L_LUA, ['-E', path.join(ROOT, 'tests', 'ui', 'run_suite.lua'), ROOT]);
 }
 
+export function runStdOfflineSuite(): void {
+  runChecked(W2L_LUA, ['-E', path.join(ROOT, 'tests', 'std', 'run.lua'), ROOT]);
+}
+
 export function runSelectorOfflineSuite(): void {
   runChecked(W2L_LUA, ['-E', path.join(ROOT, 'tests', 'selector', 'run.lua')], { cwd: ROOT });
   console.log('SELECTOR OFFLINE: passed; no War3 process, map loader or pack step was started.');

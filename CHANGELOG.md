@@ -4,7 +4,7 @@
 > 版本号唯一来源：`src/src/lua_engine/lua_engine/libs_d3d.cpp:35` 的 `constexpr const char* kVersion`；
 > 只有 **Lua 侧 `jass.d3d` 对外 API 变化**时才递增，工具链 / 文档 / 示例 / 脚手架改动一律不递增。
 > 发布流程见 [docs/RELEASE.md](docs/RELEASE.md)；当前实现、验证强度与缺口以 [docs/STATUS.md](docs/STATUS.md) 为唯一权威。
-> 最后更新：2026-11-23（发布 `0.5.0`）。
+> 最后更新：2026-11-24（发布 `0.6.0`）。
 
 约定：
 
@@ -18,7 +18,8 @@
 
 | 版本 | 时间 | 锚点提交 | 状态 | 一句话 |
 |---|---|---|---|---|
-| `0.5.0` | 2026-11-23 | `HEAD` | **已发布**（clean 构建可溯源） | 单文件 `japi.tga`、Rust `japi.exe` CLI、原生 1.27a `CStatBar` 血蓝条、YDWE/内置 JAPI 1.27a 全量对齐、纯净开发者 SDK 包 |
+| `0.6.0` | 2026-11-24 | `HEAD` | **已发布**（clean 构建可溯源） | C++↔Lua 零堆分配热路径优化 + 自动 Tree-Shaking `std.*` 标准库 + 通用响应式 `DzFrame` UI 框架 |
+| `0.5.0` | 2026-11-23 | `632ffac` | **已发布**（clean 构建可溯源） | 单文件 `japi.tga`、Rust `japi.exe` CLI、原生 1.27a `CStatBar` 血蓝条、YDWE/内置 JAPI 1.27a 全量对齐、纯净开发者 SDK 包 |
 | `0.4.0` | 2026-11-15 | `d151fd7` | **已发布**（clean 构建可溯源） | D3D Lua SDK 记为「可用」，首个有发布产物的版本 |
 | `0.3.0-dev` | 2026-11-14 → 2026-11-15 | `a9e1d21` 起 | 开发版，未发布 | P4 订阅、真实输入、P5 生命周期、VM 重置、54 handler 覆盖 |
 | `0.2.0-dev` | 2026-08-03 起 | `50ebb0f` | 开发版，未发布 | 首版带 `kVersion`：版本化 ABI、typed 资源 SDK、MPQ 贴图 |
@@ -29,6 +30,22 @@
 > `50ebb0f`（`0.2.0-dev`）→ `a9e1d21`（`0.3.0-dev`）→ `d151fd7`（`0.4.0`），之后再没变过。
 
 ---
+
+## [0.6.0] — 2026-11-24
+
+面向 WAR3 1.27a 地图开发者的 Lua 层性能与工程化升级版本：
+
+- **C++ ↔ Lua 引擎绑定热路径零堆分配优化（实机验证）**：
+  - `jass::call_param` 改为 `kInlineCap = 16` 栈上小缓冲，消除每次 JASS native 调用的 3 次 `std::vector` 堆分配/释放；
+  - `jass.common` / `jass.japi` / `jass.ai` 首次查找后缓存闭包到模块表（100% 兼容 `jass.hook`），消除每帧 CClosure GC 抖动；
+  - `bridge_dispatch` 注册时预解析扁平 `fast_spec` 并用稳定指针 upvalue 直达，`class_handle` 改用 `lightuserdata` 注册表键 + `lua_rawgeti`/`lua_rawseti`；
+  - 1.27a 实机热路径基准：20,000 次 `GetUnitX` 仅 4.66 ms（~233 ns/次），5,000 次 `EXGetObject` 仅 2.31 ms（~462 ns/次）。
+- **地图开发标准库 `std.*`（零拷贝自动 Tree-Shaking + 本地覆盖）**：
+  - `japi build` 原生解析 SDK `std/` 目录，只将实际 `require` 的模块打入 `war3map.lua`，地图项目本地同名 `std/xxx.lua` 优先覆盖；
+  - 内置 `std.util`、`std.timer`（池化零泄漏 + 共享 33Hz `frame`）、`std.event`（惰性桥接 War3 原生事件与伤害数据）、`std.player`、`std.unit`（同句柄单例缓存 + `u.data` 自动清理）、`std.group`（零泄漏临时组/矩形查询）、`std.effect`、`std.statbar`（原生 1.27a `CStatBar` 预设）、`std.tween`。
+- **通用声明式 + 细粒度响应式 `DzFrame` UI 框架（实机验证 8/8）**：
+  - `std.signal`（`state`/`computed`/`effect`/`batch`/`untrack`/`scope`）、`std.frame`（经 `jass.japi` 自动发现宿主 KKAPI `DzFrame*`，固定事件槽零 trampoline 泄漏）、`std.ui`（零业务假设、零写死皮肤：`Box`/`Text`/`Image`/`Button`/`Model`/`Input`/`Raw`、`Row`/`Column`/`Grid`/`Scroll`/`Overlay`、`Show`/`For` 池化列表、`component`、`provide`/`use`）；
+  - D3D9 渲染版 UI 保留为可选备用模块 `std.d3d_ui`。
 
 ## [0.5.0] — 2026-11-23
 

@@ -43,44 +43,38 @@ namespace warcraft3::lua_engine::bridge {
     static uint32_t  g_ht_handle = 0;   // JASS hashtable handle
     static uint32_t  g_ht_key = 0;      // StringHash("jass")
 
-    struct handler_entry {
-        std::string    spec;       // e.g. "(II)I"
-        int            lua_ref;    // Lua registry reference (0 for C++ handlers)
-        cpp_handler_fn cpp_fn;    // C++ handler (nullptr for Lua handlers)
+    // Pre-parsed compact spec — avoids heap-allocating std::vector/std::string
+    // on every jass.japi or UnitId RPC invocation.
+    struct fast_spec {
+        uint8_t  param_count = 0;
+        char     param_types[16] = {};
+        uint16_t param_rect_mask = 0;
+        char     ret = 'V';
+        bool     ret_is_rect = false;
     };
 
-    static std::map<std::string, handler_entry> g_handlers;
-
-    // ── Spec parser ────────────────────────────────────────────────
-
-    struct param_info {
-        char type;  // 'I', 'R', 'S', 'B', 'H'
-        std::string handle_type;
-    };
-
-    struct parsed_spec {
-        std::vector<param_info> params;
-        char                    ret;  // 'I', 'R', 'S', 'B', 'V'
-        std::string             return_handle_type;
-    };
-
-    static parsed_spec parse_spec(const char* spec) {
-        parsed_spec result;
+    static fast_spec parse_fast_spec(const char* spec) {
+        fast_spec result;
         result.ret = 'V';
         if (!spec || spec[0] != '(') return result;
 
         const char* p = spec + 1;
         while (*p && *p != ')') {
-            param_info pi;
-            pi.type = *p;
-            p++;
-            if (pi.type == 'H') {
+            char t = *p++;
+            bool is_rect = false;
+            if (t == 'H') {
                 const char* begin = p;
                 while (*p && *p >= 'a' && *p <= 'z') p++;
-                pi.handle_type.assign(begin, p);
+                if ((p - begin) == 4 && memcmp(begin, "rect", 4) == 0) {
+                    is_rect = true;
+                }
                 if (*p == ';') p++;
             }
-            result.params.push_back(pi);
+            if (result.param_count < 16) {
+                result.param_types[result.param_count] = t;
+                if (is_rect) result.param_rect_mask |= (uint16_t)(1u << result.param_count);
+                result.param_count++;
+            }
         }
         if (*p == ')') p++;
         if (*p) {
@@ -88,11 +82,22 @@ namespace warcraft3::lua_engine::bridge {
             if (result.ret == 'H') {
                 const char* begin = p;
                 while (*p && *p >= 'a' && *p <= 'z') p++;
-                result.return_handle_type.assign(begin, p);
+                if ((p - begin) == 4 && memcmp(begin, "rect", 4) == 0) {
+                    result.ret_is_rect = true;
+                }
             }
         }
         return result;
     }
+
+    struct handler_entry {
+        std::string    spec;       // e.g. "(II)I"
+        fast_spec      parsed;     // pre-parsed once at registration time
+        int            lua_ref;    // Lua registry reference (0 for C++ handlers)
+        cpp_handler_fn cpp_fn;     // C++ handler (nullptr for Lua handlers)
+    };
+
+    static std::map<std::string, handler_entry> g_handlers;
 
     // ── Hashtable access via JASS natives ──────────────────────────
     // We call the game's Save/Load natives directly through the JASS VM.
@@ -138,9 +143,8 @@ namespace warcraft3::lua_engine::bridge {
         return (uint32_t)jass::call("LoadBoolean", ht, key, slot);
     }
 
-    static uint32_t ht_load_handle(uint32_t ht, uint32_t key, int slot,
-                                   const std::string& handle_type) {
-        if (handle_type == "rect") {
+    static uint32_t ht_load_handle(uint32_t ht, uint32_t key, int slot, bool is_rect) {
+        if (is_rect) {
             return (uint32_t)jass::call("LoadRectHandle", ht, key, slot);
         }
         // Existing compatibility handlers historically marshal non-rect
@@ -149,8 +153,8 @@ namespace warcraft3::lua_engine::bridge {
     }
 
     static void ht_save_handle(uint32_t ht, uint32_t key, int slot,
-                               uint32_t value, const std::string& handle_type) {
-        if (handle_type == "rect") {
+                               uint32_t value, bool is_rect) {
+        if (is_rect) {
             jass::call("SaveRectHandle", ht, key, slot, value);
             return;
         }
@@ -170,20 +174,20 @@ namespace warcraft3::lua_engine::bridge {
     }
 
     static void dispatch_handler(const char* name, const handler_entry& h) {
-        parsed_spec spec = parse_spec(h.spec.c_str());
+        const fast_spec& spec = h.parsed;
 
         // C++ handler: read args from ht, call, write result back
         if (h.cpp_fn) {
             uint32_t args[16] = {0};
-            for (size_t i = 0; i < spec.params.size() && i < 16; i++) {
+            for (size_t i = 0; i < spec.param_count; i++) {
                 int slot = (int)i + 1;
-                switch (spec.params[i].type) {
+                switch (spec.param_types[i]) {
                     case 'I':
                         args[i] = (uint32_t)ht_load_int(g_ht_handle, g_ht_key, slot);
                         break;
                     case 'H':
                         args[i] = ht_load_handle(g_ht_handle, g_ht_key, slot,
-                                                 spec.params[i].handle_type);
+                                                 (spec.param_rect_mask & (1u << i)) != 0);
                         break;
                     case 'R':
                         args[i] = ht_load_real(g_ht_handle, g_ht_key, slot);
@@ -204,7 +208,7 @@ namespace warcraft3::lua_engine::bridge {
                         break;
                 }
             }
-            uint32_t result = h.cpp_fn(args, spec.params.size());
+            uint32_t result = h.cpp_fn(args, spec.param_count);
 
             if (spec.ret != 'V') {
                 switch (spec.ret) {
@@ -213,7 +217,7 @@ namespace warcraft3::lua_engine::bridge {
                         break;
                     case 'H':
                         ht_save_handle(g_ht_handle, g_ht_key, 0, result,
-                                       spec.return_handle_type);
+                                       spec.ret_is_rect);
                         break;
                     case 'R':
                         ht_save_real(g_ht_handle, g_ht_key, 0, result);
@@ -248,16 +252,16 @@ namespace warcraft3::lua_engine::bridge {
         lua_rawgeti(L, LUA_REGISTRYINDEX, h.lua_ref);
 
         // Read args from hashtable and push to Lua stack
-        for (size_t i = 0; i < spec.params.size(); i++) {
+        for (size_t i = 0; i < spec.param_count; i++) {
             int slot = (int)i + 1;
-            switch (spec.params[i].type) {
+            switch (spec.param_types[i]) {
                 case 'I':
                     lua_pushinteger(L, ht_load_int(g_ht_handle, g_ht_key, slot));
                     break;
                 case 'H':
                     jassbind::push_handle(L,
                         (jass::jhandle_t)ht_load_handle(g_ht_handle, g_ht_key, slot,
-                                                        spec.params[i].handle_type));
+                                                        (spec.param_rect_mask & (1u << i)) != 0));
                     break;
                 case 'R': {
                     uint32_t rv = ht_load_real(g_ht_handle, g_ht_key, slot);
@@ -279,7 +283,7 @@ namespace warcraft3::lua_engine::bridge {
         }
 
         // Call the Lua function
-        int error = safe_call(L, (int)spec.params.size(),
+        int error = safe_call(L, (int)spec.param_count,
                               (spec.ret != 'V') ? 1 : 0, true);
 
         // Write result back to hashtable
@@ -292,7 +296,7 @@ namespace warcraft3::lua_engine::bridge {
                 }
                 case 'H':
                     ht_save_handle(g_ht_handle, g_ht_key, 0,
-                        read_lua_handle(L, -1), spec.return_handle_type);
+                        read_lua_handle(L, -1), spec.ret_is_rect);
                     break;
                 case 'R': {
                     jass::jreal_t rv = jassbind::read_real(L, -1);
@@ -458,6 +462,7 @@ namespace warcraft3::lua_engine::bridge {
     void register_handler(lua_State* L, const char* name, const char* spec, int func_index) {
         handler_entry entry;
         entry.spec = spec;
+        entry.parsed = parse_fast_spec(spec);
         entry.cpp_fn = nullptr;
         // Store a reference to the Lua function
         lua_pushvalue(L, func_index);
@@ -469,6 +474,7 @@ namespace warcraft3::lua_engine::bridge {
     void register_cpp_handler(const char* name, const char* spec, cpp_handler_fn fn) {
         handler_entry entry;
         entry.spec = spec;
+        entry.parsed = parse_fast_spec(spec);
         entry.lua_ref = 0;
         entry.cpp_fn = fn;
         g_handlers[name] = entry;
@@ -640,23 +646,22 @@ namespace warcraft3::lua_engine::bridge {
     }
 
     static int cpp_handler_call(lua_State* L) {
-        const char* name = lua_tostring(L, lua_upvalueindex(1));
-        if (!name) return 0;
-
-        auto it = g_handlers.find(name);
-        if (it == g_handlers.end() || !it->second.cpp_fn) {
-            return luaL_error(L, "jass.japi: handler '%s' is no longer registered", name);
+        const auto* entry = static_cast<const handler_entry*>(
+            lua_touserdata(L, lua_upvalueindex(1)));
+        const char* name = lua_tostring(L, lua_upvalueindex(2));
+        if (!entry || !entry->cpp_fn) {
+            return luaL_error(L, "jass.japi: handler '%s' is no longer registered",
+                              name ? name : "?");
         }
 
-        parsed_spec spec = parse_spec(it->second.spec.c_str());
+        const fast_spec& spec = entry->parsed;
         uint32_t args[16] = {0};
         jass::string_fake string_args[16];   // S params: keep the fake jstring alive
-        size_t nargs = spec.params.size();
-        if (nargs > 16) nargs = 16;
+        const size_t nargs = spec.param_count;
 
         for (size_t i = 0; i < nargs; ++i) {
             int index = (int)i + 1;
-            switch (spec.params[i].type) {
+            switch (spec.param_types[i]) {
                 case 'I':
                     args[i] = (uint32_t)lua_tointeger(L, index);
                     break;
@@ -682,8 +687,9 @@ namespace warcraft3::lua_engine::bridge {
         }
 
         uint32_t result = 0;
-        if (!invoke_cpp_handler_safely(it->second.cpp_fn, args, nargs, &result)) {
-            return luaL_error(L, "jass.japi: handler '%s' raised a native exception", name);
+        if (!invoke_cpp_handler_safely(entry->cpp_fn, args, nargs, &result)) {
+            return luaL_error(L, "jass.japi: handler '%s' raised a native exception",
+                              name ? name : "?");
         }
 
         // 'V' means the handler returns void in the JASS ABI, but every Lua
@@ -703,8 +709,10 @@ namespace warcraft3::lua_engine::bridge {
         if (!name) return false;
         auto it = g_handlers.find(name);
         if (it == g_handlers.end() || !it->second.cpp_fn) return false;
-        lua_pushstring(L, name);
-        lua_pushcclosure(L, cpp_handler_call, 1);
+        // std::map node addresses are guaranteed stable for C++ handlers (never erased).
+        lua_pushlightuserdata(L, &it->second);
+        lua_pushstring(L, it->first.c_str());
+        lua_pushcclosure(L, cpp_handler_call, 2);
         return true;
     }
 

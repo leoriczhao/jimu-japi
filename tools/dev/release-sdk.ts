@@ -203,6 +203,12 @@ export function runReleaseSdk(opts: ReleaseOptions = {}): void {
       // templates/empty-map/
       copyDirRecursive(path.join(workPath, 'reference', 'empty-map'), path.join(sdkDir, 'templates', 'empty-map'));
 
+      // std/ (developer Lua standard library: timer, event, unit, player, group, effect, statbar, tween, ui)
+      const stdSrc = path.join(workPath, 'std');
+      if (fs.existsSync(stdSrc)) {
+        copyDirRecursive(stdSrc, path.join(sdkDir, 'std'));
+      }
+
       // tools/object-data/ (needed for objects.lua compilation)
       copyDirRecursive(path.join(workPath, 'tools', 'object-data'), path.join(sdkDir, 'tools', 'object-data'));
 
@@ -258,6 +264,7 @@ export function runReleaseSdk(opts: ReleaseOptions = {}): void {
 | \`japi.exe\` | 地图作者主命令行工具（静态单文件，零依赖） |
 | \`bin/\` | \`yd_japi.dll\`、\`newD3d9.dll\`、\`callback\`、\`pjass.exe\`、\`natives-manifest.json\` |
 | \`templates/empty-map/\` | 空白基座地图 |
+| \`std/\` | 地图开发 Lua 标准库（\`std.signal\` / \`std.frame\` / \`std.ui\` / \`std.timer\` / \`std.event\` / \`std.unit\` 等，自动按需 Tree-Shaking） |
 | \`vendor/w3x2lni/\` | ${vendorStatus} |
 | \`tools/object-data/\` | \`objects.lua\` 代码化物编编译器 |
 | \`examples/\` | 12 个独立可打包示例工程 |

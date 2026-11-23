@@ -30,7 +30,7 @@ function M.run(done)
 
     test("D3D SDK module and ABI availability", function()
         assert(d3d.is_available(), d3d.status().error)
-        assert(d3d.version() == "0.5.0")
+        assert(d3d.version() == "0.6.0")
         assert(d3d.abi_version() == 1)
         local caps = d3d.capabilities()
         assert(caps.session and caps.generation_handles)

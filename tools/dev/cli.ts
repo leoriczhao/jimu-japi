@@ -10,6 +10,7 @@ import {
   runD3dContractSuite,
   runObjectDataSuite,
   runSelectorOfflineSuite,
+  runStdOfflineSuite,
   runUiOfflineSuite,
   runYdweCompatSuite,
 } from './suites.ts';
@@ -126,6 +127,9 @@ switch (cmd.toLowerCase()) {
       case 'ui':
         runUiOfflineSuite();
         break;
+      case 'std':
+        runStdOfflineSuite();
+        break;
       case 'ydwe-compat':
         runYdweCompatSuite();
         break;
@@ -165,6 +169,8 @@ switch (cmd.toLowerCase()) {
         runSelectorOfflineSuite();
         console.log('\n== [test] ui-offline');
         runUiOfflineSuite();
+        console.log('\n== [test] std-offline');
+        runStdOfflineSuite();
         console.log('\n== [test] ydwe-compat');
         runYdweCompatSuite();
         console.log('\n== [test] d3d-contract');

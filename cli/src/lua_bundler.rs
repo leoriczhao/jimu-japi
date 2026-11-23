@@ -24,6 +24,7 @@ const BUILTIN_ENGINE_MODULES: &[&str] = &[
     "jass.map_event",
     "jass.selector",
     "jass.ydwe",
+    "jass.ai",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,12 +257,33 @@ pub fn bundle_lua_dir(
     require_report: bool,
     strict_requires: bool,
 ) -> Result<BundleReport> {
+    bundle_lua_dir_with_std(
+        map_dir,
+        None,
+        entry,
+        engine_modules,
+        flags,
+        require_report,
+        strict_requires,
+    )
+}
+
+pub fn bundle_lua_dir_with_std(
+    map_dir: &Path,
+    std_dir: Option<&Path>,
+    entry: &str,
+    engine_modules: &HashSet<String>,
+    flags: &BundleFlags,
+    require_report: bool,
+    strict_requires: bool,
+) -> Result<BundleReport> {
     let mut files = Vec::new();
     collect_lua_files(map_dir, &mut files)?;
     files.sort();
 
     let mut modules: BTreeMap<String, String> = BTreeMap::new();
     let mut module_files: BTreeMap<String, String> = BTreeMap::new();
+    let mut std_modules: HashSet<String> = HashSet::new();
 
     for f in files {
         let (name, rel) = file_to_module_name(&f, map_dir)?;
@@ -275,6 +297,34 @@ pub fn bundle_lua_dir(
         let clean = raw.strip_prefix('\u{FEFF}').unwrap_or(&raw).to_string();
         modules.insert(name.clone(), clean);
         module_files.insert(name, rel);
+    }
+
+    // Load SDK standard library (`std/*.lua`) as fallback modules so maps can
+    // `require "std.timer"` / `require "std.unit"` / `require "std.ui"` with
+    // zero copy-paste and automatic tree-shaking. Project-local files win on conflict.
+    if let Some(sdir) = std_dir {
+        if sdir.is_dir() {
+            let mut sfiles = Vec::new();
+            collect_lua_files(sdir, &mut sfiles)?;
+            sfiles.sort();
+            for f in sfiles {
+                let (sub_name, sub_rel) = file_to_module_name(&f, sdir)?;
+                let mod_name = if sub_name == "init" {
+                    "std".to_string()
+                } else {
+                    format!("std.{}", sub_name)
+                };
+                if modules.contains_key(&mod_name) {
+                    continue;
+                }
+                let raw = fs::read_to_string(&f)
+                    .with_context(|| format!("Failed to read std Lua file {}", f.display()))?;
+                let clean = raw.strip_prefix('\u{FEFF}').unwrap_or(&raw).to_string();
+                modules.insert(mod_name.clone(), clean);
+                module_files.insert(mod_name.clone(), format!("std/{}", sub_rel));
+                std_modules.insert(mod_name);
+            }
+        }
     }
 
     if !modules.contains_key(entry) {
@@ -387,9 +437,10 @@ pub fn bundle_lua_dir(
         .collect();
     let unused: Vec<String> = modules
         .keys()
-        .filter(|k| !visited.contains(*k))
+        .filter(|k| !visited.contains(*k) && !std_modules.contains(*k))
         .cloned()
         .collect();
+    let user_module_count = modules.len() - std_modules.len();
 
     if require_report {
         println!("  Require report ({}):", module_files[entry]);
@@ -432,7 +483,7 @@ pub fn bundle_lua_dir(
         println!(
             "  Require summary: {} modules={} reachable={} unused={}",
             summary_parts.join(" "),
-            modules.len(),
+            user_module_count,
             visited.len().saturating_sub(1),
             unused.len()
         );

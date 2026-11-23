@@ -43,6 +43,8 @@ namespace warcraft3::jass {
 	class _WAR3_API call_param
 	{
 	public:
+		static constexpr size_t kInlineCap = 16;
+
 		call_param(size_t n);
 		template <class T> void push(size_t i, T value);
 		void push_real(size_t i, jreal_t value);
@@ -52,9 +54,14 @@ namespace warcraft3::jass {
 	private:
 		call_param(const call_param&);
 		const call_param& operator=(const call_param&);
+
+		size_t      size_;
+		uintptr_t   inline_params_[kInlineCap];
+		jreal_t     inline_reals_[kInlineCap];
+		string_fake inline_strings_[kInlineCap];
 #pragma warning(push)
 #pragma warning(disable: 4251)
-		// 为什么用dynarray会有问题？
+		// Fallback heap storage only when n > kInlineCap (standard War3 natives have <= 12 args).
 		std::vector<uintptr_t>   param_buffer_;
 		std::vector<jreal_t>     real_buffer_;
 		std::vector<string_fake> string_buffer_;

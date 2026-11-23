@@ -1,6 +1,6 @@
 [package]
 name = "japi"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "WAR3 1.27a map-inject developer CLI (new, check, build, run, proxy, doctor, kill)"
 

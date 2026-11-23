@@ -55,6 +55,13 @@ namespace warcraft3::lua_engine {
 		{
 			lua_pushinteger(L, (uint32_t)(uintptr_t)nf);
 			lua_pushcclosure(L, jass_call_closure, 1);
+			// Cache the closure directly on jass.common so subsequent lookups
+			// hit Lua's O(1) raw table path with zero CClosure GC churn.
+			// Safe with jass.hook: hook mutates nf in place and jass_call_closure
+			// reads nf->get_address() dynamically.
+			lua_pushvalue(L, 2);
+			lua_pushvalue(L, -2);
+			lua_rawset(L, 1);
 			return 1;
 		}
 

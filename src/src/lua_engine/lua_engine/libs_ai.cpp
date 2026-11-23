@@ -30,6 +30,9 @@ namespace warcraft3::lua_engine::ai {
 		{
 			lua_pushinteger(L, (uint32_t)(uintptr_t)nf);
 			lua_pushcclosure(L, jass_call_closure, 1);
+			lua_pushvalue(L, 2);
+			lua_pushvalue(L, -2);
+			lua_rawset(L, 1);
 			return 1;
 		}
 		lua_pushnil(L);

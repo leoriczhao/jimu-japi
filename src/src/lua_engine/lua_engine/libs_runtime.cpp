@@ -140,9 +140,19 @@ namespace warcraft3::lua_engine::runtime {
 		return 0;
 	}
 
+	static char kHandleUdTableKey = 0;
+
 	int handle_ud_get_table(lua_State* L)
 	{
-		return get_global_table(L, "_JASS_HANDLE_UD_TABLE", true);
+		if (lua_rawgetp(L, LUA_REGISTRYINDEX, &kHandleUdTableKey) == LUA_TTABLE)
+		{
+			return 1;
+		}
+		lua_pop(L, 1);
+		get_global_table(L, "_JASS_HANDLE_UD_TABLE", true);
+		lua_pushvalue(L, -1);
+		lua_rawsetp(L, LUA_REGISTRYINDEX, &kHandleUdTableKey);
+		return 1;
 	}
 
 	int callback_get_table(lua_State* L)

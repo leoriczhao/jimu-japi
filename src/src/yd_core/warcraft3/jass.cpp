@@ -5,17 +5,18 @@
 #include <warcraft3/jass/opcode.h>
 #include <base/hook/fp_call.h>
 #include <cassert>
+#include <cstring>
 #include <memory>
 
 namespace warcraft3::jass {
 
-	string_fake::string_fake() 
+	string_fake::string_fake()
 	{
 		memory_[2] = (uint32_t)&memory_[0];
 		memory_[7] = 0;
 	}
 
-	string_fake::string_fake(const char* str) 
+	string_fake::string_fake(const char* str)
 	{
 		memory_[2] = (uint32_t)&memory_[0];
 		memory_[7] = (uint32_t)&str[0];
@@ -110,14 +111,14 @@ namespace warcraft3::jass {
 		unsigned int str_to_uint(const char* str)
 		{
 			unsigned int sum = 0;
-			for(const char* c = str; *c; ++c)
+			for (const char* c = str; *c; ++c)
 			{
 				if (!isdigit(static_cast<uint8_t>(*c)))
 				{
 					break;
 				}
 
-				sum = sum * 10 + (*c-'0');
+				sum = sum * 10 + (*c - '0');
 			}
 
 			return sum;
@@ -156,7 +157,7 @@ namespace warcraft3::jass {
 
 			const char* find(uint32_t index, const char* def)
 			{
-				if (this) 
+				if (this)
 				{
 					for (trigstring* it = this->table_; it < &(this->table_[this->count_]); ++it)
 					{
@@ -174,9 +175,9 @@ namespace warcraft3::jass {
 
 	const char* from_trigstring(const char* val)
 	{
-		if (val && (0 == strncmp(val, "TRIGSTR_", _countof("TRIGSTR_")-1)))
+		if (val && (0 == strncmp(val, "TRIGSTR_", _countof("TRIGSTR_") - 1)))
 		{
-			uint32_t index = detail::str_to_uint(&(val[_countof("TRIGSTR_")-1]));
+			uint32_t index = detail::str_to_uint(&(val[_countof("TRIGSTR_") - 1]));
 			return detail::trigstring_table::get()->find(index, val);
 		}
 
@@ -198,7 +199,7 @@ namespace warcraft3::jass {
 		jass_vm_t* vm = get_jass_vm();
 		if (vm && vm->set_handle_reference)
 		{
-            base::fast_call<void>(vm->set_handle_reference, h, dec ? 1 : 0, vm->handle_table);
+			base::fast_call<void>(vm->set_handle_reference, h, dec ? 1 : 0, vm->handle_table);
 		}
 	}
 
@@ -213,30 +214,46 @@ namespace warcraft3::jass {
 	}
 
 	call_param::call_param(size_t n)
-		: param_buffer_(n)
-		, real_buffer_(n)
-		, string_buffer_(n)
-	{ }
+		: size_(n)
+	{
+		if (n > kInlineCap)
+		{
+			param_buffer_.resize(n);
+			real_buffer_.resize(n);
+			string_buffer_.resize(n);
+		}
+	}
 
 	template <> _WAR3_API
 	void call_param::push<uintptr_t>(size_t i, uintptr_t value)
 	{
-		assert(i < param_buffer_.size());
-		param_buffer_[i] = value;
+		assert(i < size_);
+		if (size_ <= kInlineCap)
+			inline_params_[i] = value;
+		else
+			param_buffer_[i] = value;
 	}
 
 	template <> _WAR3_API
 	void call_param::push<intptr_t>(size_t i, intptr_t value)
 	{
-		assert(i < param_buffer_.size());
-		param_buffer_[i] = *(uintptr_t*)&value;
+		assert(i < size_);
+		uintptr_t bits = *(uintptr_t*)&value;
+		if (size_ <= kInlineCap)
+			inline_params_[i] = bits;
+		else
+			param_buffer_[i] = bits;
 	}
 
 	template <> _WAR3_API
 	void call_param::push<bool>(size_t i, bool value)
 	{
-		assert(i < param_buffer_.size());
-		param_buffer_[i] = value? 1: 0;
+		assert(i < size_);
+		uintptr_t v = value ? 1 : 0;
+		if (size_ <= kInlineCap)
+			inline_params_[i] = v;
+		else
+			param_buffer_[i] = v;
 	}
 
 	template <> _WAR3_API
@@ -247,30 +264,46 @@ namespace warcraft3::jass {
 
 	void call_param::push_real(size_t i, jreal_t value)
 	{
-		assert(i < param_buffer_.size());
-		real_buffer_[i] = value;
-		param_buffer_[i] = (uintptr_t)&real_buffer_[i];
+		assert(i < size_);
+		if (size_ <= kInlineCap)
+		{
+			inline_reals_[i] = value;
+			inline_params_[i] = (uintptr_t)&inline_reals_[i];
+		}
+		else
+		{
+			real_buffer_[i] = value;
+			param_buffer_[i] = (uintptr_t)&real_buffer_[i];
+		}
 	}
 
 	template <> _WAR3_API
 	void call_param::push<const char*>(size_t i, const char* value)
 	{
-		assert(i < param_buffer_.size());
-		string_buffer_[i] = to_string(value);
-		param_buffer_[i] = (jstring_t)string_buffer_[i];
+		assert(i < size_);
+		if (size_ <= kInlineCap)
+		{
+			inline_strings_[i] = value;
+			inline_params_[i] = (jstring_t)inline_strings_[i];
+		}
+		else
+		{
+			string_buffer_[i] = to_string(value);
+			param_buffer_[i] = (jstring_t)string_buffer_[i];
+		}
 	}
 
-	const uintptr_t* call_param::data() const 
+	const uintptr_t* call_param::data() const
 	{
-		return param_buffer_.data();
+		return (size_ <= kInlineCap) ? inline_params_ : param_buffer_.data();
 	}
 
-	size_t           call_param::size() const
+	size_t call_param::size() const
 	{
-		return param_buffer_.size();
+		return size_;
 	}
 
-	uintptr_t  call(const char* name, ...)
+	uintptr_t call(const char* name, ...)
 	{
 		func_value const* nf = japi_func(name);
 		if (!nf) {

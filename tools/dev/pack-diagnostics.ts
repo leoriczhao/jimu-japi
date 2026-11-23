@@ -389,6 +389,33 @@ ${DEFAULT_JASS}`;
       assert.notEqual(r.status, 0, r.combined);
       assert.match(r.combined, /unexpanded YDWE\/KKWE preprocessor directives/);
     });
+
+    testCase('std.* SDK standard library resolves automatically with tree-shaking and local override', () => {
+      const r = packCase(
+        'std-treeshake',
+        { 'war3map.lua': 'local Timer = require "std.timer"\nreturn Timer\n' },
+        { flags: ['--strict-requires'] },
+      );
+      assert.equal(r.status, 0, r.combined);
+      const bundled = fs.readFileSync(path.join(r.workDir, 'script', 'war3map.lua'), 'utf8');
+      assert.ok(bundled.includes('package.preload["std.timer"]'), 'std.timer missing from bundle');
+      assert.ok(bundled.includes('package.preload["std.util"]'), 'std.util transitive dep missing');
+      assert.equal(bundled.includes('package.preload["std.ui"]'), false, 'unused std.ui leaked into bundle');
+      assert.equal(bundled.includes('package.preload["std.unit"]'), false, 'unused std.unit leaked into bundle');
+
+      // Project-local std/util.lua must override SDK std/util.lua
+      const rOver = packCase(
+        'std-override',
+        {
+          'war3map.lua': 'local util = require "std.util"\nreturn util\n',
+          'std/util.lua': 'return { custom_override = true }\n',
+        },
+        { flags: ['--strict-requires'] },
+      );
+      assert.equal(rOver.status, 0, rOver.combined);
+      const bundledOver = fs.readFileSync(path.join(rOver.workDir, 'script', 'war3map.lua'), 'utf8');
+      assert.ok(bundledOver.includes('custom_override = true'), 'local std/util.lua override did not win');
+    });
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
