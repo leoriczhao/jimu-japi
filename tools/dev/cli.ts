@@ -24,12 +24,13 @@ Commands:
   setup [--force] [--ref <sha>]             Bootstrap pinned dependencies (w3x2lni scripts/data + checks)
   build [all | dll | cli]                   Compile C++ DLLs (src/build.bat) and/or Rust japi.exe
   test  [suite]                             Run engine & toolchain test suites:
-          all          (default) cli + pack + object-data + selector + ui + ydwe-compat + d3d-contract + examples
+          all          (default) cli + pack + object-data + selector + ui + std + ydwe-compat + d3d-contract + examples
           cli          cargo test (Rust unit tests)
           pack         pack-diagnostics (single-TGA, war3map.imp, wtg/wct, japi.json, manifest, SDK layout)
           object-data  objects.lua compiler + w3x2lni roundtrip + pack integration
           selector     offline jass.selector Lua tests
           ui           offline UI library & example contract tests
+          std          offline std.* standard library & reactive DzFrame UI tests
           ydwe-compat  Python + Lua + C++ + CLI YDWE compat offline suite
           d3d-contract D3D handler manifest vs C++ registrations & test_d3d.lua coverage
           examples     verify all 12 examples (--filter, --skip-pack, --live, --war3-dir)

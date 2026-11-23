@@ -249,7 +249,8 @@ fn file_to_module_name(file: &Path, map_dir: &Path) -> Result<(String, String)> 
 ///   functions, `if` blocks, or `pcall(require, "...")`.
 /// - Module source code is NEVER rewritten (comments/strings stay untouched).
 /// - Standard Lua 5.4 `package.loaded` guarantees each module runs at most once.
-pub fn bundle_lua_dir(
+#[cfg(test)]
+fn bundle_lua_dir(
     map_dir: &Path,
     entry: &str,
     engine_modules: &HashSet<String>,

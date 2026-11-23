@@ -216,9 +216,13 @@ export function runReleaseSdk(opts: ReleaseOptions = {}): void {
       copyDirRecursive(path.join(workPath, 'examples'), path.join(sdkDir, 'examples'));
       fs.rmSync(path.join(sdkDir, 'examples', 'manifest.json'), { force: true });
 
-      // docs/ (map-author guides + CHANGELOG only — no internal STATUS/RELEASE/planning docs)
+      // docs/ (map-author guides + CHANGELOG + third-party notices — no internal STATUS/RELEASE/planning docs)
       copyDirRecursive(path.join(workPath, 'docs', 'guide'), path.join(sdkDir, 'docs', 'guide'));
       fs.copyFileSync(path.join(workPath, 'CHANGELOG.md'), path.join(sdkDir, 'CHANGELOG.md'));
+      const noticesSrc = path.join(workPath, 'THIRD-PARTY-NOTICES.md');
+      if (fs.existsSync(noticesSrc)) {
+        fs.copyFileSync(noticesSrc, path.join(sdkDir, 'THIRD-PARTY-NOTICES.md'));
+      }
 
       // vendor/w3x2lni/
       let vendorStatus = '**未包含**（`--no-vendor`）';
@@ -269,6 +273,7 @@ export function runReleaseSdk(opts: ReleaseOptions = {}): void {
 | \`tools/object-data/\` | \`objects.lua\` 代码化物编编译器 |
 | \`examples/\` | 12 个独立可打包示例工程 |
 | \`docs/guide/\` | 地图作者阶梯指南 |
+| \`THIRD-PARTY-NOTICES.md\` | 第三方开源组件与 GPL-3.0 合规声明 |
 
 ## 快速开始
 
