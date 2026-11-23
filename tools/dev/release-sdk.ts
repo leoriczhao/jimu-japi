@@ -114,7 +114,8 @@ export function runReleaseSdk(opts: ReleaseOptions = {}): void {
   }
 
   try {
-    const expectedDlls = ['yd_japi.dll', 'newD3d9.dll', 'd3d_sdk_contract_test.exe'];
+    // Only ship production runtime binaries in the developer SDK — never internal C++ test executables.
+    const runtimeDlls = ['yd_japi.dll', 'newD3d9.dll'];
     let binSourceDir: string;
     let japiExeSource: string;
 
@@ -133,10 +134,22 @@ export function runReleaseSdk(opts: ReleaseOptions = {}): void {
       ];
       const d3dxPath = d3dxCandidates.find((p) => fs.existsSync(p));
       const d3dxArg = d3dxPath ? ` -DJAPI_D3DX9_42_DLL="${d3dxPath}"` : '';
-      runChecked('cmd.exe', [
-        '/c',
-        `"${vcvars}" >nul && cmake -S "${path.join(workPath, 'src')}" -B "${cmakeBuildDir}" -G "Visual Studio 17 2022" -A Win32${d3dxArg} && cmake --build "${cmakeBuildDir}" --config Release`,
-      ]);
+      const buildBat = path.join(buildRoot, `build-cmake-${sha7}.cmd`);
+      fs.writeFileSync(
+        buildBat,
+        [
+          '@echo off',
+          `call "${vcvars}" >nul || exit /b 1`,
+          `cmake -S "${path.join(workPath, 'src')}" -B "${cmakeBuildDir}" -G "Visual Studio 17 2022" -A Win32${d3dxArg} || exit /b 1`,
+          `cmake --build "${cmakeBuildDir}" --config Release || exit /b 1`,
+        ].join('\r\n') + '\r\n',
+        'ascii',
+      );
+      try {
+        runChecked('cmd.exe', ['/c', buildBat]);
+      } finally {
+        fs.rmSync(buildBat, { force: true });
+      }
       binSourceDir = path.join(cmakeBuildDir, 'bin', 'Release');
 
       const cargo = findCargoCmd();
@@ -155,7 +168,7 @@ export function runReleaseSdk(opts: ReleaseOptions = {}): void {
 
     console.log('\n== 4. Collect release binaries');
     const artifacts: Array<{ name: string; bytes: number; sha256: string }> = [];
-    for (const name of expectedDlls) {
+    for (const name of runtimeDlls) {
       const src = path.join(binSourceDir, name);
       const dst = path.join(outDir, name);
       fs.copyFileSync(src, dst);
@@ -169,15 +182,15 @@ export function runReleaseSdk(opts: ReleaseOptions = {}): void {
 
     let bundleInfo: Record<string, unknown> | null = null;
     if (opts.sdkBundle) {
-      console.log('\n== 5. Assemble standalone map-author SDK bundle (sdk\\)');
+      console.log('\n== 5. Assemble clean developer SDK bundle (sdk\\)');
       const sdkDir = path.join(outDir, 'sdk');
       fs.mkdirSync(path.join(sdkDir, 'bin'), { recursive: true });
 
       // Root CLI
       fs.copyFileSync(path.join(outDir, 'japi.exe'), path.join(sdkDir, 'japi.exe'));
 
-      // bin/
-      for (const name of expectedDlls) {
+      // bin/ (runtime & packing binaries only — zero test executables)
+      for (const name of runtimeDlls) {
         fs.copyFileSync(path.join(outDir, name), path.join(sdkDir, 'bin', name));
       }
       fs.copyFileSync(path.join(workPath, 'tools', 'callback'), path.join(sdkDir, 'bin', 'callback'));
@@ -193,23 +206,13 @@ export function runReleaseSdk(opts: ReleaseOptions = {}): void {
       // tools/object-data/ (needed for objects.lua compilation)
       copyDirRecursive(path.join(workPath, 'tools', 'object-data'), path.join(sdkDir, 'tools', 'object-data'));
 
-      // examples/
+      // examples/ (clean map-author examples — omit internal manifest.json)
       copyDirRecursive(path.join(workPath, 'examples'), path.join(sdkDir, 'examples'));
+      fs.rmSync(path.join(sdkDir, 'examples', 'manifest.json'), { force: true });
 
-      // docs/
+      // docs/ (map-author guides + CHANGELOG only — no internal STATUS/RELEASE/planning docs)
       copyDirRecursive(path.join(workPath, 'docs', 'guide'), path.join(sdkDir, 'docs', 'guide'));
-      for (const rel of [
-        'docs/STATUS.md',
-        'docs/RELEASE.md',
-        'docs/planning/JASS-NATIVE-DECLARATIONS.md',
-        'docs/planning/D3D-LUA-SDK-DESIGN.md',
-        'CHANGELOG.md',
-      ]) {
-        const src = path.join(workPath, rel);
-        const dst = path.join(sdkDir, rel);
-        fs.mkdirSync(path.dirname(dst), { recursive: true });
-        fs.copyFileSync(src, dst);
-      }
+      fs.copyFileSync(path.join(workPath, 'CHANGELOG.md'), path.join(sdkDir, 'CHANGELOG.md'));
 
       // vendor/w3x2lni/
       let vendorStatus = '**未包含**（`--no-vendor`）';
@@ -268,7 +271,6 @@ export function runReleaseSdk(opts: ReleaseOptions = {}): void {
 .\\japi.exe check D:\\maps\\MyMap --strict-requires
 .\\japi.exe build D:\\maps\\MyMap
 .\\japi.exe run   D:\\maps\\MyMap
-.\\japi.exe test  D:\\maps\\MyMap
 \`\`\`
 
 如需指定 War3 1.27a 目录，传 \`--war3-dir\`、设置环境变量 \`WAR3_DIR\`，或在 SDK 根目录新建 \`japi.local.json\`：
@@ -288,14 +290,31 @@ ${artifactRows}
       fs.writeFileSync(path.join(sdkDir, 'README.md'), readmeText, 'utf8');
       const sdkSums = writeTreeChecksums(sdkDir, 'SHA256SUMS.txt');
       const stats = treeStats(sdkDir);
+
+      // Package a clean, ready-to-share zip archive of sdk/
+      const zipName = `map-inject-sdk-${version}.zip`;
+      const zipPath = path.join(outDir, zipName);
+      fs.rmSync(zipPath, { force: true });
+      runChecked('powershell.exe', [
+        '-NoProfile',
+        '-Command',
+        `Compress-Archive -Path '${sdkDir}\\*' -DestinationPath '${zipPath}' -CompressionLevel Optimal`,
+      ]);
+      const zipBytes = fs.statSync(zipPath).size;
+      const zipSha = sha256File(zipPath);
+
       bundleInfo = {
         path: 'sdk',
+        zip: zipName,
+        zip_bytes: zipBytes,
+        zip_sha256: zipSha,
         files: stats.files,
         bytes: stats.bytes,
         hashed_files: sdkSums.count,
-        layout: 'clean zero-dependency SDK: japi.exe + bin/ + templates/ + vendor/ + tools/object-data/ + examples/ + docs/',
+        layout: 'clean zero-dependency developer SDK: japi.exe + bin/ + templates/ + vendor/ + tools/object-data/ + examples/ + docs/guide/',
       };
       console.log(`  bundle : ${stats.files} files / ${formatMB(stats.bytes)} MB`);
+      console.log(`  archive: ${zipPath} (${formatMB(zipBytes)} MB, sha256=${zipSha.slice(0, 12)}...)`);
     }
 
     const manifest = {

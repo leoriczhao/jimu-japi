@@ -32,7 +32,7 @@ constexpr const char* kTextMeta = "jass.d3d.Text";
 constexpr const char* kTextureMeta = "jass.d3d.Texture";
 constexpr const char* kSubscriptionMeta = "jass.d3d.Subscription";
 constexpr const char* kContextMeta = "jass.d3d.Context";
-constexpr const char* kVersion = "0.4.0";
+constexpr const char* kVersion = "0.5.0";
 constexpr int32_t kMinInt32 = (-2147483647 - 1);
 constexpr int32_t kMaxInt32 = 2147483647;
 

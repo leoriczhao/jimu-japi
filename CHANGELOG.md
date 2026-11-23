@@ -4,7 +4,7 @@
 > 版本号唯一来源：`src/src/lua_engine/lua_engine/libs_d3d.cpp:35` 的 `constexpr const char* kVersion`；
 > 只有 **Lua 侧 `jass.d3d` 对外 API 变化**时才递增，工具链 / 文档 / 示例 / 脚手架改动一律不递增。
 > 发布流程见 [docs/RELEASE.md](docs/RELEASE.md)；当前实现、验证强度与缺口以 [docs/STATUS.md](docs/STATUS.md) 为唯一权威。
-> 最后更新：2026-11-17（记录 `0.4.0` 与之后的 `[Unreleased]` 改动）。
+> 最后更新：2026-11-23（发布 `0.5.0`）。
 
 约定：
 
@@ -18,6 +18,7 @@
 
 | 版本 | 时间 | 锚点提交 | 状态 | 一句话 |
 |---|---|---|---|---|
+| `0.5.0` | 2026-11-23 | `HEAD` | **已发布**（clean 构建可溯源） | 单文件 `japi.tga`、Rust `japi.exe` CLI、原生 1.27a `CStatBar` 血蓝条、YDWE/内置 JAPI 1.27a 全量对齐、纯净开发者 SDK 包 |
 | `0.4.0` | 2026-11-15 | `d151fd7` | **已发布**（clean 构建可溯源） | D3D Lua SDK 记为「可用」，首个有发布产物的版本 |
 | `0.3.0-dev` | 2026-11-14 → 2026-11-15 | `a9e1d21` 起 | 开发版，未发布 | P4 订阅、真实输入、P5 生命周期、VM 重置、54 handler 覆盖 |
 | `0.2.0-dev` | 2026-08-03 起 | `50ebb0f` | 开发版，未发布 | 首版带 `kVersion`：版本化 ABI、typed 资源 SDK、MPQ 贴图 |
@@ -29,7 +30,22 @@
 
 ---
 
-## [Unreleased]
+## [0.5.0] — 2026-11-23
+
+面向 WAR3 1.27a 地图作者的重大里程碑版本，核心改动：
+
+- **纯净开发者 SDK 与零依赖 Rust CLI（`japi.exe`）**：
+  - 彻底分离「引擎维护者测试」与「地图开发者发行包」：`sdk/bin/` 零测试程序、`japi new` 零冒烟测试脚手架、`examples/` 零引擎断言 harness、`sdk/docs/` 仅包含作者指南与变更日志，并产出独立 `map-inject-sdk-0.5.0.zip`。
+  - 地图打包收口为单文件 `japi.tga`（PE `.rsrc` 内嵌 `newD3d9.dll` + `D3DX9_42.dll`），自动写入 WE/YDWE/KKWE 兼容的 `war3map.imp` 与 `war3map.wtg/wct` 引导触发器。
+- **原生 1.27a `CStatBar` 头顶血条 / 蓝条 + 离屏/幽灵血条清理（16 API）**：
+  - 纯 `CStatBar` 虚表钩子实现单位/单位类型/玩家级血条染色、缩放、显隐与零延迟原生蓝条。
+  - `EXSetOffscreenBarCull` 零开销修复 1.27a 离开视线血条贴边不消失及屏幕外幽灵血条残留。
+- **YDWE & 内置 JAPI 1.27a 完整对齐**：
+  - **联机帧同步确定性**：`luaL_newstate2` 绑定 War3 `SetRandomSeed` 全局同步种子，`table.sort` 确定性枢轴，`math.random`/`math.randomseed` 路由到 War3 RNG。
+  - **零重启进程内 D3D9 激活**：未预装 `d3d9.dll` 代理时由 `AttachInProcessD3D9` 就地挂钩 `Reset`/`EndScene`，首局即可使用 `jass.d3d` 与传统 D3D handler。
+  - **模块与原生扩展**：新增 `jass.ai`（124 个 `common.ai` native）、`jass.map_event` `brokenNetwork` 断线事件、`AbilityId("exec-lua:...")` 与 `Cheat("exec-lua:...")`、`EXGetObject` 与 12 个 `EX*Unit*` 真实 JASS native、`jass.storm.replace_path` / `clear_replace_paths`、以及 `jass.japi` 自动发现宿主扩展 native。
+
+## [Unreleased]（已并入 0.5.0 的历史开发记录）
 
 ### 新增：命令卡按钮图标本局即时生效（2026-11-22，离线）
 

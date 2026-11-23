@@ -95,8 +95,6 @@ pub fn run_new_project(
         &WAR3MAP_LUA_TEMPLATE.replace("@@PROJECT@@", name),
     )?;
     write_file(&target_dir.join("lib").join("util.lua"), UTIL_LUA_TEMPLATE)?;
-    write_file(&target_dir.join("lib").join("check.lua"), CHECK_LUA_TEMPLATE)?;
-    write_file(&target_dir.join("tests").join("smoke.lua"), SMOKE_LUA_TEMPLATE)?;
     write_file(&target_dir.join("config.lua"), CONFIG_LUA_TEMPLATE)?;
     write_file(
         &target_dir.join("config.local.lua.example"),
@@ -116,7 +114,6 @@ pub fn run_new_project(
     println!("  japi check {} --strict-requires   # static check", disp);
     println!("  japi build {}                     # pack -> dist/{}.w3x", disp, name);
     println!("  japi run   {}                     # pack, deploy & launch War3", disp);
-    println!("  japi test  {}                     # pack, deploy & wait for Results:", disp);
     println!();
     Ok(())
 }
@@ -145,17 +142,20 @@ fn display_path(root: &Path, target: &Path) -> String {
 const WAR3MAP_LUA_TEMPLATE: &str = r#"-- @@PROJECT@@ - main entry point (war3map.lua)
 -- Standard Lua require() is bundled via package.preload automatically.
 
-local jass    = require "jass.common"
-local globals = require "jass.globals"
-local util    = require "lib.util"
-local config  = require "config"
-local smoke   = require "tests.smoke"
+local jass   = require "jass.common"
+local util   = require "lib.util"
+local config = require "config"
 
-globals.udg_lua_japi_alive = 1
-util.log("@@PROJECT@@ loaded (tick=" .. tostring(config.tick) .. ")")
+util.after(0.5, function()
+    local p0 = jass.Player(0)
+    jass.DisplayTimedTextToPlayer(
+        p0, 0.0, 0.0, 8.0,
+        "|cFF00FFCC[@@PROJECT@@]|r Lua 5.4 runtime ready (tick=" .. tostring(config.tick) .. ")"
+    )
 
-util.after(1.0, function()
-    smoke.run()
+    local x = jass.GetPlayerStartLocationX(p0)
+    local y = jass.GetPlayerStartLocationY(p0)
+    jass.CreateUnit(p0, util.fourcc("hfoo"), x, y, 270.0)
 end)
 "#;
 
@@ -191,106 +191,6 @@ function util.log(msg)
 end
 
 return util
-"#;
-
-const CHECK_LUA_TEMPLATE: &str = r#"local check = {}
-local passed, failed, skipped = 0, 0, 0
-
-function check.reset()
-    passed, failed, skipped = 0, 0, 0
-end
-
-function check.check(name, fn)
-    local ok, err = pcall(fn)
-    if ok then
-        passed = passed + 1
-        print("[PASS] " .. name)
-    else
-        failed = failed + 1
-        print("[FAIL] " .. name .. ": " .. tostring(err))
-    end
-end
-
-function check.skip(name, reason)
-    skipped = skipped + 1
-    print("[SKIP] " .. name .. " (" .. tostring(reason) .. ")")
-end
-
-function check.finish(suite)
-    local total = passed + failed
-    print(string.format(" Results: %d passed, %d failed, %d total (%d skipped)", passed, failed, total, skipped))
-    if failed == 0 then
-        print(string.format(" ALL CHECKS PASSED (%d/%d) [%s]", passed, total, tostring(suite or "default")))
-    end
-end
-
-return check
-"#;
-
-const SMOKE_LUA_TEMPLATE: &str = r#"local jass    = require "jass.common"
-local globals = require "jass.globals"
-local runtime = require "jass.runtime"
-local slk     = require "jass.slk"
-local util    = require "lib.util"
-local chk     = require "lib.check"
-
-local smoke = {}
-
-function smoke.run()
-    chk.reset()
-
-    chk.check("jass.common loaded", function()
-        assert(type(jass.CreateUnit) == "function")
-    end)
-
-    chk.check("jass.runtime version string", function()
-        assert(type(runtime.version) == "string" and #runtime.version > 0)
-    end)
-
-    chk.check("Player(0) handle valid", function()
-        local p = jass.Player(0)
-        assert(p ~= nil)
-    end)
-
-    chk.check("fourcc hfoo", function()
-        assert(util.fourcc("hfoo") == 1751543663)
-    end)
-
-    chk.check("CreateUnit + GetUnitTypeId + RemoveUnit", function()
-        local id = util.fourcc("hfoo")
-        local u = jass.CreateUnit(jass.Player(0), id, 0.0, 0.0, 0.0)
-        assert(u ~= nil, "CreateUnit returned nil")
-        assert(jass.GetUnitTypeId(u) == id, "unexpected unit type id")
-        jass.RemoveUnit(u)
-    end)
-
-    chk.check("slk.unit hfoo readable", function()
-        local row = slk.unit.hfoo
-        assert(row ~= nil, "slk.unit.hfoo missing")
-    end)
-
-    chk.check("timer fires asynchronously", function()
-        assert(type(jass.CreateTimer) == "function")
-    end)
-
-    chk.check("require caching works", function()
-        local u2 = require("lib.util")
-        assert(u2 == util, "module cache mismatch")
-    end)
-
-    local alive = globals.udg_lua_japi_alive
-    if alive == nil then
-        chk.skip("globals.udg_lua_japi_alive == 1", "base map does not declare udg_lua_japi_alive")
-    else
-        chk.check("globals.udg_lua_japi_alive == 1", function()
-            assert(alive == 1, "expected 1, got " .. tostring(alive))
-        end)
-    end
-
-    chk.finish("smoke")
-end
-
-return smoke
 "#;
 
 const CONFIG_LUA_TEMPLATE: &str = r#"local config = {
@@ -332,7 +232,6 @@ const README_TEMPLATE: &str = r#"# @@PROJECT@@
 japi check . --strict-requires   # 静态检查 Lua / 物编 / JASS（不生成 .w3x）
 japi build .                     # 按 japi.json 打包到 dist/@@PROJECT@@.w3x
 japi run   .                     # 打包并启动 War3 交互游玩
-japi test  .                     # 打包并运行自动化冒烟测试（等待 Results: 行）
 ```
 
 项目配置位于 `japi.json`，入口脚本为 `war3map.lua`，可选代码化物编放在 `objects.lua`。

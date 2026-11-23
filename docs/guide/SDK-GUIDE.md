@@ -10,7 +10,7 @@
 |---|---|
 | 文档 | SDK-GUIDE.md（作者向模块指南） |
 | 适用游戏版本 | Warcraft III 1.27a（`1.27.0.52240`） |
-| SDK 版本 | `0.4.0`（`jass.d3d.version()`，钉在 `src/src/lua_engine/lua_engine/libs_d3d.cpp:35`） |
+| SDK 版本 | `0.5.0`（`jass.d3d.version()`，钉在 `src/src/lua_engine/lua_engine/libs_d3d.cpp:35`） |
 | 文档日期 | 2026-11-16 |
 | 证据基础 | 仓库 `map/` 实机回归 **122 passed / 0 failed / 122 total**（2026-11-16，DLL SHA-256 `87C83BA1CE0E6E413CEA7B9D6018E9A289259EC9C2F01EE02E7827DAF6661908`）；模块行为逐条对照 `src/src/lua_engine/lua_engine/libs_*.cpp` |
 | 验证标注 | 每个模块末尾的「坑」表里，凡**没有**出现在实机回归里的行为都写了「源码可读、未在回归覆盖」 |
@@ -60,7 +60,7 @@ war3map.j main()
 
 | 版本 | 怎么读 | 含义 |
 |---|---|---|
-| SDK | `require("jass.d3d").version()` → `"0.4.0"` | Lua SDK 版本，见 [../../CHANGELOG.md](../../CHANGELOG.md) |
+| SDK | `require("jass.d3d").version()` → `"0.5.0"` | Lua SDK 版本，见 [../../CHANGELOG.md](../../CHANGELOG.md) |
 | 运行时 | `require("jass.runtime").version` → `"1.0.0.0"` | 引擎侧适配层版本（跟 SDK 版本无关，读的是另一个常量） |
 | DLL 文件 | `(Get-FileHash src/build/bin/Release/yd_japi.dll).Hash` | 你到底跑的是哪个二进制 |
 
@@ -661,7 +661,7 @@ attach `127.0.0.1:4278`，断点打在 `<war3 目录>\japi-debugger\script\war3m
 | 从旧画法迁过来 | [D3D-LUA-MIGRATION.md](D3D-LUA-MIGRATION.md) |
 | 可用性判据 | `d3d.is_available()`；false 时看 `d3d.status().error` |
 
-一个模块内部约定值得先知道：`jass.d3d` 的 **`version()` 永远可用**（返回常量 `"0.4.0"`，
+一个模块内部约定值得先知道：`jass.d3d` 的 **`version()` 永远可用**（返回常量 `"0.5.0"`，
 `libs_d3d.cpp:1984`），即使游戏目录没装 d3d9 proxy——所以拿它当 SDK 版本印在日志里是安全的。
 真要看能不能画，才用 `is_available()`。
 
