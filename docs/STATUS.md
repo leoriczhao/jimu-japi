@@ -1,4 +1,4 @@
-# map-inject 当前状态
+# jimu-japi 当前状态
 
 > 本文件是仓库中唯一的当前完成状态来源（single source of truth）。
 > `docs/planning/` 下的文件保留方案演进、阶段拆分和历史验收记录，其中的状态标记不代表当前状态。
